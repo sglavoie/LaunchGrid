@@ -190,6 +190,7 @@ kbd {
 .facts { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 10px 24px; }
 .facts dt { font-weight: 700; }
 .facts dd { margin: 0; color: var(--muted); }
+.facts code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--ink); overflow-wrap: anywhere; }
 
 /* Document pages */
 .doc .wrap { max-width: calc(var(--measure) + 2 * var(--gutter)); padding-top: clamp(24px, 5vw, 56px); padding-bottom: 80px; }
