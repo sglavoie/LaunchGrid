@@ -355,7 +355,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
                 let threshold = min(120, width * 0.12)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                withAnimation(AppState.pageAnimation) {
                     if scrollAccumulator < -threshold { state.flipPage(1) }
                     else if scrollAccumulator > threshold { state.flipPage(-1) }
                     state.swipeOffset = 0

@@ -422,21 +422,24 @@ struct FolderIcon: View {
     typealias GridItem = SwiftUI.GridItem
 }
 
-/// Gentle rotation wobble in edit mode.
+/// Gentle rotation wobble in edit mode. A repeating animation rather than a per-frame
+/// timeline, so a full page of icons doesn't re-render its views every frame.
+/// Off with Reduce Motion.
 struct Jiggle: ViewModifier {
     let active: Bool
     let seed: Int
+    @State private var tilted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        if active {
-            TimelineView(.animation) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
-                let phase = Double(abs(seed) % 1000) / 1000 * .pi * 2
-                content.rotationEffect(.degrees(sin(t * 18 + phase) * 1.6))
-            }
-        } else {
-            content
-        }
+        let on = active && !reduceMotion
+        // Slightly different periods keep neighbours out of step.
+        let period = 0.15 + Double(abs(seed) % 7) * 0.008
+        content
+            .rotationEffect(.degrees(on ? (tilted ? 1.6 : -1.6) : 0))
+            .animation(on ? .easeInOut(duration: period).repeatForever(autoreverses: true) : .easeOut(duration: 0.1),
+                       value: tilted)
+            .onChange(of: on, initial: true) { _, on in tilted = on }
     }
 }
 

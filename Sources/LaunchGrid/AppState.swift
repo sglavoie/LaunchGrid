@@ -442,9 +442,14 @@ final class AppState {
         swipeOffset = 0
     }
 
+    /// Page and folder transitions; none with Reduce Motion, so nothing slides.
+    static var pageAnimation: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)
+    }
+
     private func withAnimationIfShown(_ body: () -> Void) {
         if isShown {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86), body)
+            withAnimation(Self.pageAnimation, body)
         } else {
             body()
         }

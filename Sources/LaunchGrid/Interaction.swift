@@ -173,7 +173,7 @@ extension AppState {
         if drag.panning {
             let w = max(drag.pagerFrame.width, 1)
             let dx = location.x - start.x, flick = predicted.x - start.x
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            withAnimation(Self.pageAnimation) {
                 if dx < -w * 0.18 || flick < -w * 0.5 { currentPage = min(currentPage + 1, grid.pages.count - 1) }
                 if dx > w * 0.18 || flick > w * 0.5 { currentPage = max(currentPage - 1, 0) }
                 swipeOffset = 0
@@ -315,7 +315,7 @@ extension AppState {
             guard target >= 0, target <= last else { return }
             drag.candidate = nil
             drag.mergeTarget = nil
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            withAnimation(Self.pageAnimation) {
                 currentPage = target
                 drag.gap = nil
                 drag.pendingGap = nil
