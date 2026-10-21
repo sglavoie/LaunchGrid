@@ -380,6 +380,18 @@ func tempDir(_ prefix: String) -> URL {
         #expect(AppScanner.scan(roots: [root]).map(\.bundleID) == ["t.safari"])
     }
 
+    @Test func skipsAppsHiddenByDefaultButReadsThemByHand() throws {
+        let root = tempDir("scan")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeFakeApp("Shown.app", id: "t.shown", in: root)
+        try makeFakeApp("Hidden.app", id: "t.hidden", in: root)
+        let hidden = root.appendingPathComponent("Hidden.app")
+        let plist: [String: Any] = ["CFBundleIdentifier": "t.hidden", "CFBundlePackageType": "APPL", "LSDefaultSystemHidden": true]
+        try (plist as NSDictionary).write(to: hidden.appendingPathComponent("Contents/Info.plist"))
+        #expect(AppScanner.scan(roots: [root]).map(\.bundleID) == ["t.shown"])
+        #expect(AppScanner.read(appAt: hidden)?.bundleID == "t.hidden")
+    }
+
     @Test func readIsNilWithoutAnInfoPlist() throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }

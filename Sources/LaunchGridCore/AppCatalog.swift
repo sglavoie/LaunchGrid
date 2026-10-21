@@ -15,6 +15,8 @@ public enum AppScanner {
     /// Scans the roots (recursing into plain folders up to `maxDepth`, never into bundles)
     /// and returns one entry per app bundle on disk, de-duplicated by resolved path with
     /// earlier roots winning. Copies sharing a bundle ID (Xcode and Xcode-beta) are all kept.
+    /// Apps flagged `LSDefaultSystemHidden` (e.g. the two bundles both named Siri) are left
+    /// out, as macOS leaves them out of its own app list; they can still be added by hand.
     public static func scan(roots: [URL], maxDepth: Int = 3) -> [InstalledApp] {
         let fm = FileManager.default
         // Shallowest depth each directory was walked at: a root nested in another root's
@@ -25,8 +27,9 @@ public enum AppScanner {
 
         /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
         func consider(_ url: URL, realPath: String) {
-            guard paths.insert(realPath).inserted, let app = read(appAt: url) else { return }
-            results.append(app)
+            guard paths.insert(realPath).inserted, let info = infoDictionary(ofBundleAt: url),
+                  info["LSDefaultSystemHidden"] as? Bool != true else { return }
+            results.append(read(appAt: url, info: info))
         }
 
         func walk(_ dir: URL, depth: Int) {
@@ -68,9 +71,13 @@ public enum AppScanner {
     }
 
     public static func read(appAt url: URL) -> InstalledApp? {
-        let path = url.path
         // Not an app without an Info.plist (e.g. a half-copied bundle or a stray folder).
         guard let info = infoDictionary(ofBundleAt: url) else { return nil }
+        return read(appAt: url, info: info)
+    }
+
+    static func read(appAt url: URL, info: [String: Any]) -> InstalledApp {
+        let path = url.path
         let bundleID = info["CFBundleIdentifier"] as? String
         var name = FileManager.default.displayName(atPath: path)
         if name.hasSuffix(".app") { name = String(name.dropLast(4)) }
