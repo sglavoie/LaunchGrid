@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import LaunchGridCore
 
 /// Development aid: `LAUNCHGRID_DEBUG_SCRIPT="build;show;snap:grid;quit"` drives the UI and
@@ -71,6 +72,27 @@ enum DebugScript {
                     // Hide and show again at once, inside the fade-out.
                     overlay.hide()
                     overlay.show()
+                case "hotkeyfire":
+                    // Delivers a Carbon hot-key event for our hotkey, as macOS does when it's pressed.
+                    var event: EventRef?
+                    CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed), 0, EventAttributes(kEventAttributeNone), &event)
+                    if let event {
+                        var id = EventHotKeyID(signature: OSType(0x4C47_5244), id: 1)
+                        SetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                          MemoryLayout<EventHotKeyID>.size, &id)
+                        print("hotkeyfire: \(SendEventToEventTarget(event, GetApplicationEventTarget()))")
+                        ReleaseEvent(event)
+                    }
+                    fflush(stdout)
+                case "hotkeyhold":
+                    // Takes "keyCode,modifiers" under another ID, so registering it as our hotkey fails.
+                    let n = arg.split(separator: ",").compactMap { UInt32($0) }
+                    guard n.count == 2 else { break }
+                    var ref: EventHotKeyRef?
+                    let status = RegisterEventHotKey(n[0], n[1], EventHotKeyID(signature: OSType(0x484F_4C44), id: 9),
+                                                     GetApplicationEventTarget(), 0, &ref)
+                    print("hotkeyhold: \(status)")
+                    fflush(stdout)
                 case "hotkey":
                     // Register "keyCode,modifiers" directly, bypassing the scratch-copy guard.
                     let n = arg.split(separator: ",").compactMap { UInt32($0) }
