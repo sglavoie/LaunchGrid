@@ -19,6 +19,8 @@ public enum Reconciler {
     public static let restoreWindow: TimeInterval = 3600
     /// Bound on `Grid.recentlyPruned`, oldest first out.
     static let pruneMemory = 200
+    /// How many preceding neighbours a pruned app remembers to find its way back.
+    static let neighbourMemory = 8
 
     /// - Parameters:
     ///   - autoAdd: append installed apps that are neither on the grid nor in `removedBundleIDs`.
@@ -88,15 +90,19 @@ public enum Reconciler {
 
         for p in grid.pages.indices {
             let pageID = grid.pages[p].id
-            grid.pages[p].items = grid.pages[p].items.enumerated().compactMap { i, item in
+            let items = grid.pages[p].items
+            grid.pages[p].items = items.enumerated().compactMap { i, item in
+                let before = items[..<i].suffix(neighbourMemory).map(\.id)
                 switch item {
                 case .app(let a):
-                    let slot = PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i)
+                    let slot = PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before)
                     return refresh(a, at: slot).map(GridItem.app)
                 case .folder(var f):
-                    f.apps = f.apps.enumerated().compactMap { fi, a in
+                    let apps = f.apps
+                    f.apps = apps.enumerated().compactMap { fi, a in
                         refresh(a, at: PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,
-                                                 folderID: f.id, folderName: f.name, folderIndex: fi))
+                                                 folderID: f.id, folderName: f.name, folderIndex: fi,
+                                                 before: before, folderBefore: apps[..<fi].suffix(neighbourMemory).map(\.id)))
                     }
                     guard f.apps.isEmpty else { return .folder(f) }
                     for k in pruned.indices where pruned[k].folderID == f.id { pruned[k].folderEmptied = true }
@@ -171,7 +177,8 @@ extension Grid {
     mutating func restore(_ entry: PrunedApp) {
         if let folderID = entry.folderID {
             if let loc = locate(folderID), loc.folderIndex == nil, case .folder(var f) = pages[loc.page].items[loc.index] {
-                f.apps.insert(entry.app, at: min(max(0, entry.folderIndex ?? f.apps.count), f.apps.count))
+                let at = Self.slot(after: entry.folderBefore, fallback: entry.folderIndex ?? f.apps.count, in: f.apps.map(\.id))
+                f.apps.insert(entry.app, at: min(max(0, at), f.apps.count))
                 pages[loc.page].items[loc.index] = .folder(f)
                 return
             }
@@ -187,9 +194,19 @@ extension Grid {
 
     private mutating func place(_ item: GridItem, _ entry: PrunedApp) {
         if let p = pages.firstIndex(where: { $0.id == entry.pageID }) {
-            insert([item], page: p, at: entry.index)
+            insert([item], page: p, at: Self.slot(after: entry.before, fallback: entry.index, in: pages[p].items.map(\.id)))
         } else {
             appendToFirstFree([item])
         }
+    }
+
+    /// Just after the nearest remembered neighbour still present. With none left, the start
+    /// if every item before it was remembered, else the old index.
+    static func slot(after before: [UUID]?, fallback: Int, in ids: [UUID]) -> Int {
+        guard let before else { return fallback }
+        for id in before.reversed() {
+            if let i = ids.firstIndex(of: id) { return i + 1 }
+        }
+        return before.count == fallback ? 0 : fallback
     }
 }

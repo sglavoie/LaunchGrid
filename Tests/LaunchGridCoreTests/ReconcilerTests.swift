@@ -173,6 +173,23 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.map(\.name) == ["A"])
     }
 
+    @Test func restoredAppSkipsNeighboursThatNeverCameBack() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        let all = ["A", "B", "C", "D"].map { installed($0) }
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: ["A", "B", "C", "D"].map { .app(app($0)) })])
+        _ = Reconciler.reconcile(&g, installed: [all[0], all[3]], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [all[0], all[2], all[3]], autoAdd: false, now: t0 + 5)
+        #expect(titles(g.pages[0]) == ["A", "C", "D"], "after A, not one slot late because B is still gone")
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: t0 + 10)
+        #expect(titles(g.pages[0]) == ["A", "B", "C", "D"])
+
+        // Every neighbour before it gone: back to the start.
+        var h = Grid(rows: 2, columns: 3, pages: [Page(items: ["A", "B", "C"].map { .app(app($0)) })])
+        _ = Reconciler.reconcile(&h, installed: [all[2]], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&h, installed: [all[1], all[2]], autoAdd: false, now: t0 + 5)
+        #expect(titles(h.pages[0]) == ["B", "C"])
+    }
+
     @Test func appMissingPastTheWindowIsAddedAsNew() {
         var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(app("B")), .app(app("A"))])])
         let t0 = Date(timeIntervalSinceReferenceDate: 0)

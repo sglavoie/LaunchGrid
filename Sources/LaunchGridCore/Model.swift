@@ -131,8 +131,9 @@ public struct AppRef: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// Where a pruned app used to be. Indices are those before pruning; restoring in the order
-/// the apps were pruned puts neighbours back side by side.
+/// Where a pruned app used to be. Indices are those before pruning, a fallback for when
+/// none of the remembered neighbours is left; restoring in the order the apps were pruned
+/// puts neighbours back side by side.
 public struct PrunedApp: Codable, Equatable, Sendable {
     public var app: AppRef
     public var prunedAt: Date
@@ -144,10 +145,14 @@ public struct PrunedApp: Codable, Equatable, Sendable {
     public var folderIndex: Int?
     /// The prune itself emptied the folder; otherwise a vanished folder was the user's doing.
     public var folderEmptied: Bool?
+    /// IDs of the items just before it on its page (and in its folder), nearest last. It goes
+    /// back after the nearest one still there, so neighbours that never return don't shift it.
+    public var before: [UUID]?
+    public var folderBefore: [UUID]?
 
     public init(app: AppRef, prunedAt: Date, pageID: UUID, index: Int,
                 folderID: UUID? = nil, folderName: String? = nil, folderIndex: Int? = nil,
-                folderEmptied: Bool? = nil) {
+                folderEmptied: Bool? = nil, before: [UUID]? = nil, folderBefore: [UUID]? = nil) {
         self.app = app
         self.prunedAt = prunedAt
         self.pageID = pageID
@@ -156,6 +161,8 @@ public struct PrunedApp: Codable, Equatable, Sendable {
         self.folderName = folderName
         self.folderIndex = folderIndex
         self.folderEmptied = folderEmptied
+        self.before = before
+        self.folderBefore = folderBefore
     }
 }
 
