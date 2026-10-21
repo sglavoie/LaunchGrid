@@ -1,8 +1,12 @@
 # LaunchGrid
 
-A free, Launchpad-style app grid for macOS 14+, rebuilt from the observed behaviour of AppGrid. Every former "Pro" feature is included; there are no purchases, licence checks, network calls or announcements.
+A free, full-screen app grid for macOS 14+: pages, folders and type-to-search, one keystroke away. Everything is included; there are no purchases, licence checks, network calls or announcements.
 
 About 99% of LaunchGrid (code, tests, documentation and website) was written by AI, Claude by Anthropic, directed and tested by Sébastien Lavoie. The app itself contains no AI features and makes no network connections.
+
+## Install
+
+Download `LaunchGrid.zip` from the [latest release](https://github.com/sglavoie/LaunchGrid/releases/latest), unzip it and move LaunchGrid to your Applications folder. It is signed and notarised, and runs on Apple silicon and Intel Macs with macOS 14 or later.
 
 ## Build and run
 
@@ -21,7 +25,7 @@ The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home
 
 Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.appgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 
-Set `SIGN_IDENTITY="Developer ID Application: …"` before `scripts/bundle.sh` to sign for notarisation. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
+`just release` (`scripts/release.sh`) makes the downloadable build: universal, signed with the `SIGN_IDENTITY` Developer ID, notarised, stapled and zipped to `build/LaunchGrid.zip`. The script's header describes the one-time notarisation setup. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
 
 On first launch, a welcome window lets you choose which installed apps to include (all by default), then offers these ways to set up the grid:
 
@@ -80,6 +84,10 @@ Two targets, each with a test target (`LaunchGridCoreTests`, `LaunchGridTests`):
 
 ### Deliberately left out
 
-- RevenueCat, StoreKit, the paywall and the licence check.
-- `messages.json` announcements and release notes.
+- In-app purchases, licence checks and anything else that needs a network connection.
+- Announcements and release notes inside the app.
 - `.lmy` import, whose format is unverified. `.agrid` files load through the SQLite importer.
+
+## Licence
+
+MIT; see [LICENSE](LICENSE).

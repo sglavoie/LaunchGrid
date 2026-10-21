@@ -6,8 +6,11 @@ CONFIG="${1:-release}"
 APP="build/LaunchGrid.app"
 VERSION="1.0.0"
 
-swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/LaunchGrid"
+# UNIVERSAL=1 builds for both Apple silicon and Intel, as the downloadable release does.
+set -- -c "$CONFIG"
+[ "${UNIVERSAL:-0}" = 1 ] && set -- "$@" --arch arm64 --arch x86_64
+swift build "$@"
+BIN="$(swift build "$@" --show-bin-path)/LaunchGrid"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

@@ -56,6 +56,10 @@ uninstall:
     if [ -w "{{install_dir}}" ]; then rm -rf "$DEST"; else sudo rm -rf "$DEST"; fi
     echo "Removed $DEST"
 
+# Build the signed, notarised, universal build/LaunchGrid.zip for a GitHub release
+release:
+    scripts/release.sh
+
 # Build, test and bundle, as CI does
 ci: build test (bundle "release")
 
