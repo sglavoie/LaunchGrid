@@ -15,7 +15,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var panel: OverlayPanel?
     private var panelMode: WindowMode?
     private var monitors: [Any] = []
-    private var screen: NSScreen?
+    /// The display the panel and its background belong to.
+    private(set) var screen: NSScreen?
     private var scrollAccumulator: CGFloat = 0
     private var lastWheelFlip = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.

@@ -64,6 +64,15 @@ enum DebugScript {
                         }
                         try? await Task.sleep(for: .milliseconds(50))
                     }
+                case "movescreen":
+                    // Moves the overlay window onto screen N (Window mode), as dragging it there would.
+                    let screens = NSScreen.screens
+                    guard let window = overlay.window, let i = Int(arg), screens.indices.contains(i) else { break }
+                    let v = screens[i].visibleFrame, size = window.frame.size
+                    window.setFrameOrigin(NSPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2))
+                    try? await Task.sleep(for: .milliseconds(500))
+                    print("movescreen: window on \(window.screen?.displayID ?? 0), background for \(overlay.screen?.displayID ?? 0), of \(screens.map(\.displayID))")
+                    fflush(stdout)
                 case "panel":
                     let w = overlay.window
                     print("panel: visible=\(w?.isVisible == true) alpha=\(w?.alphaValue ?? -1) key=\(w?.isKeyWindow == true) shown=\(state.isShown)")
