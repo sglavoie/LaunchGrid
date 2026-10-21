@@ -379,6 +379,16 @@ extension AppState {
         }
     }
 
+    /// ⌘1…9 during a drag: show another page; the gap is found again there.
+    func dragGoToPage(_ p: Int) {
+        guard drag.active, openFolder == nil else { return }
+        drag.candidate = nil
+        drag.mergeTarget = nil
+        drag.pendingGap = nil
+        drag.gap = nil
+        goToPage(p)
+    }
+
     private func drop() {
         let ids = drag.ids
         let page = currentPage

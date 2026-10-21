@@ -235,6 +235,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let code = Int(event.keyCode)
         let cmd = mods.contains(.command)
+        // Mid-drag, only Esc (cancel) and ⌘1…9 (carry the items to a page) do anything.
+        if state.drag.active && code != kVK_Escape {
+            if cmd, let digit = event.charactersIgnoringModifiers.flatMap(Int.init), (1...9).contains(digit) {
+                state.dragGoToPage(digit - 1)
+            }
+            return nil
+        }
 
         switch code {
         case kVK_Escape:
