@@ -9,11 +9,20 @@ jobs:
   test:
     # The Liquid Glass background needs the macOS 26 SDK to compile.
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history: the bundle's build number is `git rev-list --count HEAD`.
           fetch-depth: 0
+      - name: Cache build products
+        uses: actions/cache@v4
+        with:
+          path: .build
+          # An exact hit only when nothing changed; otherwise the latest cache makes the build incremental.
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ hashFiles('Sources/**/*.swift', 'Tests/**/*.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
       - name: Build
         run: swift build
       - name: Test
