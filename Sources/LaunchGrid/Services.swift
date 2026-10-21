@@ -125,11 +125,12 @@ final class IconProvider: @unchecked Sendable {
     }
 
     /// Removes cached icons whose app changed on disk since they were rendered; returns their paths.
+    /// The generic icon of an app that was missing when rendered goes stale once the app appears.
     func dropStale(_ paths: [String]) -> [String] {
         let known = versions.withLock { $0 }
         let stale = paths.filter { path in
             guard let rendered = known[path] else { return false }
-            return Self.modificationDate(path) != rendered
+            return Self.version(path) != rendered
         }
         for path in stale { cache.removeObject(forKey: path as NSString) }
         versions.withLock { v in for path in stale { v[path] = nil } }
@@ -141,6 +142,11 @@ final class IconProvider: @unchecked Sendable {
         let fm = FileManager.default
         let attrs = (try? fm.attributesOfItem(atPath: path + "/Contents/Info.plist")) ?? (try? fm.attributesOfItem(atPath: path))
         return attrs?[.modificationDate] as? Date
+    }
+
+    /// The modification date, or `.distantPast` for a missing app so its icon is still tracked.
+    private static func version(_ path: String) -> Date {
+        modificationDate(path) ?? .distantPast
     }
 
     @discardableResult
@@ -165,7 +171,7 @@ final class IconProvider: @unchecked Sendable {
     }
 
     private func draw(_ path: String) -> NSImage {
-        let version = Self.modificationDate(path)
+        let version = Self.version(path)
         let source = NSWorkspace.shared.icon(forFile: path)
         let px = Self.pixelSize
         let size = NSSize(width: px / 2, height: px / 2)
