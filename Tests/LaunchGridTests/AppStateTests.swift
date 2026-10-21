@@ -65,3 +65,26 @@ func installed(_ name: String) -> InstalledApp {
         state.drag.reset()
     }
 }
+
+@MainActor @Suite struct LoadProblemTests {
+    func load(_ contents: String) throws -> AppState {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("grid.json")
+        try Data(contents.utf8).write(to: url)
+        return AppState(prefs: Preferences(), store: GridStore(url: url))
+    }
+
+    @Test func newerFormatIsKeptAndExplained() throws {
+        let state = try load(#"{"version": 99, "pages": []}"#)
+        let problem = try #require(state.loadProblem)
+        #expect(problem.backup.lastPathComponent.hasPrefix("grid.newer-"))
+        #expect(FileManager.default.fileExists(atPath: problem.backup.path))
+        #expect(!state.hasGridFile)
+    }
+
+    @Test func corruptFileIsSetAside() throws {
+        let state = try load("not json")
+        #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
+    }
+}

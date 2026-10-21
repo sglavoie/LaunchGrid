@@ -425,6 +425,18 @@ struct FirstRunView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if let problem = state.loadProblem {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(problem.message)
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([problem.backup]) }
+                            .buttonStyle(.link)
+                    }
+                }
+                .padding(12)
+                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            }
             option("Build by category", "One page per kind of app — Productivity, Developer Tools, Creativity…",
                    "square.grid.3x3.square") { actions.rebuild(.byCategory) }
             option("Build alphabetically", "All apps in name order.", "textformat.abc") { actions.rebuild(.alphabetical) }

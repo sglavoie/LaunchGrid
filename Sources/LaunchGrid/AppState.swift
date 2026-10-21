@@ -25,6 +25,8 @@ final class AppState {
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
     private(set) var hasGridFile: Bool
+    /// Set when the saved layout could not be loaded at launch and was moved aside.
+    private(set) var loadProblem: (message: String, backup: URL)?
 
     @ObservationIgnored private var undoStack: [Grid] = []
     @ObservationIgnored private var redoStack: [Grid] = []
@@ -73,10 +75,16 @@ final class AppState {
             do {
                 loaded = try store.load()
             } catch {
-                // Keep the unreadable file for inspection and start fresh.
-                let backup = store.url.deletingPathExtension().appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970)).json")
+                // Keep the file for inspection (or for the newer version) and start fresh.
+                let newer = if case GridFileError.unsupportedVersion = error { true } else { false }
+                let backup = store.url.deletingPathExtension()
+                    .appendingPathExtension("\(newer ? "newer" : "corrupt")-\(Int(Date().timeIntervalSince1970)).json")
                 try? FileManager.default.moveItem(at: store.url, to: backup)
                 NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
+                let message = newer
+                    ? "Your saved layout was made by a newer version of LaunchGrid. It was kept as \(backup.lastPathComponent)."
+                    : "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent)."
+                loadProblem = (message, backup)
             }
         }
         hasGridFile = loaded != nil
