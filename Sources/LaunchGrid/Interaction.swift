@@ -57,6 +57,8 @@ final class DragController {
     var source: Source = .page
     /// Pointer location in the root coordinate space.
     var location: CGPoint = .zero
+    /// From the pointer to the picked-up icon's centre, so the icon stays where it was grabbed.
+    var grabOffset: CGSize = .zero
     /// Insertion index among the non-dragged items of the current page (or open folder).
     var gap: Int?
     /// Item the pointer has dwelt on long enough to merge with.
@@ -84,6 +86,10 @@ final class DragController {
 
     func isDragged(_ id: UUID) -> Bool { active && ids.contains(id) }
 
+    /// Centre of the dragged icon. Drop targets are found under it rather than under the
+    /// pointer, so what lands is what the icon covers.
+    var iconCenter: CGPoint { CGPoint(x: location.x + grabOffset.width, y: location.y + grabOffset.height) }
+
     /// Cancels the drag; the rest of the gesture in progress, if any, is ignored.
     func cancel() {
         if decided { abandonedStart = gestureStart }
@@ -97,6 +103,7 @@ final class DragController {
         active = false
         ids = []
         primary = nil
+        grabOffset = .zero
         gap = nil
         pendingGap = nil
         mergeTarget = nil
@@ -196,22 +203,31 @@ extension AppState {
         guard query.isEmpty, textEdit == nil else { return false }
         var hit: UUID?
         var source = DragController.Source.page
+        // Only start on the icon itself; elsewhere a drag swipes pages (or does nothing in a folder).
+        let reach = pageLayout.iconSize(scale: prefs.iconScale) * 0.75
+        func onIcon(_ local: CGPoint, _ center: CGPoint) -> Bool {
+            abs(local.x - center.x) < reach && abs(local.y - center.y) < reach * 1.2
+        }
+        var center = CGPoint.zero
         if let folder = openFolder {
-            let local = CGPoint(x: start.x - drag.folderGridFrame.minX, y: start.y - drag.folderGridFrame.minY)
-            guard drag.folderGridFrame.contains(start), let cell = folderLayout.cellIndex(at: local) else { return false }
+            let frame = drag.folderGridFrame
+            let local = CGPoint(x: start.x - frame.minX, y: start.y - frame.minY)
+            guard frame.contains(start), let cell = folderLayout.cellIndex(at: local) else { return false }
             let index = folderPage * FolderLayout.perPage(grid) + cell
-            guard folder.apps.indices.contains(index) else { return false }
+            let c = folderLayout.center(cell)
+            guard folder.apps.indices.contains(index), onIcon(local, c) else { return false }
             hit = folder.apps[index].id
             source = .folder(folder.id)
+            center = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
         } else {
-            let local = CGPoint(x: start.x - drag.pagerFrame.minX, y: start.y - drag.pagerFrame.minY)
-            guard drag.pagerFrame.contains(start), let cell = pageLayout.cellIndex(at: local),
+            let frame = drag.pagerFrame
+            let local = CGPoint(x: start.x - frame.minX, y: start.y - frame.minY)
+            guard frame.contains(start), let cell = pageLayout.cellIndex(at: local),
                   currentItems.indices.contains(cell) else { return false }
-            // Only start on the icon itself; elsewhere a drag swipes pages.
-            let center = pageLayout.center(cell)
-            let reach = pageLayout.iconSize(scale: prefs.iconScale) * 0.75
-            guard abs(local.x - center.x) < reach, abs(local.y - center.y) < reach * 1.2 else { return false }
+            let c = pageLayout.center(cell)
+            guard onIcon(local, c) else { return false }
             hit = currentItems[cell].id
+            center = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
         }
         guard let hit, let item = grid.item(hit) else { return false }
         let ids = targets(for: hit)
@@ -219,6 +235,7 @@ extension AppState {
         drag.primary = item
         drag.source = source
         drag.location = start
+        drag.grabOffset = CGSize(width: center.x - start.x, height: center.y - start.y)
         drag.edgeSide = 0
         drag.candidate = nil
         drag.mergeTarget = nil
@@ -239,7 +256,7 @@ extension AppState {
     }
 
     private func updateTargets() {
-        let p = drag.location
+        let p = drag.iconCenter
         if case .folder = drag.source, openFolder != nil {
             if drag.folderPanelFrame.insetBy(dx: -12, dy: -12).contains(p) {
                 updateFolderGap(p)
@@ -343,7 +360,7 @@ extension AppState {
             withAnimation(Self.pageAnimation) { folderPage = target }
             // The gap follows the pointer onto the new page.
             drag.pendingGap = nil
-            updateFolderGap(drag.location)
+            updateFolderGap(drag.iconCenter)
             return
         }
         if now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell {

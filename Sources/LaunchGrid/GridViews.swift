@@ -468,7 +468,7 @@ struct DragLayer: View {
     var body: some View {
         if state.drag.active, let item = state.drag.primary {
             DragGhost(item: item, count: state.drag.ids.count)
-                .position(state.drag.location)
+                .position(state.drag.iconCenter)
                 .allowsHitTesting(false)
         }
     }
