@@ -151,6 +151,17 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(titles) == [["A", "B", "C"], ["D", "E"]])
     }
 
+    @Test func sortEverythingKeepsPageTitlesByPosition() {
+        var g = grid([["E", "A"], ["D", "C", "B"], []])
+        g.pages[0].title = "Work"
+        g.pages[1].title = "Play"
+        let ids = g.pages.map(\.id)
+        g.sortEverything()
+        #expect(g.pages.map(titles) == [["A", "B", "C"], ["D", "E"]])
+        #expect(g.pages.map(\.title) == ["Work", "Play"])
+        #expect(g.pages.map(\.id) == Array(ids.prefix(2)))
+    }
+
     @Test func renameAndResetName() {
         var g = grid([["A"]])
         let id = g.pages[0].items[0].id
@@ -177,6 +188,54 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         let fid = g.group([g.pages[0].items[1].id, g.pages[0].items[2].id], name: "F")!
         g.ungroup(fid)
         #expect(titles(g.pages[0]) == ["A", "B", "C"])
+    }
+
+    @Test func ungroupOnAFullPageSpillsOntoTheNext() {
+        var g = grid([["A", "B", "C"], ["X"]])
+        let fid = g.group([g.pages[0].items[0].id, g.pages[0].items[1].id], name: "F")!
+        g.insert([.app(app("D"))], page: 0, at: 2)
+        #expect(g.pages.map(titles) == [["F", "C", "D"], ["X"]])
+        g.ungroup(fid)
+        #expect(g.pages.map(titles) == [["A", "B", "C"], ["D", "X"]])
+    }
+
+    @Test func deletingTheOnlyPageKeepsItsItems() {
+        var g = grid([["A", "B"]])
+        g.pages[0].title = "Work"
+        g.deletePage(0)
+        #expect(g.pages.map(titles) == [["A", "B"]])
+        #expect(g.pages[0].title == nil)
+        g.deletePage(5)
+        #expect(g.pages.count == 1)
+    }
+
+    @Test func addPageAndSetPageTitle() {
+        var g = grid([["A"], ["B"]])
+        #expect(g.addPage() == 2)
+        #expect(g.addPage(after: 0, title: "New") == 1)
+        #expect(g.pages.map(titles) == [["A"], [], ["B"], []])
+        #expect(g.pages[1].title == "New")
+        #expect(g.addPage(after: -5) == 0, "a negative index means the start")
+        #expect(g.addPage(after: 99) == g.pages.count - 1)
+
+        g.setPageTitle(0, "  Games  ")
+        #expect(g.pages[0].title == "Games")
+        g.setPageTitle(0, " ")
+        #expect(g.pages[0].title == nil)
+        g.setPageTitle(2, nil)
+        #expect(g.pages[2].title == nil)
+        g.setPageTitle(99, "Nope")
+        #expect(!g.pages.contains { $0.title == "Nope" })
+    }
+
+    @Test func gridSizeStaysPositive() {
+        var g = grid([["A"]])
+        g.rows = 0
+        g.columns = -2
+        #expect(g.rows == 1 && g.columns == 1)
+        g.resize(rows: 0, columns: 0)
+        #expect(g.capacity == 1)
+        #expect(Grid(rows: 0, columns: -1).capacity == 1)
     }
 
     @Test func appendToFirstFree() {
@@ -208,6 +267,29 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
     @Test func rejectsOutOfRangeSize() {
         let data = Data(#"{"version": 1, "rows": 51, "columns": 7, "pages": []}"#.utf8)
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }
+    }
+
+    @Test func zeroSizeIsClampedToOne() throws {
+        let g = try GridStore.decode(Data(#"{"version": 1, "rows": 0, "columns": -3, "pages": []}"#.utf8))
+        #expect(g.rows == 1 && g.columns == 1)
+    }
+
+    @Test func saveKeepsASymlinkedFileASymlink() throws {
+        let fm = FileManager.default
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("store-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: dir) }
+        let real = dir.appendingPathComponent("dotfiles/grid.json")
+        let link = dir.appendingPathComponent("support/grid.json")
+        try fm.createDirectory(at: real.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(app("A"))])])
+        try GridStore(url: link).save(g)
+        #expect(try fm.destinationOfSymbolicLink(atPath: link.path) == real.path)
+        #expect(try GridStore(url: real).load() == g)
+        try GridStore(url: link).save(Grid(rows: 3, columns: 3))
+        #expect(try GridStore(url: real).load().rows == 3, "later saves land in the target too")
     }
 
     @Test func recentlyPrunedRoundTripsAndOldFilesStillLoad() throws {
@@ -255,6 +337,16 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
             #expect(Search.score("Photo Raw Organizer", query: "pro")! > Search.score("x" + name + "pro", query: "pro")!)
             #expect(Search.score("x" + name + "pro", query: "pro")! > Search.score("p" + name + "ro", query: "pro")!)
         }
+    }
+
+    @Test func queryWordsMatchInAnyOrder() {
+        let apps = ["Microsoft Word", "Microsoft Excel", "Wordle", "Visual Studio Code"].map { app($0) }
+        #expect(Search.results(in: apps, query: "word micro").map(\.name) == ["Microsoft Word"])
+        #expect(Search.results(in: apps, query: "code  visual").map(\.name) == ["Visual Studio Code"])
+        #expect(Search.score("Microsoft Word", query: "word micro") == Search.score("Microsoft Word", query: "wor"),
+                "ranked in the word-start tier")
+        #expect(Search.score("Microsoft Word", query: "word zzz") == nil)
+        #expect(Search.score("Microsoft Word", query: "ord micro") == nil, "each word must start a word")
     }
 
     @Test func diacriticInsensitiveAndRenames() {

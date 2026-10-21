@@ -227,6 +227,54 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.recentlyPruned.isEmpty)
     }
 
+    @Test func restoreIntoAFullPageSpillsTheLastItem() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A")), .app(app("B"))])])
+        _ = Reconciler.reconcile(&g, installed: [installed("B")], autoAdd: false, now: t0)
+        Reconciler.add([installed("C")], to: &g)
+        #expect(g.pages.map(titles) == [["B", "C"]])
+        let back = Reconciler.reconcile(&g, installed: ["A", "B", "C"].map { installed($0) }, autoAdd: false, now: t0 + 5)
+        #expect(back.restored == ["A"])
+        #expect(g.pages.map(titles) == [["A", "B"], ["C"]])
+    }
+
+    @Test func restoreOnAPageThatIsGoneUsesTheFirstFreeSlot() {
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A")), .app(app("C"))]), Page(items: [.app(app("D"))])])
+        g.restore(PrunedApp(app: app("B"), prunedAt: Date(), pageID: UUID(), index: 0))
+        #expect(g.pages.map(titles) == [["A", "C"], ["D", "B"]])
+
+        // Through the reconciler: the user deleted the page meanwhile.
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        var h = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))]), Page(items: [.app(app("B"))])])
+        _ = Reconciler.reconcile(&h, installed: [installed("A")], autoAdd: false, now: t0)
+        h.removeEmptyPages()
+        _ = Reconciler.reconcile(&h, installed: [installed("A"), installed("B")], autoAdd: false, now: t0 + 5)
+        #expect(h.pages.map(titles) == [["A", "B"]])
+    }
+
+    @Test func pruneMemoryKeepsTheNewestEntries() {
+        let names = (0..<(Reconciler.pruneMemory + 5)).map { String(format: "App%03d", $0) }
+        var g = Grid(rows: 15, columns: 15, pages: [Page(items: names.map { .app(app($0)) })])
+        _ = Reconciler.reconcile(&g, installed: [installed("Keep")], autoAdd: false)
+        #expect(g.recentlyPruned.count == Reconciler.pruneMemory)
+        #expect(g.recentlyPruned.first?.app.name == "App005", "oldest first out")
+        #expect(g.recentlyPruned.last?.app.name == names.last)
+    }
+
+    @Test func pruneMissingOffKeepsAppsAndRemembersNothing() {
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A")), .app(app("Gone"))])])
+        let report = Reconciler.reconcile(&g, installed: [installed("A")], autoAdd: false, pruneMissing: false)
+        #expect(report.removed.isEmpty)
+        #expect(titles(g.pages[0]) == ["A", "Gone"])
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
+    @Test func addDropsAnAppListedTwice() {
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A"))])])
+        Reconciler.add([installed("B"), installed("B"), installed("A")], to: &g)
+        #expect(g.allApps.map(\.name) == ["A", "B"])
+    }
+
     @Test func appWithoutBundleIDMatchesByPath() {
         var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(AppRef(bundleID: nil, path: "/Applications/X.app"))])])
         _ = Reconciler.reconcile(&g, installed: [InstalledApp(bundleID: nil, path: "/Applications/X.app", name: "X")], autoAdd: true)
@@ -342,6 +390,32 @@ func tempDir(_ prefix: String) -> URL {
         try makeFakeApp("Real.app", id: "t.real", in: root)
         #expect(AppScanner.read(appAt: root.appendingPathComponent("Real.app"))?.bundleID == "t.real")
     }
+
+    @Test func readSeesAnUpdatedInfoPlist() throws {
+        let root = tempDir("scan")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeFakeApp("App.app", id: "t.old", in: root)
+        let url = root.appendingPathComponent("App.app")
+        #expect(AppScanner.read(appAt: url)?.bundleID == "t.old")
+        // An update rewrites the bundle in place; Bundle(url:) would keep the first answer.
+        let plist: [String: Any] = ["CFBundleIdentifier": "t.new", "CFBundlePackageType": "APPL",
+                                    "LSApplicationCategoryType": "public.app-category.utilities"]
+        try (plist as NSDictionary).write(to: url.appendingPathComponent("Contents/Info.plist"))
+        let again = AppScanner.read(appAt: url)
+        #expect(again?.bundleID == "t.new")
+        #expect(again?.category == "public.app-category.utilities")
+    }
+
+    @Test func anAppReachedThroughSymlinksIsFoundOnce() throws {
+        let fm = FileManager.default
+        let root = tempDir("scan")
+        defer { try? fm.removeItem(at: root) }
+        try makeFakeApp("Real/X.app", id: "t.x", in: root)
+        try fm.createSymbolicLink(at: root.appendingPathComponent("Alias"), withDestinationURL: root.appendingPathComponent("Real"))
+        try fm.createSymbolicLink(at: root.appendingPathComponent("XLink.app"),
+                                  withDestinationURL: root.appendingPathComponent("Real/X.app"))
+        #expect(AppScanner.scan(roots: [root]).count == 1)
+    }
 }
 
 @Suite struct ImporterTests {
@@ -381,7 +455,7 @@ func tempDir(_ prefix: String) -> URL {
         #expect(titles(r.grid.pages[0]) == ["Stuff", "Mail"])
         #expect(r.grid.pages[0].items[0].folder?.apps.map(\.name) == ["Notes"])
         #expect(titles(r.grid.pages[1]) == ["Safari"])
-        #expect(r.skipped == ["Gone"])
+        #expect(r.skipped == ["Gone", "Mail again"], "not installed, then a second entry for one app")
         #expect(r.imported == 3)
     }
 
@@ -449,6 +523,72 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.skipped == ["Ghost"])
     }
 
+    @Test func importsCopiesSharingABundleIDAndReportsTrueDuplicates() throws {
+        let dir = tempDir("lp")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Xcode.app", id: "com.apple.dt.Xcode", in: dir)
+        try makeFakeApp("Xcode-beta.app", id: "com.apple.dt.Xcode", in: dir)
+        let xcode = dir.appendingPathComponent("Xcode.app").path
+        let beta = dir.appendingPathComponent("Xcode-beta.app").path
+        let url = dir.appendingPathComponent("db")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        let sql = """
+        CREATE TABLE items (rowid INTEGER PRIMARY KEY ASC, uuid VARCHAR, flags INTEGER, type INTEGER, parent_id INTEGER NOT NULL, ordering INTEGER);
+        CREATE TABLE apps (item_id INTEGER PRIMARY KEY, title VARCHAR, bundleid VARCHAR, custom_path VARCHAR);
+        INSERT INTO items VALUES (1,'',0,3,0,0), (10,'',0,3,1,0);
+        INSERT INTO items VALUES (100,'',0,4,10,0), (101,'',0,4,10,1), (102,'',0,4,10,2);
+        INSERT INTO apps VALUES (100,'Xcode','com.apple.dt.Xcode','\(xcode)');
+        INSERT INTO apps VALUES (101,'Xcode-beta','com.apple.dt.Xcode','\(beta)');
+        INSERT INTO apps VALUES (102,'Xcode again','com.apple.dt.Xcode','\(xcode)');
+        """
+        #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let r = try LaunchpadImporter.importDatabase(at: url, rows: 5, columns: 7) { _ in nil }
+        #expect(r.grid.allApps.map(\.path) == [xcode, beta])
+        #expect(r.imported == 2)
+        #expect(r.skipped == ["Xcode again"])
+    }
+
+    @Test func pageTitlesComeFromGroups() throws {
+        let url = tempDir("lp").appendingPathExtension("db")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        let sql = """
+        CREATE TABLE items (rowid INTEGER PRIMARY KEY ASC, uuid VARCHAR, flags INTEGER, type INTEGER, parent_id INTEGER NOT NULL, ordering INTEGER);
+        CREATE TABLE apps (item_id INTEGER PRIMARY KEY, title VARCHAR, bundleid VARCHAR);
+        CREATE TABLE groups (item_id INTEGER PRIMARY KEY, category_id INTEGER, title VARCHAR);
+        INSERT INTO items VALUES (1,'',0,1,0,0), (10,'',0,3,1,0), (11,'',0,3,1,1), (12,'',0,3,1,2);
+        INSERT INTO items VALUES (100,'',0,4,10,0), (101,'',0,4,11,0), (102,'',0,4,12,0);
+        INSERT INTO apps VALUES (100,'Mail','com.apple.mail'), (101,'Notes','com.apple.Notes'), (102,'Maps','com.apple.Maps');
+        INSERT INTO groups VALUES (10,NULL,'Work'), (11,NULL,'');
+        """
+        #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+        let r = try LaunchpadImporter.importDatabase(at: url, rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(r.grid.pages.map(\.title) == ["Work", nil, nil], "an empty title is no title")
+        #expect(r.grid.pages.map(titles) == [["Mail"], ["Notes"], ["Maps"]])
+    }
+
+    @Test func walHeaderChangesWhenTheLogIsReset() throws {
+        let url = tempDir("lp").appendingPathExtension("db")
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) } }
+        #expect(LaunchpadImporter.walHeader(url.path + "-wal") == nil)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let setup = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE t (a); INSERT INTO t VALUES (1);"
+        #expect(sqlite3_exec(db, setup, nil, nil, nil) == SQLITE_OK)
+        let first = LaunchpadImporter.walHeader(url.path + "-wal")
+        #expect(first?.count == 12)
+        #expect(sqlite3_exec(db, "INSERT INTO t VALUES (2);", nil, nil, nil) == SQLITE_OK)
+        #expect(LaunchpadImporter.walHeader(url.path + "-wal") == first, "appending keeps the header")
+        #expect(sqlite3_exec(db, "PRAGMA wal_checkpoint(RESTART); INSERT INTO t VALUES (3);", nil, nil, nil) == SQLITE_OK)
+        #expect(LaunchpadImporter.walHeader(url.path + "-wal") != first, "a reset log has new salts")
+    }
+
     @Test func survivesParentCycles() throws {
         let url = tempDir("lp").appendingPathExtension("db")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -488,6 +628,6 @@ func tempDir(_ prefix: String) -> URL {
         let r = try LaunchpadImporter.importDatabase(at: url, rows: 5, columns: 7) { _ in nil }
         print("AppGrid import: \(r.grid.pages.count) pages, \(r.imported) apps, skipped \(r.skipped.count)")
         #expect(r.imported > 0)
-        #expect(r.grid.allApps.count == Set(r.grid.allApps.map(\.key)).count)
+        #expect(r.grid.allApps.count == Set(r.grid.allApps.map(\.path)).count)
     }
 }
