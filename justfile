@@ -71,8 +71,9 @@ ci: build test (bundle "release")
 website:
     cd website && npx -y wrangler@4 dev
 
-# Publish the website to launchgrid.sglavoie.com
+# Publish the website to launchgrid.sglavoie.com (pushing website/ to main does this too)
 website-deploy:
+    scripts/check-website.sh
     cd website && npx -y wrangler@4 deploy
 
 # Record the website's video and Settings screenshots (run in a terminal window with Screen Recording)

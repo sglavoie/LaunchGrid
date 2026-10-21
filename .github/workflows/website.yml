@@ -1,0 +1,29 @@
+name: Website
+
+# Publishes website/public to launchgrid.sglavoie.com when a push to main changes it, as
+# `just website-deploy` does. Needs the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets.
+on:
+  push:
+    branches: [main]
+    paths: ["website/**", "scripts/check-website.sh", ".github/workflows/website.yml"]
+  workflow_dispatch:
+
+# One deploy at a time; a newer push replaces a deploy still waiting to start.
+concurrency:
+  group: website
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that every referenced file exists
+        run: scripts/check-website.sh
+      - name: Deploy
+        working-directory: website
+        run: npx -y wrangler@4 deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
