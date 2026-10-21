@@ -20,6 +20,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var lastWheelFlip = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
     private var visibilityGeneration = 0
+    /// The folder (and its page) that was open when typing started a search; Esc returns to it.
+    private var folderBeforeSearch: (id: UUID, page: Int)?
 
     var isVisible: Bool { panel?.isVisible == true && state.isShown }
     var window: NSWindow? { panel }
@@ -246,7 +248,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         switch code {
         case kVK_Escape:
             if state.drag.active { state.cancelDrag() }
-            else if !state.query.isEmpty { state.query = "" }
+            else if !state.query.isEmpty { endSearch() }
             else if state.openFolder != nil { state.closeFolder(restoringFocus: true) }
             else if state.editing { state.editing = false }
             else if !state.selection.isEmpty { state.selection.removeAll() }
@@ -269,7 +271,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return nil
         case kVK_Delete, kVK_ForwardDelete:
             if !state.query.isEmpty {
-                if cmd { state.query = "" } else { state.query.removeLast() }
+                if cmd || state.query.count == 1 { endSearch() } else { state.query.removeLast() }
             } else if event.isARepeat {
                 // Holding ⌫ only edits the search; removing is one press at a time.
             } else if !state.selection.isEmpty {
@@ -302,7 +304,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "q": NSApp.terminate(nil)
             case "v":
                 if let s = NSPasteboard.general.string(forType: .string) {
-                    state.query += s.replacingOccurrences(of: "\n", with: " ")
+                    appendToSearch(s.replacingOccurrences(of: "\n", with: " "))
                 }
             case "1", "2", "3", "4", "5", "6", "7", "8", "9":
                 state.query = ""
@@ -321,8 +323,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 if !event.isARepeat, let id = focusedID { state.toggleSelection(id) }
                 return nil
             }
-            state.openFolderID = nil
-            state.query += chars
+            appendToSearch(chars)
             return nil
         }
         return nil
@@ -333,6 +334,27 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard state.query.isEmpty, let i = state.focusIndex else { return nil }
         if let f = state.openFolder { return f.apps[safe: i]?.id }
         return state.currentItems[safe: i]?.id
+    }
+
+    /// Adds to the search. Starting one closes an open folder, remembering it for `endSearch()`.
+    private func appendToSearch(_ text: String) {
+        guard !text.isEmpty else { return }
+        if state.query.isEmpty {
+            folderBeforeSearch = state.openFolderID.map { ($0, state.folderPage) }
+            state.openFolderID = nil
+        }
+        state.query += text
+    }
+
+    /// Clears the search from the keyboard, back to the folder it was started in, if still there.
+    private func endSearch() {
+        state.query = ""
+        guard let folder = folderBeforeSearch else { return }
+        folderBeforeSearch = nil
+        guard state.grid.folder(folder.id) != nil else { return }
+        state.openFolder(folder.id)
+        let pages = FolderLayout.pageCount(apps: state.openFolder?.apps.count ?? 0, grid: state.grid)
+        state.folderPage = min(folder.page, pages - 1)
     }
 
     private var focusableCount: Int {
