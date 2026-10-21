@@ -52,7 +52,7 @@ On first launch, a welcome window lets you choose which installed apps to includ
 
 ## Where things live
 
-- Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change. An unreadable file (or one from a newer version) is moved aside, never overwritten, and the welcome window says where it went.
+- Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change. An unreadable file (or one from a newer version) is moved aside, never overwritten, and the welcome window says where it went; if it can't be moved, nothing is saved until you move it yourself. Apps excluded in the welcome window are saved before the layout is made.
 - Settings: `defaults read com.sglavoie.launchgrid`.
 - Removed and excluded apps are remembered in the grid's `removedBundleIDs` (by path for a copy that shares its bundle ID, like Xcode-beta), so scans and rebuilds don't re-add them; *Choose Apps…* or *Add Missing Apps…* brings them back.
 

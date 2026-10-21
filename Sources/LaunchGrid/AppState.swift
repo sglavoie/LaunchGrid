@@ -80,6 +80,8 @@ final class AppState {
     @ObservationIgnored private var toastPostedAt = Date.distantPast
     @ObservationIgnored private var scanning = false
     @ObservationIgnored private var rescanQueued = false
+    /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
+    @ObservationIgnored private var savesBlocked = false
 
     init(prefs: Preferences, store: GridStore) {
         self.prefs = prefs
@@ -93,15 +95,26 @@ final class AppState {
                 let newer = if case GridFileError.unsupportedVersion = error { true } else { false }
                 let backup = store.url.deletingPathExtension()
                     .appendingPathExtension("\(newer ? "newer" : "corrupt")-\(Int(Date().timeIntervalSince1970)).json")
-                try? FileManager.default.moveItem(at: store.url, to: backup)
-                NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
-                let message = newer
-                    ? "Your saved layout was made by a newer version of LaunchGrid. It was kept as \(backup.lastPathComponent)."
-                    : "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent)."
-                loadProblem = (message, backup)
+                do {
+                    try FileManager.default.moveItem(at: store.url, to: backup)
+                    NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
+                    let message = newer
+                        ? "Your saved layout was made by a newer version of LaunchGrid. It was kept as \(backup.lastPathComponent)."
+                        : "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent)."
+                    loadProblem = (message, backup)
+                } catch let moveError {
+                    // It stays where it is, the only copy: don't save over it until it's gone.
+                    NSLog("LaunchGrid: could not load grid (\(error)) nor move it aside (\(moveError)); not saving over it")
+                    savesBlocked = true
+                    let why = newer ? "was made by a newer version of LaunchGrid" : "could not be read"
+                    loadProblem = ("Your saved layout \(why) and couldn't be set aside, so LaunchGrid won't save over it. "
+                        + "Move \(store.url.lastPathComponent) elsewhere and your changes will be saved.", store.url)
+                }
             }
         }
-        hasGridFile = loaded != nil
+        // A file with no apps holds only exclusions chosen in the welcome window: the layout
+        // is still to be made.
+        hasGridFile = loaded.map { !$0.allApps.isEmpty } ?? false
         grid = loaded ?? Grid()
     }
 
@@ -133,6 +146,15 @@ final class AppState {
         openFolderID = nil
         reconcile()
         IconProvider.shared.prewarm(grid.allApps.map(\.path))
+    }
+
+    /// A loaded or imported layout with the user's current exclusions added to its own, minus
+    /// the apps it has on it: apps excluded earlier stay out unless the layout includes them.
+    nonisolated static func keepingExclusions(_ current: Set<String>, in new: Grid) -> Grid {
+        var new = new
+        new.removedBundleIDs = current.union(new.removedBundleIDs)
+            .subtracting(new.appKeys.union(new.allApps.map(\.path)))
+        return new
     }
 
     func undo() {
@@ -176,20 +198,36 @@ final class AppState {
 
     func saveNow(reportingFailure: Bool = true) {
         saveTask?.cancel()
-        guard hasGridFile || !grid.allApps.isEmpty else { return }
+        // Before the first layout, exclusions chosen in the welcome window are still worth keeping.
+        guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty else { return }
+        if savesBlocked {
+            guard !store.exists else {
+                NSLog("LaunchGrid: not saving over the layout that couldn't be read")
+                if reportingFailure {
+                    reportSaveFailure("LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. "
+                        + "Move that file elsewhere and your changes will be saved.")
+                }
+                return
+            }
+            savesBlocked = false // moved out of the way since
+        }
         do {
             try store.save(grid)
-            hasGridFile = true
+            if !grid.allApps.isEmpty { hasGridFile = true }
             saveFailureReported = false
         } catch {
             NSLog("LaunchGrid: save failed: \(error)")
             guard reportingFailure else { return }
-            // An alert would open behind the full-screen overlay and block it.
-            if isShown { showToast("Could not save your layout"); return }
-            guard !saveFailureReported else { return }
-            saveFailureReported = true
-            onError("Could not save your layout", "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
+            reportSaveFailure("Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
         }
+    }
+
+    private func reportSaveFailure(_ detail: String) {
+        // An alert would open behind the full-screen overlay and block it.
+        if isShown { showToast("Could not save your layout"); return }
+        guard !saveFailureReported else { return }
+        saveFailureReported = true
+        onError("Could not save your layout", detail)
     }
 
     // MARK: Catalog

@@ -498,7 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 importDatabase(url, from: url.lastPathComponent)
                 return
             }
-            state.replaceGrid(try GridStore.decode(data))
+            state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: try GridStore.decode(data)))
             state.showToast("Loaded \(url.lastPathComponent)")
             closeFirstRunIfDone()
         } catch {
