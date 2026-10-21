@@ -283,6 +283,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case kVK_RightArrow where state.query.isEmpty && state.openFolder == nil: state.flipPage(1)
             default: state.focusIndex = 0
             }
+            if state.openFolder != nil {
+                // Start on the folder page being shown.
+                state.focusIndex = min(state.folderPage * FolderLayout.perPage(state.grid), count - 1)
+            }
             return
         }
         var next = i
@@ -303,6 +307,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return
         }
         state.focusIndex = max(0, min(next, count - 1))
+        if state.openFolder != nil, let f = state.focusIndex {
+            // Keep the focused app on screen in a folder with several pages.
+            let page = f / FolderLayout.perPage(state.grid)
+            if page != state.folderPage { state.flipPage(page - state.folderPage) }
+        }
     }
 
     private func activateFocused() {
