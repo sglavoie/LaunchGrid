@@ -250,15 +250,13 @@ struct LayoutSettings: View {
                 Stepper("Rows: \(rows)", value: $rows, in: 2...12)
                 Stepper("Columns: \(columns)", value: $columns, in: 3...16)
                 if rows != grid.rows || columns != grid.columns {
-                    if after > grid.pages.count {
-                        Text("Pages that no longer fit will be split: \(grid.pages.count) → \(after) pages.")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
+                    Text("Items re-flow to fill each page in order\(after != grid.pages.count ? ": \(grid.pages.count) → \(after) pages" : "").")
+                        .font(.caption).foregroundStyle(after != grid.pages.count ? .orange : .secondary)
                     HStack {
                         Spacer()
                         Button("Revert") { rows = grid.rows; columns = grid.columns }
                         Button("Apply") {
-                            if after > grid.pages.count { confirm = true } else { apply() }
+                            if after != grid.pages.count { confirm = true } else { apply() }
                         }
                         .keyboardShortcut(.defaultAction)
                     }
@@ -285,7 +283,7 @@ struct LayoutSettings: View {
         .confirmationDialog("Re-flow the grid?", isPresented: $confirm) {
             Button("Resize to \(rows) × \(columns)") { apply() }
         } message: {
-            Text("Some pages will be split. You can undo this from the grid with ⌘Z.")
+            Text("Items move between pages, and titles of pages past the last one are dropped. You can undo this from the grid with ⌘Z.")
         }
     }
 

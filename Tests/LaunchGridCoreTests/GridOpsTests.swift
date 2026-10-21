@@ -128,9 +128,21 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         var g = grid([["A", "B", "C"], ["D", "E"]])
         #expect(g.pageCountAfterResize(rows: 1, columns: 2) == 3)
         g.resize(rows: 1, columns: 2)
-        #expect(g.pages.map(titles) == [["A", "B"], ["C"], ["D", "E"]])
+        #expect(g.pages.map(titles) == [["A", "B"], ["C", "D"], ["E"]])
+        #expect(g.pageCountAfterResize(rows: 2, columns: 3) == 1)
         g.resize(rows: 2, columns: 3)
-        #expect(g.pages.count == 3) // growing never merges pages
+        #expect(g.pages.map(titles) == [["A", "B", "C", "D", "E"]])
+    }
+
+    @Test func resizeKeepsLeadingPageIdentity() {
+        var g = grid([["A"], ["B"], ["C"]])
+        g.setPageTitle(0, "First")
+        g.setPageTitle(2, "Third")
+        let first = g.pages[0].id
+        g.resize(rows: 1, columns: 2)
+        #expect(g.pages.map(titles) == [["A", "B"], ["C"]])
+        #expect(g.pages[0].id == first && g.pages[0].title == "First")
+        #expect(g.pages[1].title == nil)
     }
 
     @Test func sortPageWithFolderPlacement() {

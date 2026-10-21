@@ -272,20 +272,13 @@ extension Grid {
 
     // MARK: Resizing
 
-    /// Changes the grid size. A page that no longer fits is split into several pages placed
-    /// right after it, so existing page boundaries survive.
+    /// Changes the grid size and re-flows every item, in order, so each page is filled
+    /// before the next one starts. Page `n` keeps the old page `n`'s ID and title.
     public mutating func resize(rows: Int, columns: Int) {
         self.rows = max(1, rows)
         self.columns = max(1, columns)
-        let cap = capacity
-        pages = pages.flatMap { page -> [Page] in
-            guard page.items.count > cap else { return [page] }
-            return stride(from: 0, to: page.items.count, by: cap).map { start in
-                let chunk = Array(page.items[start..<min(start + cap, page.items.count)])
-                return start == 0 ? Page(id: page.id, title: page.title, items: chunk) : Page(title: page.title, items: chunk)
-            }
-        }
         normalize()
+        flow(pages.flatMap(\.items))
     }
 
     /// Number of pages a resize would produce, so the UI can warn before re-flowing.
@@ -319,10 +312,14 @@ extension Grid {
     /// Sorts every top-level item and re-flows them across pages. Folders stay intact; page
     /// `n` keeps the old page `n`'s ID and title.
     public mutating func sortEverything(folders: FolderPlacement = .first) {
-        let all = Grid.sorted(pages.flatMap(\.items), folders: folders)
+        flow(Grid.sorted(pages.flatMap(\.items), folders: folders))
+    }
+
+    /// Lays `items` out over full pages; page `n` keeps the old page `n`'s ID and title.
+    private mutating func flow(_ items: [GridItem]) {
         let old = pages
-        pages = stride(from: 0, to: max(all.count, 1), by: capacity).enumerated().map { n, start in
-            let chunk = all.isEmpty ? [] : Array(all[start..<min(start + capacity, all.count)])
+        pages = stride(from: 0, to: max(items.count, 1), by: capacity).enumerated().map { n, start in
+            let chunk = items.isEmpty ? [] : Array(items[start..<min(start + capacity, items.count)])
             return n < old.count ? Page(id: old[n].id, title: old[n].title, items: chunk) : Page(items: chunk)
         }
     }
