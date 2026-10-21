@@ -32,8 +32,21 @@ public struct GridStore: Sendable {
     }
 
     public func save(_ grid: Grid) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try GridStore.encode(grid).write(to: url, options: .atomic)
+        // Write through a symlink: an atomic write to the link itself would replace it with a file.
+        let target = GridStore.followingSymlinks(url)
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try GridStore.encode(grid).write(to: target, options: .atomic)
+    }
+
+    /// `url` with symlinks followed, including a last one whose target doesn't exist yet
+    /// (which `resolvingSymlinksInPath()` leaves alone).
+    static func followingSymlinks(_ url: URL) -> URL {
+        var url = url.resolvingSymlinksInPath()
+        for _ in 0..<32 { // bounded, in case of a link loop
+            guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { break }
+            url = URL(fileURLWithPath: dest, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
+        }
+        return url
     }
 
     public static func encode(_ grid: Grid) throws -> Data {

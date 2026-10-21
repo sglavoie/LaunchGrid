@@ -5,8 +5,9 @@ public struct Grid: Codable, Equatable, Sendable {
     public static let currentVersion = 1
 
     public var version: Int = Grid.currentVersion
-    public var rows: Int
-    public var columns: Int
+    /// At least 1, so `capacity` is never 0. Change through `resize(rows:columns:)`.
+    public internal(set) var rows: Int { didSet { rows = max(1, rows) } }
+    public internal(set) var columns: Int { didSet { columns = max(1, columns) } }
     public var pages: [Page]
     /// Apps the user removed; the reconciler never re-adds these automatically. Holds bundle
     /// IDs (every copy) and, for a copy sharing its bundle ID with another, its path.
