@@ -298,6 +298,8 @@ struct LibrarySettings: View {
     @Environment(AppState.self) private var state
     let actions: LibraryActions
     @State private var confirmRebuild: BuildStyle?
+    /// Feedback for Rescan Now and Regenerate Icons.
+    @State private var libraryStatus: String?
 
     var body: some View {
         @Bindable var prefs = state.prefs
@@ -309,8 +311,25 @@ struct LibrarySettings: View {
                 HStack {
                     Button("Choose Apps…") { actions.chooseApps() }
                     Button("Add Missing Apps…") { actions.addMissing() }
-                    Button("Rescan Now") { state.rescan() }
-                    Button("Regenerate Icons") { state.regenerateIcons() }
+                }
+                HStack {
+                    Button("Rescan Now") {
+                        libraryStatus = "Rescanning…"
+                        state.rescan { libraryStatus = "Found \(state.installed.count) apps" }
+                    }
+                    Button("Regenerate Icons") {
+                        libraryStatus = "Regenerating icons…"
+                        state.regenerateIcons { libraryStatus = "Icons regenerated" }
+                    }
+                    if let libraryStatus {
+                        Text(libraryStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .task(id: libraryStatus) {
+                    // A result stays a few seconds; work in progress until it calls back.
+                    guard let status = libraryStatus, !status.hasSuffix("…") else { return }
+                    try? await Task.sleep(for: .seconds(4))
+                    if !Task.isCancelled { libraryStatus = nil }
                 }
                 Text("Excluded apps stay off the grid and aren't added back by scans or rebuilds.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -422,7 +441,7 @@ struct AddMissingAppsView: View {
             }
             HStack {
                 Button("Select All") { chosen.formUnion(missing.map(\.path)) }.disabled(missing.isEmpty)
-                Button("Browse for App…") { browse() }
+                Button("Browse for App…") { browse(adding: picked) }
                 Spacer()
                 Button("Cancel") { close() }.keyboardShortcut(.cancelAction)
                 Button("Add \(picked.count)") {
@@ -437,15 +456,16 @@ struct AddMissingAppsView: View {
         .frame(width: 560, height: 520)
     }
 
-    /// Adds an app from anywhere on disk.
-    private func browse() {
+    /// Adds apps from anywhere on disk, along with those already ticked in the list.
+    private func browse(adding picked: [InstalledApp]) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.applicationBundle]
         panel.allowsMultipleSelection = true
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         guard panel.runModal() == .OK else { return }
-        let apps = panel.urls.compactMap { AppScanner.read(appAt: $0) }
-        guard !apps.isEmpty else { return }
+        let browsed = panel.urls.compactMap { AppScanner.read(appAt: $0) }
+        guard !browsed.isEmpty else { return }
+        let apps = picked + browsed.filter { app in !picked.contains { $0.path == app.path } }
         state.addApps(apps)
         close()
     }
