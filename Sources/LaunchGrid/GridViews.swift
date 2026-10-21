@@ -151,10 +151,12 @@ struct SearchField: View {
                 Text("Search")
                     .foregroundStyle(.white.opacity(0.45))
             } else {
-                Text(state.query)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Caret()
+                HStack(spacing: 1) {
+                    Text(state.query)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Caret()
+                }
             }
             Spacer(minLength: 0)
         }
