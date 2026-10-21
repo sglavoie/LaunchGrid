@@ -48,18 +48,8 @@ struct GridRootView: View {
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
             }
 
-            if let toast = state.toast {
-                VStack {
-                    Spacer()
-                    Text(toast)
-                        .font(.callout.weight(.medium))
-                        .padding(.horizontal, 16).padding(.vertical, 9)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(.bottom, 80)
-                }
-                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+            ToastLayer()
                 .allowsHitTesting(false)
-            }
         }
         .coordinateSpace(name: "root")
         .simultaneousGesture(
@@ -71,7 +61,6 @@ struct GridRootView: View {
         .scaleEffect(state.isShown || reduceMotion ? 1 : 1.04)
         .opacity(state.isShown ? 1 : 0)
         .animation(.easeOut(duration: 0.15), value: state.isShown)
-        .animation(.easeOut(duration: 0.2), value: state.toast)
         .environment(\.colorScheme, .dark)
     }
 
@@ -86,6 +75,29 @@ struct GridRootView: View {
         } else if state.prefs.hideOnEmptyClick {
             state.onHide()
         }
+    }
+}
+
+/// The toast, animated on its own so grid changes made alongside it don't animate too.
+/// It fades in place with Reduce Motion.
+struct ToastLayer: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack {
+            Spacer()
+            if let toast = state.toast {
+                Text(toast)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.bottom, 80)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeOut(duration: 0.2), value: state.toast)
     }
 }
 
