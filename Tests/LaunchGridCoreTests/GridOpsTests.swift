@@ -181,3 +181,13 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.results(in: [a], query: "coff").count == 1)
     }
 }
+
+@Suite struct EmptiedPagesTests {
+    @Test func removesOnlyPagesEmptiedByTheChange() {
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A"))]), Page(), Page(items: [.app(app("B"))])])
+        let b = g.pages[2].items[0].id
+        g.removingEmptiedPages { $0.move([b], toPage: 0, at: 1) }
+        #expect(g.pages.count == 2) // the user-made empty page survives
+        #expect(titles(g.pages[0]) == ["A", "B"])
+    }
+}

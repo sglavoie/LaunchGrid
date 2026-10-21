@@ -78,6 +78,15 @@ extension Grid {
         }
     }
 
+    /// Runs `body`, then deletes pages it emptied. Pages that were already empty
+    /// (e.g. just created by the user) are kept.
+    public mutating func removingEmptiedPages(_ body: (inout Grid) -> Void) {
+        let filled = Set(pages.filter { !$0.items.isEmpty }.map(\.id))
+        body(&self)
+        pages.removeAll { filled.contains($0.id) && $0.items.isEmpty }
+        if pages.isEmpty { pages = [Page()] }
+    }
+
     public mutating func removeEmptyPages() {
         pages.removeAll { $0.items.isEmpty }
         if pages.isEmpty { pages = [Page()] }
