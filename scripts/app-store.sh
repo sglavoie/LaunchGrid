@@ -1,12 +1,16 @@
 #!/bin/sh
 # Builds the Mac App Store package: sandboxed, universal, signed with Apple Distribution and
-# wrapped in build/app-store/LaunchGrid.pkg, signed for the installer. Upload it with the
-# Transporter app. Usage: scripts/app-store.sh
+# wrapped in build/app-store/LaunchGrid.pkg, signed for the installer. With --upload, sends it
+# to App Store Connect; otherwise upload it with the Transporter app.
+# Usage: scripts/app-store.sh [--upload]
 # One-time setup in the developer portal (Certificates, Identifiers & Profiles):
 #   - "Apple Distribution" and "Mac Installer Distribution" certificates, in the keychain;
 #   - the explicit App ID com.sglavoie.launchgrid;
 #   - a Mac App Store Connect provisioning profile for it, saved as
 #     private/LaunchGrid.provisionprofile (or set PROVISIONING_PROFILE).
+#   - for --upload, an App Store Connect API key (Users and Access › Integrations), its
+#     AuthKey_<key ID>.p8 in ~/.appstoreconnect/private_keys, and ASC_KEY_ID and ASC_ISSUER_ID
+#     set or in private/app-store-connect.env.
 # SIGN_IDENTITY and INSTALLER_IDENTITY default to the keychain's only identity of each kind.
 set -eu
 cd "$(dirname "$0")/.."
@@ -14,6 +18,15 @@ BUNDLE_ID=com.sglavoie.launchgrid
 OUT_DIR=build/app-store
 PROFILE="${PROVISIONING_PROFILE:-private/LaunchGrid.provisionprofile}"
 PB=/usr/libexec/PlistBuddy
+UPLOAD=0
+[ "${1:-}" = --upload ] && UPLOAD=1
+if [ "$UPLOAD" = 1 ]; then
+    [ -f private/app-store-connect.env ] && . private/app-store-connect.env
+    if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ]; then
+        echo "--upload needs ASC_KEY_ID and ASC_ISSUER_ID; see this script's header." >&2
+        exit 1
+    fi
+fi
 
 # The build number is the commit count, so uncommitted changes would ship under a used number.
 if [ -n "$(git status --porcelain)" ]; then
@@ -74,5 +87,10 @@ pkgutil --check-signature "$OUT_DIR/LaunchGrid.pkg"
 git rev-parse HEAD > "$OUT_DIR/COMMIT"
 
 PLIST="$OUT_DIR/LaunchGrid.app/Contents/Info.plist"
-echo "Built $OUT_DIR/LaunchGrid.pkg (version $($PB -c 'Print CFBundleShortVersionString' "$PLIST")," \
-    "build $($PB -c 'Print CFBundleVersion' "$PLIST")); upload it with Transporter."
+BUILT="$OUT_DIR/LaunchGrid.pkg (version $($PB -c 'Print CFBundleShortVersionString' "$PLIST"), build $($PB -c 'Print CFBundleVersion' "$PLIST"))"
+if [ "$UPLOAD" = 1 ]; then
+    xcrun altool --upload-package "$OUT_DIR/LaunchGrid.pkg" --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID"
+    echo "Uploaded $BUILT; App Store Connect emails you once it has processed it."
+else
+    echo "Built $BUILT; upload it with Transporter, or run again with --upload."
+fi

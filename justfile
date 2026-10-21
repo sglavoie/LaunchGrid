@@ -69,9 +69,9 @@ uninstall:
 release:
     scripts/release.sh
 
-# Build the sandboxed, signed build/app-store/LaunchGrid.pkg for App Store Connect
-app-store:
-    scripts/app-store.sh
+# Build the sandboxed, signed build/app-store/LaunchGrid.pkg for App Store Connect (--upload sends it)
+app-store *args:
+    scripts/app-store.sh {{args}}
 
 # Create the GitHub release for that build and update the Homebrew cask (optional release notes)
 publish *notes:

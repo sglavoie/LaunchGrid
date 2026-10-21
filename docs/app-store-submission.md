@@ -67,7 +67,7 @@ The icon cache no longer reads other apps' modification dates, for which no appr
 3. Signs with **Apple Distribution** and the sandbox entitlements plus `com.apple.application-identifier` and `com.apple.developer.team-identifier`.
 4. Wraps the app with `productbuild`, signed with the **Mac Installer Distribution** certificate, into `build/app-store/LaunchGrid.pkg`.
 
-Upload the package with the Transporter app. One-time setup in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/):
+`just app-store --upload` sends the package with `xcrun altool` and an App Store Connect API key (IDs in `private/app-store-connect.env`, the `.p8` in `~/.appstoreconnect/private_keys`); the Transporter app works too. One-time setup in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/):
 
 - Create the **Apple Distribution** and **Mac Installer Distribution** certificates and install them. The keychain has only Apple Development and Developer ID Application ones today.
 - Register the explicit App ID `com.sglavoie.launchgrid` (no capabilities needed).
