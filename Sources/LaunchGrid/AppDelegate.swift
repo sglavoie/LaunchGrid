@@ -456,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             // Apps excluded earlier stay out unless the imported layout has them.
             var grid = result.grid
-            grid.removedBundleIDs = state.grid.removedBundleIDs.subtracting(grid.appKeys)
+            grid.removedBundleIDs = state.grid.removedBundleIDs.subtracting(grid.appKeys.union(grid.allApps.map(\.path)))
             state.replaceGrid(grid)
             var message = "Imported \(result.imported) apps from \(source)"
             if !result.skipped.isEmpty { message += "; skipped \(result.skipped.count) not installed" }

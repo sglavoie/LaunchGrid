@@ -8,7 +8,8 @@ public struct Grid: Codable, Equatable, Sendable {
     public var rows: Int
     public var columns: Int
     public var pages: [Page]
-    /// Apps the user removed; the reconciler never re-adds these automatically.
+    /// Apps the user removed; the reconciler never re-adds these automatically. Holds bundle
+    /// IDs (every copy) and, for a copy sharing its bundle ID with another, its path.
     public var removedBundleIDs: Set<String> = []
     /// Apps the reconciler pruned lately, so one that comes back (an updater deletes, then
     /// re-copies the bundle) returns to its old slot instead of the end of the grid.

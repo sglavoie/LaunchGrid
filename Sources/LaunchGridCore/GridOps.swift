@@ -158,10 +158,12 @@ extension Grid {
     // MARK: Removing
 
     /// Removes items; their bundle IDs (or paths) are remembered so scans don't re-add them.
-    public mutating func remove(_ ids: [UUID]) {
-        for item in detach(ids) {
-            for app in item.apps { removedBundleIDs.insert(app.key) }
-        }
+    /// A copy sharing its bundle ID with another in `installed` or on the grid is remembered
+    /// by path, so the other copy can stay.
+    public mutating func remove(_ ids: [UUID], installed: [InstalledApp] = []) {
+        let removed = detach(ids).flatMap(\.apps).map(InstalledApp.init)
+        let among = installed + removed + allApps.map(InstalledApp.init)
+        for app in removed { setExcluded(app, true, among: among) }
         normalize()
     }
 

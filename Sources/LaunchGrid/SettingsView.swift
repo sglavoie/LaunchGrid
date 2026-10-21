@@ -463,11 +463,11 @@ struct ChooseAppsView: View {
 
     var body: some View {
         let all = state.selectableApps
-        let initial = state.includedKeys
+        let initial = state.includedPaths
         let shown = all.filter { filter.isEmpty || Search.score($0.name, query: filter) != nil }
-        let isOn = { (app: InstalledApp) in changes[app.key] ?? initial.contains(app.key) }
-        let include = all.filter { changes[$0.key] == true && !initial.contains($0.key) }
-        let exclude = all.filter { changes[$0.key] == false && initial.contains($0.key) }
+        let isOn = { (app: InstalledApp) in changes[app.path] ?? initial.contains(app.path) }
+        let include = all.filter { changes[$0.path] == true && !initial.contains($0.path) }
+        let exclude = all.filter { changes[$0.path] == false && initial.contains($0.path) }
         VStack(alignment: .leading, spacing: 12) {
             Text("Choose Apps").font(.title2.weight(.semibold))
             Text(state.hasGridFile
@@ -476,8 +476,8 @@ struct ChooseAppsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("Filter", text: $filter).textFieldStyle(.roundedBorder)
-            List(shown, id: \.key) { app in
-                Toggle(isOn: Binding(get: { isOn(app) }, set: { changes[app.key] = $0 })) {
+            List(shown, id: \.path) { app in
+                Toggle(isOn: Binding(get: { isOn(app) }, set: { changes[app.path] = $0 })) {
                     HStack {
                         AppIcon(path: app.path, size: 24)
                         Text(app.name)
@@ -491,8 +491,8 @@ struct ChooseAppsView: View {
                 if all.isEmpty { Text("Looking for installed apps…").foregroundStyle(.secondary) }
             }
             HStack {
-                Button("Include All") { for app in shown { changes[app.key] = true } }.disabled(shown.isEmpty)
-                Button("Exclude All") { for app in shown { changes[app.key] = false } }.disabled(shown.isEmpty)
+                Button("Include All") { for app in shown { changes[app.path] = true } }.disabled(shown.isEmpty)
+                Button("Exclude All") { for app in shown { changes[app.path] = false } }.disabled(shown.isEmpty)
                 Text("\(all.filter(isOn).count) of \(all.count) included")
                     .font(.callout).foregroundStyle(.secondary)
                 Spacer()
@@ -568,7 +568,7 @@ struct FirstRunView: View {
     /// Which apps the build (or an import's new-app scan) brings in.
     private var appsChoice: some View {
         let total = state.selectableApps.count
-        let included = state.includedKeys.count
+        let included = state.includedPaths.count
         return HStack(spacing: 12) {
             Image(systemName: "checklist").font(.title2).frame(width: 32)
             VStack(alignment: .leading, spacing: 2) {

@@ -114,12 +114,12 @@ public enum Reconciler {
         // Bring back recently pruned apps that reappeared, then remember the newly pruned.
         var memory: [PrunedApp] = []
         for var entry in grid.recentlyPruned where now.timeIntervalSince(entry.prunedAt) < restoreWindow {
-            guard !grid.removedBundleIDs.contains(entry.app.key) else { continue }
+            guard !grid.isExcluded(key: entry.app.key, path: entry.app.path) else { continue }
             guard let (found, _) = match(for: entry.app) else {
                 memory.append(entry)
                 continue
             }
-            if seen.contains(found.path) || grid.removedBundleIDs.contains(found.key) { continue }
+            if seen.contains(found.path) || grid.isExcluded(found) { continue }
             entry.app.path = found.path
             entry.app.name = found.name
             entry.app.bundleID = found.bundleID ?? entry.app.bundleID
@@ -131,7 +131,7 @@ public enum Reconciler {
 
         if autoAdd {
             let fresh = installed
-                .filter { !seen.contains($0.path) && !grid.removedBundleIDs.contains($0.key) }
+                .filter { !seen.contains($0.path) && !grid.isExcluded($0) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             var paths = seen
             let unique = fresh.filter { paths.insert($0.path).inserted }
@@ -143,32 +143,76 @@ public enum Reconciler {
         return report
     }
 
-    /// Installed apps that are not on the grid, for "Add Missing Apps…".
+    /// Installed apps that are not on the grid, for "Add Missing Apps…". A copy sharing its
+    /// bundle ID with one on the grid (Xcode-beta beside Xcode) counts as missing.
     public static func missingApps(in grid: Grid, installed: [InstalledApp]) -> [InstalledApp] {
-        let keys = grid.appKeys
         let paths = Set(grid.allApps.map(\.path))
+        let installedPaths = Set(installed.map(\.path))
+        // Grid paths per key; a key whose ref points nowhere installed is that app, moved.
+        let onGrid = Dictionary(grouping: grid.allApps, by: \.key).mapValues { $0.map(\.path) }
         return installed
-            .filter { !keys.contains($0.key) && !paths.contains($0.path) }
+            .filter { app in
+                !paths.contains(app.path) && (onGrid[app.key]?.allSatisfy(installedPaths.contains) ?? true)
+            }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Adds apps explicitly, clearing them from the removed list.
-    public static func add(_ apps: [InstalledApp], to grid: inout Grid) {
-        let keys = grid.appKeys
-        let new = apps.filter { !keys.contains($0.key) }
-        for app in apps { grid.removedBundleIDs.remove(app.key) }
+    /// Adds apps explicitly, clearing them from the removed list. `installed` tells which
+    /// apps share a bundle ID, so including one copy keeps the others excluded.
+    public static func add(_ apps: [InstalledApp], to grid: inout Grid, installed: [InstalledApp] = []) {
+        let paths = Set(grid.allApps.map(\.path))
+        let new = apps.filter { !paths.contains($0.path) }
+        for app in apps { grid.setExcluded(app, false, among: installed + apps) }
         grid.appendToFirstFree(new.map { .app($0.makeRef()) })
     }
 
     /// Applies a choice of which apps belong on the grid. Excluded apps leave it (folders and
     /// pages they empty go too) and are remembered as removed; included ones are added back.
-    public static func choose(include: [InstalledApp], exclude: [InstalledApp], in grid: inout Grid) {
-        let keys = Set(exclude.map(\.key))
+    public static func choose(include: [InstalledApp], exclude: [InstalledApp], in grid: inout Grid,
+                              installed: [InstalledApp] = []) {
+        let among = installed + include + exclude + grid.allApps.map(InstalledApp.init)
         let paths = Set(exclude.map(\.path))
-        let ids = grid.allApps.filter { keys.contains($0.key) || paths.contains($0.path) }.map(\.id)
-        grid.removingEmptiedPages { $0.remove(ids) }
-        grid.removedBundleIDs.formUnion(keys)
-        add(include, to: &grid)
+        // Match by key too (a ref whose path is stale), unless other copies share that key.
+        let keys = Set(exclude.filter { !$0.hasCopies(among: among) }.map(\.key))
+        let ids = grid.allApps.filter { paths.contains($0.path) || keys.contains($0.key) }.map(\.id)
+        grid.removingEmptiedPages { $0.remove(ids, installed: among) }
+        for app in exclude { grid.setExcluded(app, true, among: among) }
+        add(include, to: &grid, installed: among)
+    }
+}
+
+extension InstalledApp {
+    init(_ ref: AppRef) {
+        self.init(bundleID: ref.bundleID, path: ref.path, name: ref.name)
+    }
+
+    /// Whether another app in `among` shares this one's bundle ID (Xcode and Xcode-beta).
+    func hasCopies(among: [InstalledApp]) -> Bool {
+        bundleID != nil && among.contains { $0.bundleID == bundleID && $0.path != path }
+    }
+}
+
+extension Grid {
+    /// Excluded by bundle ID (every copy) or by path (that copy only).
+    public func isExcluded(key: String, path: String) -> Bool {
+        removedBundleIDs.contains(key) || removedBundleIDs.contains(path)
+    }
+
+    public func isExcluded(_ app: InstalledApp) -> Bool {
+        isExcluded(key: app.key, path: app.path)
+    }
+
+    /// Records or clears one app's exclusion. A copy sharing its bundle ID with another in
+    /// `among` is excluded by path, and including it when the whole bundle ID was excluded
+    /// keeps the other copies out.
+    public mutating func setExcluded(_ app: InstalledApp, _ excluded: Bool, among: [InstalledApp]) {
+        let copies = among.filter { app.hasCopies(among: [$0]) }.map(\.path)
+        if excluded {
+            removedBundleIDs.insert(copies.isEmpty ? app.key : app.path)
+        } else {
+            removedBundleIDs.remove(app.path)
+            if removedBundleIDs.remove(app.key) != nil { removedBundleIDs.formUnion(copies) }
+        }
     }
 }
 

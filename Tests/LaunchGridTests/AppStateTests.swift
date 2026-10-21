@@ -230,12 +230,12 @@ func installed(_ name: String) -> InstalledApp {
         let dir = TempDir.url
         let state = AppState(prefs: Preferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
         state.catalogScanned(["A", "B", "C"].map(installed))
-        #expect(state.includedKeys.count == 3)
+        #expect(state.includedPaths.count == 3)
 
         state.chooseApps(include: [], exclude: [installed("B")])
         #expect(!state.hasGridFile, "choosing alone doesn't create a layout")
         #expect(state.grid.allApps.isEmpty)
-        #expect(state.includedKeys == ["com.test.A", "com.test.C"])
+        #expect(state.includedPaths == ["/Applications/A.app", "/Applications/C.app"])
 
         state.build(style: .alphabetical)
         #expect(state.grid.allApps.map(\.name) == ["A", "C"])
@@ -251,7 +251,7 @@ func installed(_ name: String) -> InstalledApp {
 
         state.chooseApps(include: [], exclude: [installed("A"), installed("C")])
         #expect(state.grid.allApps.map(\.name) == ["B"])
-        #expect(state.includedKeys == ["com.test.B"])
+        #expect(state.includedPaths == ["/Applications/B.app"])
         state.catalogScanned(["A", "B", "C"].map(installed))
         #expect(state.grid.allApps.map(\.name) == ["B"], "scans don't bring them back")
 
@@ -259,5 +259,39 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.map(\.name) == ["B", "C"])
         state.undo()
         #expect(state.grid.allApps.map(\.name) == ["B"])
+    }
+
+    @Test func copiesSharingABundleIDAreChosenSeparately() {
+        let xcode = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        let beta = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode-beta.app", name: "Xcode-beta")
+        let state = makeState(["A"])
+        state.catalogScanned([installed("A"), xcode, beta])
+        #expect(state.selectableApps.count == 3, "one row per copy")
+        #expect(state.grid.allApps.map(\.name) == ["A", "Xcode", "Xcode-beta"])
+
+        state.chooseApps(include: [], exclude: [beta])
+        #expect(state.grid.allApps.map(\.name) == ["A", "Xcode"])
+        #expect(state.grid.removedBundleIDs == [beta.path])
+        state.catalogScanned([installed("A"), xcode, beta])
+        #expect(state.grid.allApps.map(\.name) == ["A", "Xcode"], "scans keep only the beta out")
+
+        state.chooseApps(include: [beta], exclude: [])
+        #expect(state.grid.allApps.map(\.name) == ["A", "Xcode", "Xcode-beta"])
+        #expect(state.grid.removedBundleIDs.isEmpty)
+    }
+
+    @Test func includingOneCopyOfAnExcludedBundleIDKeepsTheOtherOut() {
+        let xcode = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        let beta = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode-beta.app", name: "Xcode-beta")
+        let state = makeState(["A"])
+        // A layout from before per-copy exclusions excluded the bundle ID, so both copies.
+        var g = state.grid
+        g.removedBundleIDs = ["com.apple.dt.Xcode"]
+        state.replaceGrid(g)
+        state.catalogScanned([installed("A"), xcode, beta])
+        #expect(state.grid.allApps.map(\.name) == ["A"])
+        state.chooseApps(include: [xcode], exclude: [])
+        #expect(state.grid.allApps.map(\.name) == ["A", "Xcode"])
+        #expect(state.grid.removedBundleIDs == [beta.path])
     }
 }

@@ -190,6 +190,22 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(titles(h.pages[0]) == ["B", "C"])
     }
 
+    @Test func removingOneCopyLeavesTheOtherIncludable() {
+        let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        let betaApp = installed("Xcode-beta", id: "com.apple.dt.Xcode")
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(xcode)])])
+        #expect(Reconciler.missingApps(in: g, installed: [InstalledApp(xcode), betaApp]) == [betaApp],
+                "a second copy counts as missing")
+        Reconciler.add([betaApp], to: &g)
+        let betaID = g.allApps[1].id
+        g.remove([betaID])
+        #expect(g.removedBundleIDs == [betaApp.path])
+        _ = Reconciler.reconcile(&g, installed: [InstalledApp(xcode), betaApp], autoAdd: true)
+        #expect(g.allApps.map(\.name) == ["Xcode"])
+        g.remove([g.allApps[0].id], installed: [InstalledApp(xcode), betaApp])
+        #expect(g.removedBundleIDs == [betaApp.path, xcode.path], "each copy by path")
+    }
+
     @Test func appMissingPastTheWindowIsAddedAsNew() {
         var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(app("B")), .app(app("A"))])])
         let t0 = Date(timeIntervalSinceReferenceDate: 0)
