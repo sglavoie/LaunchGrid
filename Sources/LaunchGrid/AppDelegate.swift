@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         HotkeyService.shared.onTrigger = { [weak self] in self?.overlay.toggle() }
         if !applyHotkey() {
             // After launch finishes, so the alert doesn't hold up the first scan.
-            DispatchQueue.main.async { self.warnHotkeyTaken() }
+            DispatchQueue.main.async { self.warnHotkeyFailed() }
         }
 
         // The hand-over from a second launch is for the installed copy, not a scratch one.
@@ -157,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Integration
 
-    /// Registers the global shortcut; false when another app already holds it.
+    /// Registers the global shortcut; false when macOS refused it.
     @discardableResult
     private func applyHotkey() -> Bool {
         // Carbon lets a second process register the same combo, so a scratch copy would fight
@@ -173,16 +173,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return true
         }
         let ok = HotkeyService.shared.register(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
-        state.hotkeyProblem = ok ? nil : "Another app is using this shortcut, so it won't open LaunchGrid. Pick another one."
+        if ok {
+            state.hotkeyProblem = nil
+        } else {
+            // A failed change keeps the previous shortcut registered.
+            let previous = HotkeyService.shared.activeCombo.map { " \(KeyCombo.describe(keyCode: $0.keyCode, modifiers: $0.modifiers)) still opens it." } ?? ""
+            state.hotkeyProblem = "This shortcut couldn't be registered (macOS or another app may reserve it), so it won't open LaunchGrid.\(previous) Pick another one."
+        }
         return ok
     }
 
-    private func warnHotkeyTaken() {
+    private func warnHotkeyFailed() {
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = "LaunchGrid's shortcut is taken"
-        alert.informativeText = "\(KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) is already used by another app. "
-            + "Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut."
+        alert.messageText = "LaunchGrid's shortcut couldn't be registered"
+        alert.informativeText = "\(KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) couldn't be registered as a global shortcut; "
+            + "it may be reserved by macOS or another app. Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut."
         alert.addButton(withTitle: "Choose Shortcut…")
         alert.addButton(withTitle: "Not Now")
         if alert.runModal() == .alertFirstButtonReturn { showSettings() }

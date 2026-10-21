@@ -207,30 +207,49 @@ final class HotkeyService {
     var onTrigger: () -> Void = {}
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
+    /// The combo `hotKey` is registered for.
+    private(set) var activeCombo: (keyCode: UInt32, modifiers: UInt32)?
 
+    /// Registers the combo in place of the current one. The old one is released only once the
+    /// new one is in, so a failure leaves the previous shortcut working.
     @discardableResult
     func register(keyCode: UInt32, modifiers: UInt32) -> Bool {
-        unregister()
-        installHandlerIfNeeded()
+        if hotKey != nil, let active = activeCombo, active.keyCode == keyCode, active.modifiers == modifiers { return true }
+        guard installHandlerIfNeeded() else { return false }
         let id = EventHotKeyID(signature: OSType(0x4C47_5244), id: 1) // 'LGRD'
-        let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &hotKey)
-        if status != noErr { NSLog("LaunchGrid: hotkey registration failed (\(status))") }
-        return status == noErr
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &ref)
+        guard status == noErr, let ref else {
+            NSLog("LaunchGrid: hotkey registration failed (\(status))")
+            return false
+        }
+        unregister()
+        hotKey = ref
+        activeCombo = (keyCode, modifiers)
+        return true
     }
 
     func unregister() {
         if let hotKey { UnregisterEventHotKey(hotKey) }
         hotKey = nil
+        activeCombo = nil
     }
 
-    private func installHandlerIfNeeded() {
-        guard handler == nil else { return }
+    /// False when the handler couldn't be installed: a registered hotkey would never fire.
+    private func installHandlerIfNeeded() -> Bool {
+        guard handler == nil else { return true }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
             // Carbon delivers hotkey events on the main thread.
             MainActor.assumeIsolated { HotkeyService.shared.onTrigger() }
             return noErr
         }, 1, &spec, nil, &handler)
+        guard status == noErr else {
+            NSLog("LaunchGrid: installing the hotkey handler failed (\(status))")
+            handler = nil
+            return false
+        }
+        return true
     }
 }
 
