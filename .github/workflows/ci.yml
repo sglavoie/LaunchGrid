@@ -11,6 +11,9 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the bundle's build number is `git rev-list --count HEAD`.
+          fetch-depth: 0
       - name: Build
         run: swift build
       - name: Test

@@ -18,11 +18,14 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 
 scripts/bundle.sh release
 
-# /Applications is writable for admin users; fall back to sudo otherwise.
+# /Applications is writable for admin users; fall back to sudo otherwise. Create a missing
+# INSTALL_DIR as the user first, so sudo only comes in when it's really needed.
+mkdir -p "$DEST_DIR" 2>/dev/null || true
 SUDO=""
 if [ ! -w "$DEST_DIR" ] || { [ -e "$DEST" ] && [ ! -w "$DEST" ]; }; then
     SUDO="sudo"
 fi
+$SUDO mkdir -p "$DEST_DIR"
 
 # Quit a running copy so its bundle can be replaced; force it if it doesn't go quietly.
 if pgrep -xq LaunchGrid; then

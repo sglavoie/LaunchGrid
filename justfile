@@ -25,9 +25,16 @@ bundle config="release":
 run config="release": (bundle config)
     open {{app}}
 
-# Bundle and run against a throwaway layout, with logs in the terminal
+# Bundle and run against a throwaway layout and separate settings, with logs in the terminal
 scratch config="debug": (bundle config)
-    LAUNCHGRID_DATA_DIR="$(mktemp -d)" {{app}}/Contents/MacOS/LaunchGrid
+    #!/bin/sh
+    DIR="$(mktemp -d)"
+    # Launching registers the build copy with Launch Services; hand .appgrid files back to
+    # the installed copy afterwards, and drop the throwaway layout.
+    cleanup() { "{{lsregister}}" -u "{{app}}" >/dev/null 2>&1; rm -rf "$DIR"; }
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM
+    LAUNCHGRID_DATA_DIR="$DIR" "{{app}}/Contents/MacOS/LaunchGrid"
 
 # Build and install into /Applications, then relaunch (pass --no-open to skip)
 install *args:

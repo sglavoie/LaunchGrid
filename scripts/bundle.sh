@@ -70,6 +70,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature with the hardened runtime; use a Developer ID identity to notarise.
-codesign --force --options runtime --sign "${SIGN_IDENTITY:--}" "$APP"
+# Ad-hoc signature with the hardened runtime; use a Developer ID identity to notarise
+# (notarisation also needs a secure timestamp, which ad-hoc signing can't have).
+IDENTITY="${SIGN_IDENTITY:--}"
+if [ "$IDENTITY" = "-" ]; then
+    codesign --force --options runtime --sign - "$APP"
+else
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+fi
 echo "Built $APP"
