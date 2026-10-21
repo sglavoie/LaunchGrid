@@ -47,6 +47,8 @@ final class AppState {
     /// Horizontal offset of the pager while a trackpad swipe is in progress.
     var swipeOffset: CGFloat = 0
     var isShown = false
+    /// Why the global shortcut could not be registered, shown in Settings.
+    var hotkeyProblem: String?
     let drag = DragController()
 
     // MARK: Hooks wired by the app delegate

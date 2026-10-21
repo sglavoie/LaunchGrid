@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 import LaunchGridCore
 
@@ -91,17 +92,23 @@ struct HotkeyRecorder: View {
                 .frame(minWidth: 140)
             }
         }
+        // Closing Settings mid-recording must not leave the monitor up and the shortcut off.
+        .onDisappear { if recording { stop() } }
         if let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
             Label("Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another.",
                   systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
+        }
+        if let problem = state.hotkeyProblem, !recording {
+            Label(problem, systemImage: "exclamationmark.octagon")
+                .font(.caption).foregroundStyle(.red)
         }
         if let hint { Text(hint).font(.caption).foregroundStyle(.secondary) }
     }
 
     private func start() {
         recording = true
-        hint = "Use at least one modifier (⌘ ⌥ ⌃ ⇧), or a function key. Esc cancels."
+        hint = "Include ⌘, ⌥ or ⌃ (⇧ can be added), or use a function key. Esc cancels."
         HotkeyService.shared.unregister()
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let code = Int(event.keyCode)
@@ -110,7 +117,9 @@ struct HotkeyRecorder: View {
                 stop()
                 return nil
             }
-            guard mods != 0 || KeyCombo.functionKeys[code] != nil else { return nil }
+            // Shift alone would steal ordinary typing, e.g. ⇧A for a capital A.
+            let chord = UInt32(cmdKey | optionKey | controlKey)
+            guard mods & chord != 0 || KeyCombo.functionKeys[code] != nil else { return nil }
             state.prefs.hotkeyKeyCode = UInt32(code)
             state.prefs.hotkeyModifiers = mods
             stop()

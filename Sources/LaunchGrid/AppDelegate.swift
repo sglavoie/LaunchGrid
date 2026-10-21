@@ -32,8 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         buildMainMenu()
         applyDockPolicy()
         applyMenuBarIcon()
-        applyHotkey()
         HotkeyService.shared.onTrigger = { [weak self] in self?.overlay.toggle() }
+        if !applyHotkey() {
+            // After launch finishes, so the alert doesn't hold up the first scan.
+            DispatchQueue.main.async { self.warnHotkeyTaken() }
+        }
 
         DistributedNotificationCenter.default().addObserver(forName: Self.showNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.overlay.show() }
@@ -72,14 +75,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Integration
 
-    private func applyHotkey() {
-        if prefs.hotkeyEnabled {
-            if !HotkeyService.shared.register(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
-                state.showToast("That shortcut is taken by another app")
-            }
-        } else {
+    /// Registers the global shortcut; false when another app already holds it.
+    @discardableResult
+    private func applyHotkey() -> Bool {
+        guard prefs.hotkeyEnabled else {
             HotkeyService.shared.unregister()
+            state.hotkeyProblem = nil
+            return true
         }
+        let ok = HotkeyService.shared.register(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+        state.hotkeyProblem = ok ? nil : "Another app is using this shortcut, so it won't open LaunchGrid. Pick another one."
+        return ok
+    }
+
+    private func warnHotkeyTaken() {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "LaunchGrid's shortcut is taken"
+        alert.informativeText = "\(KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) is already used by another app. "
+            + "Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut."
+        alert.addButton(withTitle: "Choose Shortcut…")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn { showSettings() }
     }
 
     private func applyDockPolicy() {
