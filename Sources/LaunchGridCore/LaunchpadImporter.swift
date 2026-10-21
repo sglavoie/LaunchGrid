@@ -7,6 +7,7 @@ public enum LaunchpadImporter {
     public struct Result: Sendable {
         public var grid: Grid
         public var imported: Int
+        /// Titles of apps left out: not installed, or a second entry for an app already imported.
         public var skipped: [String]
     }
 
@@ -70,14 +71,10 @@ public enum LaunchpadImporter {
         // rebuilt from the log, which needs a writable connection to the copy.
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("launchgrid-import-\(UUID().uuidString).db")
-        try fm.copyItem(at: url, to: tmp)
         defer {
             for suffix in ["", "-wal", "-shm"] { try? fm.removeItem(atPath: tmp.path + suffix) }
         }
-        let wal = URL(fileURLWithPath: url.path + "-wal")
-        if fm.fileExists(atPath: wal.path) {
-            try fm.copyItem(at: wal, to: URL(fileURLWithPath: tmp.path + "-wal"))
-        }
+        try copyDatabase(at: url, to: tmp)
 
         var db: OpaquePointer?
         guard sqlite3_open_v2(tmp.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let db else {
@@ -147,8 +144,14 @@ public enum LaunchpadImporter {
                 return nil
             }
             var ref = AppRef(bundleID: bundleID, path: path, name: title)
-            if bundleID == nil, let real = Bundle(path: path)?.bundleIdentifier { ref.bundleID = real }
-            guard seen.insert(ref.key).inserted else { return nil }
+            if bundleID == nil, let real = AppScanner.infoDictionary(ofBundleAt: URL(fileURLWithPath: path))?["CFBundleIdentifier"] as? String {
+                ref.bundleID = real
+            }
+            // By path: copies sharing a bundle ID (Xcode and Xcode-beta) are separate apps.
+            guard seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted else {
+                skipped.append(title)
+                return nil
+            }
             imported += 1
             return ref
         }
@@ -196,6 +199,34 @@ public enum LaunchpadImporter {
         }
         grid.normalize()
         return Result(grid: grid, imported: imported, skipped: skipped)
+    }
+
+    /// Copies a database and its write-ahead log as a consistent pair. A log that grew
+    /// meanwhile is fine (its new frames extend what the copy holds, and a torn last frame
+    /// fails its checksum), but one reset by a checkpoint between the two copies no longer
+    /// matches the database copied before it. A reset changes the log header's checkpoint
+    /// sequence and salts, so the copy is retried until the header held still throughout.
+    static func copyDatabase(at url: URL, to tmp: URL, attempts: Int = 5) throws {
+        let fm = FileManager.default
+        let wal = url.path + "-wal"
+        let tmpWAL = tmp.path + "-wal"
+        for _ in 0..<attempts {
+            for path in [tmp.path, tmpWAL] { try? fm.removeItem(atPath: path) }
+            let before = walHeader(wal)
+            try fm.copyItem(at: url, to: tmp)
+            if fm.fileExists(atPath: wal) { try fm.copyItem(atPath: wal, toPath: tmpWAL) }
+            if walHeader(tmpWAL) == before, walHeader(wal) == before { return }
+        }
+        throw ImportError.readFailed("the database kept changing while it was being copied")
+    }
+
+    /// The write-ahead log's checkpoint sequence and salts (header bytes 12..<24), empty for
+    /// a log too short to have them, nil when there is no log.
+    static func walHeader(_ path: String) -> Data? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        let head = (try? handle.read(upToCount: 24)) ?? Data()
+        return head.count == 24 ? head.subdata(in: 12..<24) : Data()
     }
 
     // MARK: SQLite helpers
