@@ -36,7 +36,7 @@ struct LibraryActions: @unchecked Sendable {
 struct GeneralSettings: View {
     @Environment(AppState.self) private var state
     @Environment(\.libraryActions) private var actions
-    @State private var loginEnabled = LoginItem.isEnabled
+    @State private var loginEnabled = LoginItem.isRequested
     @State private var loginStatus = LoginItem.statusDescription
     @State private var loginError: String?
 
@@ -49,11 +49,12 @@ struct GeneralSettings: View {
                     .onChange(of: prefs.hotkeyEnabled) { actions?.hotkeyChanged() }
             }
             Section("Startup & Visibility") {
-                Toggle("Open at login", isOn: $loginEnabled)
-                    .onChange(of: loginEnabled) { _, on in
-                        do { try LoginItem.set(on); loginError = nil } catch { loginError = error.localizedDescription }
-                        loginStatus = LoginItem.statusDescription
-                    }
+                // The toggle shows what the system reports, so a failed change springs back.
+                Toggle("Open at login", isOn: Binding(get: { loginEnabled }, set: { on in
+                    do { try LoginItem.set(on); loginError = nil } catch { loginError = error.localizedDescription }
+                    loginEnabled = LoginItem.isRequested
+                    loginStatus = LoginItem.statusDescription
+                }))
                 LabeledContent("Login item status", value: loginStatus)
                 if let loginError { Text(loginError).foregroundStyle(.red).font(.caption) }
                 Toggle("Show in Dock", isOn: $prefs.showInDock)

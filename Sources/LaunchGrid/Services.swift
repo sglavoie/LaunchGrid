@@ -271,7 +271,10 @@ final class FolderWatcher: @unchecked Sendable {
 
 @MainActor
 enum LoginItem {
-    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    /// On, or registered and waiting for the user's approval in System Settings.
+    static var isRequested: Bool {
+        [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+    }
 
     static var statusDescription: String {
         switch SMAppService.mainApp.status {
