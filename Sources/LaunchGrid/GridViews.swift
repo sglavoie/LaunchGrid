@@ -300,7 +300,7 @@ struct ItemCell: View {
             onDelete: { state.remove([item.id]) }
         )
         .onTapGesture { tapped() }
-        .accessibilityAction { state.activate(item) }
+        .modifier(ItemAccessibilityActions(id: item.id, isFolder: item.folder != nil, open: { state.activate(item) }))
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.7).onEnded { _ in
                 guard !state.drag.active, !state.editing else { return }
@@ -371,7 +371,8 @@ struct ItemView: View {
                     }
                     .buttonStyle(.plain)
                     .offset(x: -6, y: -6)
-                    .accessibilityLabel("Remove \(item.title)")
+                    // Merged into the item below; its "Remove" action stands in for it.
+                    .accessibilityHidden(true)
                 }
             }
             .modifier(Jiggle(active: editing, seed: item.id.hashValue))
@@ -689,8 +690,29 @@ struct FolderItemCell: View {
                 else if state.editing { state.toggleSelection(app.id) }
                 else { state.launch(app) }
             }
-            .accessibilityAction { state.launch(app) }
+            .modifier(ItemAccessibilityActions(id: app.id, open: { state.launch(app) }))
             .contextMenu { ItemMenu(item: .app(app)) }
+    }
+}
+
+/// VoiceOver actions for a grid or folder item. The default action does what a click does:
+/// in edit mode it selects (a folder opens when nothing is selected), otherwise it opens.
+/// The ✕ button, merged into the item, can't be reached, so removing (and renaming and
+/// selecting) are named actions.
+struct ItemAccessibilityActions: ViewModifier {
+    @Environment(AppState.self) private var state
+    let id: UUID
+    var isFolder = false
+    let open: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityAction {
+                if !state.editing || (isFolder && state.selection.isEmpty) { open() } else { state.toggleSelection(id) }
+            }
+            .accessibilityAction(named: state.selection.contains(id) ? "Deselect" : "Select") { state.toggleSelection(id) }
+            .accessibilityAction(named: "Rename") { state.beginRename(id) }
+            .accessibilityAction(named: "Remove") { state.remove([id]) }
     }
 }
 
