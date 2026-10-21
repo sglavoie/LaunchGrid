@@ -18,7 +18,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var screen: NSScreen?
     private var scrollAccumulator: CGFloat = 0
     private var lastWheelFlip = Date.distantPast
-    private var swipeFlipped = false
 
     var isVisible: Bool { panel?.isVisible == true && state.isShown }
     var window: NSWindow? { panel }
@@ -404,10 +403,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if !event.phase.isEmpty || !event.momentumPhase.isEmpty {
             // Trackpad: the pager follows the fingers, then snaps.
             if !event.momentumPhase.isEmpty { return nil }
-            if event.phase.contains(.began) {
-                scrollAccumulator = 0
-                swipeFlipped = false
-            }
+            if event.phase.contains(.began) { scrollAccumulator = 0 }
             let dx = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) ? event.scrollingDeltaX : 0
             scrollAccumulator += dx
             if state.openFolder == nil {
