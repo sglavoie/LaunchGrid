@@ -29,6 +29,8 @@ enum DebugScript {
                 case "rename": if let item = state.currentItems.first { state.beginRename(item.id) }
                 case "settings": delegate.showSettings()
                 case "missing": delegate.showAddMissing()
+                case "choose": delegate.showChooseApps()
+                case "welcome": delegate.showFirstRun()
                 case "undo": state.undo()
                 case "keys":
                     // Comma-separated virtual key codes or literal characters, e.g. "keys:n,o,125,36".

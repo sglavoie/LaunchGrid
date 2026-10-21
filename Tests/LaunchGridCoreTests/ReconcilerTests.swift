@@ -67,6 +67,17 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.map(\.name) == ["A", "B"])
     }
 
+    @Test func choosingAppsRemovesExcludedAndAddsIncluded() {
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))]), Page(items: [.app(app("B"))])])
+        g.group([g.pages[0].items[0].id], name: "F")
+        g.removedBundleIDs = ["com.test.c"]
+        Reconciler.choose(include: [installed("C")], exclude: [installed("A"), installed("B"), installed("D")], in: &g)
+        #expect(g.pages.map(titles) == [["C"]], "emptied folder and page go")
+        #expect(g.removedBundleIDs == ["com.test.a", "com.test.b", "com.test.d"])
+        _ = Reconciler.reconcile(&g, installed: ["A", "B", "C", "D"].map { installed($0) }, autoAdd: true)
+        #expect(g.allApps.map(\.name) == ["C"], "scans keep excluded apps out")
+    }
+
     @Test func dropsDuplicatesAndRefreshesNames() {
         var a2 = app("A")
         a2.name = "Old"

@@ -272,8 +272,47 @@ final class AppState {
         installedByPath[ref.path]
     }
 
+    /// Lays out every installed app the user hasn't excluded, keeping the exclusions.
     func build(style: BuildStyle) {
-        replaceGrid(GridBuilder.build(from: installed, style: style, rows: grid.rows, columns: grid.columns))
+        let excluded = grid.removedBundleIDs
+        var new = GridBuilder.build(from: installed.filter { !excluded.contains($0.key) }, style: style,
+                                    rows: grid.rows, columns: grid.columns)
+        new.removedBundleIDs = excluded
+        replaceGrid(new)
+    }
+
+    // MARK: Choosing apps
+
+    /// Apps the user can include or exclude: the installed ones plus any added from elsewhere.
+    var selectableApps: [InstalledApp] {
+        let keys = Set(installed.map(\.key))
+        let extra = grid.allApps.filter { !keys.contains($0.key) && installedByPath[$0.path] == nil }
+            .map { InstalledApp(bundleID: $0.bundleID, path: $0.path, name: $0.name) }
+        var seen = Set<String>()
+        return (installed + extra)
+            .filter { seen.insert($0.key).inserted }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Keys of the included apps. Before the first layout that's every app not excluded,
+    /// since the build lays them all out; after it, the apps on the grid.
+    var includedKeys: Set<String> {
+        hasGridFile ? grid.appKeys : Set(selectableApps.map(\.key)).subtracting(grid.removedBundleIDs)
+    }
+
+    /// Applies changes from the app chooser. Before the first layout it only records them,
+    /// for the build or import that follows.
+    func chooseApps(include: [InstalledApp], exclude: [InstalledApp]) {
+        guard !include.isEmpty || !exclude.isEmpty else { return }
+        guard hasGridFile else {
+            grid.removedBundleIDs.subtract(include.map(\.key))
+            grid.removedBundleIDs.formUnion(exclude.map(\.key))
+            return
+        }
+        apply { Reconciler.choose(include: include, exclude: exclude, in: &$0) }
+        IconProvider.shared.prewarm(include.map(\.path))
+        let parts = [include.isEmpty ? nil : "\(include.count) included", exclude.isEmpty ? nil : "\(exclude.count) excluded"]
+        showToast(parts.compactMap { $0 }.joined(separator: ", ") + " — ⌘Z to undo")
     }
 
     // MARK: Derived

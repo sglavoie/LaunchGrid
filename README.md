@@ -19,7 +19,7 @@ Installing to `/Applications` is needed for "Open at login". `scripts/install.sh
 
 Set `SIGN_IDENTITY="Developer ID Application: …"` before `scripts/bundle.sh` to sign for notarisation. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
 
-On first launch, a welcome window offers these ways to set up the grid:
+On first launch, a welcome window lets you choose which installed apps to include (all by default), then offers these ways to set up the grid:
 
 - Build by category.
 - Build alphabetically.
@@ -48,13 +48,13 @@ On first launch, a welcome window offers these ways to set up the grid:
 - **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons, auto-add new apps, hide behaviour.
 - **Appearance:** Full Screen, Full Screen Behind Dock, or a resizable Window (with frames saved per display). Backgrounds: blurred desktop, wallpaper, Liquid Glass, solid colour or custom image. Icon size and labels.
 - **Layout:** grid rows × columns, with re-flow that keeps page boundaries; folder placement when sorting.
-- **Library:** add missing apps (also ones from anywhere via Browse), extra scan folders, save/load `.appgrid` files (double-clicking one in Finder loads it too), import from AppGrid or Launchpad, rebuild, regenerate icons.
+- **Library:** choose which apps to include or exclude, add missing apps (also ones from anywhere via Browse), extra scan folders, save/load `.appgrid` files (double-clicking one in Finder loads it too), import from AppGrid or Launchpad, rebuild, regenerate icons.
 
 ## Where things live
 
 - Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change. An unreadable file (or one from a newer version) is moved aside, never overwritten, and the welcome window says where it went.
 - Settings: `defaults read com.sglavoie.launchgrid`.
-- Removed apps are remembered in the grid's `removedBundleIDs`, so scans don't re-add them; *Add Missing Apps…* brings them back.
+- Removed and excluded apps are remembered in the grid's `removedBundleIDs`, so scans and rebuilds don't re-add them; *Choose Apps…* or *Add Missing Apps…* brings them back.
 
 ## How it's built
 

@@ -26,6 +26,7 @@ struct LibraryActions: @unchecked Sendable {
     var loadFile: () -> Void
     var saveFile: () -> Void
     var addMissing: () -> Void
+    var chooseApps: () -> Void
     var hotkeyChanged: () -> Void
     var dockChanged: () -> Void
     var menuBarChanged: () -> Void
@@ -272,18 +273,22 @@ struct LibrarySettings: View {
             Section("Apps") {
                 LabeledContent("On the grid", value: "\(state.grid.allApps.count) apps, \(state.grid.pages.count) pages")
                 LabeledContent("Installed", value: "\(state.installed.count) apps found")
+                LabeledContent("Excluded", value: "\(state.grid.removedBundleIDs.count) apps")
                 HStack {
+                    Button("Choose Apps…") { actions.chooseApps() }
                     Button("Add Missing Apps…") { actions.addMissing() }
                     Button("Rescan Now") { state.rescan() }
                     Button("Regenerate Icons") { state.regenerateIcons() }
                 }
+                Text("Excluded apps stay off the grid and aren't added back by scans or rebuilds.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Rebuild") {
                 HStack {
                     Button("Rebuild by Category…") { confirmRebuild = .byCategory }
                     Button("Rebuild Alphabetically…") { confirmRebuild = .alphabetical }
                 }
-                Text("Lays out every installed app from scratch, the same as the choices on the welcome screen.")
+                Text("Lays out every installed app that isn't excluded from scratch, the same as the choices on the welcome screen.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extra folders to scan") {
@@ -414,6 +419,65 @@ struct AddMissingAppsView: View {
     }
 }
 
+// MARK: - Choose apps
+
+/// Includes or excludes apps in bulk. Changes are kept as overrides of what the grid holds,
+/// so a rescan while the window is open doesn't turn into unintended exclusions.
+struct ChooseAppsView: View {
+    @Environment(AppState.self) private var state
+    var close: () -> Void
+    @State private var changes: [String: Bool] = [:]
+    @State private var filter = ""
+
+    var body: some View {
+        let all = state.selectableApps
+        let initial = state.includedKeys
+        let shown = all.filter { filter.isEmpty || Search.score($0.name, query: filter) != nil }
+        let isOn = { (app: InstalledApp) in changes[app.key] ?? initial.contains(app.key) }
+        let include = all.filter { changes[$0.key] == true && !initial.contains($0.key) }
+        let exclude = all.filter { changes[$0.key] == false && initial.contains($0.key) }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose Apps").font(.title2.weight(.semibold))
+            Text(state.hasGridFile
+                 ? "Unchecked apps leave the grid and aren't added back by scans or rebuilds."
+                 : "Unchecked apps are left out of your grid and aren't added later by scans. You can change this in Settings › Library.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("Filter", text: $filter).textFieldStyle(.roundedBorder)
+            List(shown, id: \.key) { app in
+                Toggle(isOn: Binding(get: { isOn(app) }, set: { changes[app.key] = $0 })) {
+                    HStack {
+                        AppIcon(path: app.path, size: 24)
+                        Text(app.name)
+                        Spacer()
+                        Text(app.path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    }
+                }
+            }
+            .frame(minHeight: 280)
+            .overlay {
+                if all.isEmpty { Text("Looking for installed apps…").foregroundStyle(.secondary) }
+            }
+            HStack {
+                Button("Include All") { for app in shown { changes[app.key] = true } }.disabled(shown.isEmpty)
+                Button("Exclude All") { for app in shown { changes[app.key] = false } }.disabled(shown.isEmpty)
+                Text("\(all.filter(isOn).count) of \(all.count) included")
+                    .font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { close() }.keyboardShortcut(.cancelAction)
+                Button("Apply") {
+                    state.chooseApps(include: include, exclude: exclude)
+                    close()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(include.isEmpty && exclude.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 600, minHeight: 520)
+    }
+}
+
 // MARK: - First run
 
 struct FirstRunView: View {
@@ -444,6 +508,7 @@ struct FirstRunView: View {
                 .padding(12)
                 .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
             }
+            appsChoice
             option("Build by category", "One page per kind of app — Productivity, Developer Tools, Creativity…",
                    "square.grid.3x3.square", requiresScan: true) { actions.rebuild(.byCategory) }
             option("Build alphabetically", "All apps in name order.", "textformat.abc", requiresScan: true) {
@@ -466,6 +531,25 @@ struct FirstRunView: View {
         }
         .padding(24)
         .frame(width: 520)
+    }
+
+    /// Which apps the build (or an import's new-app scan) brings in.
+    private var appsChoice: some View {
+        let total = state.selectableApps.count
+        let included = state.includedKeys.count
+        return HStack(spacing: 12) {
+            Image(systemName: "checklist").font(.title2).frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Apps to include").font(.headline)
+                Text(total == 0 ? "Looking for installed apps…"
+                     : included == total ? "All \(total) installed apps." : "\(included) of \(total) installed apps.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Choose…") { actions.chooseApps() }
+                .disabled(state.installed.isEmpty)
+        }
+        .padding(12)
     }
 
     /// - Parameter requiresScan: unavailable until the first scan has found the installed apps.

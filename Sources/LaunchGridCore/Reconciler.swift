@@ -95,4 +95,15 @@ public enum Reconciler {
         for app in apps { grid.removedBundleIDs.remove(app.key) }
         grid.appendToFirstFree(new.map { .app($0.makeRef()) })
     }
+
+    /// Applies a choice of which apps belong on the grid. Excluded apps leave it (folders and
+    /// pages they empty go too) and are remembered as removed; included ones are added back.
+    public static func choose(include: [InstalledApp], exclude: [InstalledApp], in grid: inout Grid) {
+        let keys = Set(exclude.map(\.key))
+        let paths = Set(exclude.map(\.path))
+        let ids = grid.allApps.filter { keys.contains($0.key) || paths.contains($0.path) }.map(\.id)
+        grid.removingEmptiedPages { $0.remove(ids) }
+        grid.removedBundleIDs.formUnion(keys)
+        add(include, to: &grid)
+    }
 }

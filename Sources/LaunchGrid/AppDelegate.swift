@@ -154,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Add Missing Apps…", action: #selector(showAddMissing), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Choose Apps…", action: #selector(showChooseApps), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Sort Everything", action: #selector(sortEverything), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Save Grid File…", action: #selector(saveGridFile), keyEquivalent: "").target = self
@@ -229,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             loadFile: { [weak self] in self?.loadGridFile() },
             saveFile: { [weak self] in self?.saveGridFile() },
             addMissing: { [weak self] in self?.showAddMissing() },
+            chooseApps: { [weak self] in self?.showChooseApps() },
             hotkeyChanged: { [weak self] in self?.applyHotkey() },
             dockChanged: { [weak self] in
                 self?.applyDockPolicy()
@@ -287,7 +289,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         present("addMissing", title: "Add Missing Apps", resizable: true) { close in AddMissingAppsView(close: close) }
     }
 
-    private func showFirstRun() {
+    @objc func showChooseApps() {
+        present("chooseApps", title: "Choose Apps", resizable: true) { close in ChooseAppsView(close: close) }
+    }
+
+    func showFirstRun() {
         let actions = libraryActions
         present("firstRun", title: "Welcome") { close in FirstRunView(actions: actions, close: close) }
     }
@@ -342,7 +348,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 showError("Nothing to import", "No apps in the \(source) layout could be found on this Mac.")
                 return
             }
-            state.replaceGrid(result.grid)
+            // Apps excluded earlier stay out unless the imported layout has them.
+            var grid = result.grid
+            grid.removedBundleIDs = state.grid.removedBundleIDs.subtracting(grid.appKeys)
+            state.replaceGrid(grid)
             var message = "Imported \(result.imported) apps from \(source)"
             if !result.skipped.isEmpty { message += "; skipped \(result.skipped.count) not installed" }
             state.showToast(message)

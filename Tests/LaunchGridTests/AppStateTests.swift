@@ -185,3 +185,40 @@ func installed(_ name: String) -> InstalledApp {
         #expect(icons.cached(app.path) == nil)
     }
 }
+
+@MainActor @Suite struct ChooseAppsTests {
+    @Test func firstRunChoiceIsRememberedByTheBuild() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let state = AppState(prefs: Preferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        state.catalogScanned(["A", "B", "C"].map(installed))
+        #expect(state.includedKeys.count == 3)
+
+        state.chooseApps(include: [], exclude: [installed("B")])
+        #expect(!state.hasGridFile, "choosing alone doesn't create a layout")
+        #expect(state.grid.allApps.isEmpty)
+        #expect(state.includedKeys == ["com.test.A", "com.test.C"])
+
+        state.build(style: .alphabetical)
+        #expect(state.grid.allApps.map(\.name) == ["A", "C"])
+        state.build(style: .byCategory)
+        #expect(state.grid.allApps.map(\.name) == ["A", "C"], "rebuilds keep the exclusions")
+        #expect(state.grid.removedBundleIDs == ["com.test.B"])
+    }
+
+    @Test func changingTheChoiceLaterIsOneUndoStep() {
+        let state = makeState(["A", "B"])
+        state.catalogScanned(["A", "B", "C"].map(installed))
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "C"])
+
+        state.chooseApps(include: [], exclude: [installed("A"), installed("C")])
+        #expect(state.grid.allApps.map(\.name) == ["B"])
+        #expect(state.includedKeys == ["com.test.B"])
+        state.catalogScanned(["A", "B", "C"].map(installed))
+        #expect(state.grid.allApps.map(\.name) == ["B"], "scans don't bring them back")
+
+        state.chooseApps(include: [installed("C")], exclude: [])
+        #expect(state.grid.allApps.map(\.name) == ["B", "C"])
+        state.undo()
+        #expect(state.grid.allApps.map(\.name) == ["B"])
+    }
+}
