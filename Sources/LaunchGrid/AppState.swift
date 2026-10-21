@@ -48,7 +48,19 @@ final class AppState {
     var currentPage = 0
     var openFolderID: UUID?
     var folderPage = 0
-    var query = "" { didSet { if query != oldValue { focusIndex = query.isEmpty ? nil : 0 } } }
+    var query = "" {
+        didSet {
+            queryCaret = query.count
+            if query != oldValue { focusIndex = query.isEmpty ? nil : 0 }
+        }
+    }
+    /// Caret in the search, in characters. Setting `query` puts it at the end.
+    private(set) var queryCaret = 0
+    /// The search with its caret, for keyboard editing.
+    var searchLine: TextLine {
+        get { TextLine(text: query, caret: queryCaret) }
+        set { query = newValue.text; queryCaret = newValue.caret }
+    }
     var editing = false { didSet { if !editing { selection.removeAll() } } }
     var selection: Set<UUID> = [] {
         didSet { if selection.isEmpty { selectionAnchor = nil; shiftRange = [] } }

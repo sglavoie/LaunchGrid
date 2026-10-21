@@ -34,19 +34,27 @@ enum DebugScript {
                 case "welcome": delegate.showFirstRun()
                 case "undo": state.undo()
                 case "keys":
-                    // Comma-separated virtual key codes or literal characters, e.g. "keys:n,o,125,36".
+                    // Comma-separated virtual key codes or literal characters, each optionally after
+                    // modifiers, e.g. "keys:n,o,125,opt+51,ctrl+a,36".
                     guard let window = overlay.window else { break }
-                    for token in arg.split(separator: ",").map(String.init) {
+                    let modifierNames: [String: NSEvent.ModifierFlags] = ["cmd": .command, "opt": .option, "ctrl": .control, "shift": .shift]
+                    for var token in arg.split(separator: ",").map(String.init) {
+                        var flags: NSEvent.ModifierFlags = []
+                        while let plus = token.firstIndex(of: "+"), plus != token.startIndex,
+                              let flag = modifierNames[String(token[..<plus])] {
+                            flags.insert(flag)
+                            token = String(token[token.index(after: plus)...])
+                        }
                         let code = UInt16(token).flatMap { token.count > 1 ? $0 : nil }
                         let chars = code == nil ? token : ""
-                        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
                                                      windowNumber: window.windowNumber, context: nil, characters: chars,
                                                      charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code ?? 0)
                         if let event { NSApp.postEvent(event, atStart: false) }
                         try? await Task.sleep(for: .milliseconds(120))
                     }
                 case "state":
-                    print("state: page=\(state.currentPage) query='\(state.query)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active)")
+                    print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active)")
                     if let f = state.openFolder { print("folder: \(f.apps.count) apps, first \(f.apps.prefix(3).map(\.title)), last \(f.apps.suffix(3).map(\.title))") }
                     fflush(stdout)
                 case "wclick":

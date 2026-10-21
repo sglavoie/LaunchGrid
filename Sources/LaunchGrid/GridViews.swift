@@ -151,12 +151,15 @@ struct SearchField: View {
                 Text("Search")
                     .foregroundStyle(.white.opacity(0.45))
             } else {
-                HStack(spacing: 1) {
-                    Text(state.query)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Caret()
+                let line = state.searchLine
+                // The caret floats over the join, so moving it doesn't push the text apart.
+                HStack(spacing: 0) {
+                    Text(line.beforeCaret)
+                        .overlay(alignment: .trailing) { Caret().offset(x: 1.5) }
+                    Text(line.afterCaret)
                 }
+                .foregroundStyle(.white)
+                .lineLimit(1)
             }
             Spacer(minLength: 0)
         }

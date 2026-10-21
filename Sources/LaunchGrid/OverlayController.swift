@@ -285,7 +285,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             return nil
         case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow:
-            if cmd && (code == kVK_LeftArrow || code == kVK_RightArrow) {
+            let horizontal = code == kVK_LeftArrow || code == kVK_RightArrow
+            if horizontal && !state.query.isEmpty && (cmd || mods.contains(.option)) {
+                // In the search, ⌥←/→ move the caret by word and ⌘←/→ to either end.
+                let left = code == kVK_LeftArrow
+                editSearch {
+                    if cmd { left ? $0.moveToStart() : $0.moveToEnd() }
+                    else { left ? $0.moveWordLeft() : $0.moveWordRight() }
+                }
+            } else if cmd && horizontal {
                 state.flipPage(code == kVK_LeftArrow ? -1 : 1)
             } else {
                 moveFocus(code)
@@ -293,7 +301,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return nil
         case kVK_Delete, kVK_ForwardDelete:
             if !state.query.isEmpty {
-                if cmd || state.query.count == 1 { endSearch() } else { state.query.removeLast() }
+                let back = code == kVK_Delete
+                editSearch {
+                    if cmd { back ? $0.deleteToStart() : $0.deleteToEnd() }
+                    else if mods.contains(.option) { back ? $0.deleteWordBackward() : $0.deleteWordForward() }
+                    else { back ? $0.deleteBackward() : $0.deleteForward() }
+                }
             } else if event.isARepeat {
                 // Holding ⌫ only edits the search; removing is one press at a time.
             } else if !state.selection.isEmpty {
@@ -327,7 +340,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "q": NSApp.terminate(nil)
             case "v":
                 if let s = NSPasteboard.general.string(forType: .string) {
-                    appendToSearch(s.replacingOccurrences(of: "\n", with: " "))
+                    insertIntoSearch(s.replacingOccurrences(of: "\n", with: " "))
                 }
             case "1", "2", "3", "4", "5", "6", "7", "8", "9":
                 state.query = ""
@@ -338,7 +351,23 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return nil
         }
 
-        if mods.contains(.control) { return event }
+        if mods.contains(.control) {
+            guard !state.query.isEmpty else { return event }
+            // The Emacs keys every macOS text field takes.
+            switch event.charactersIgnoringModifiers?.lowercased() ?? "" {
+            case "a": editSearch { $0.moveToStart() }
+            case "e": editSearch { $0.moveToEnd() }
+            case "b": editSearch { $0.moveLeft() }
+            case "f": editSearch { $0.moveRight() }
+            case "h": editSearch { $0.deleteBackward() }
+            case "d": editSearch { $0.deleteForward() }
+            case "w": editSearch { $0.deleteWordBackward() }
+            case "u": editSearch { $0.deleteToStart() }
+            case "k": editSearch { $0.deleteToEnd() }
+            default: return event
+            }
+            return nil
+        }
         if let chars = event.characters, !chars.isEmpty,
            chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .privateUse }) {
             if state.query.isEmpty && chars == " " {
@@ -346,7 +375,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 if !event.isARepeat, let id = focusedID { state.toggleSelection(id) }
                 return nil
             }
-            appendToSearch(chars)
+            insertIntoSearch(chars)
             return nil
         }
         return nil
@@ -359,14 +388,22 @@ final class OverlayController: NSObject, NSWindowDelegate {
         return state.currentItems[safe: i]?.id
     }
 
-    /// Adds to the search. Starting one closes an open folder, remembering it for `endSearch()`.
-    private func appendToSearch(_ text: String) {
+    /// Types into the search at its caret. Starting one closes an open folder, remembering it
+    /// for `endSearch()`.
+    private func insertIntoSearch(_ text: String) {
         guard !text.isEmpty else { return }
         if state.query.isEmpty {
             folderBeforeSearch = state.openFolderID.map { ($0, state.folderPage) }
             state.openFolderID = nil
         }
-        state.query += text
+        state.searchLine.insert(text)
+    }
+
+    /// Edits the search at its caret; emptying it ends the search.
+    private func editSearch(_ edit: (inout TextLine) -> Void) {
+        var line = state.searchLine
+        edit(&line)
+        if line.text.isEmpty { endSearch() } else { state.searchLine = line }
     }
 
     /// Clears the search from the keyboard, back to the folder it was started in, if still there.
