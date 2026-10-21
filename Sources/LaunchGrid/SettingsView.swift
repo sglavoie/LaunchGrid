@@ -242,6 +242,8 @@ struct LayoutSettings: View {
                     Spacer()
                     Button("Sort Everything") { state.sortEverything() }
                 }
+                Text("Sort Everything re-flows every page and clears page titles. ⌘Z in the grid undoes it.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -355,7 +357,10 @@ struct AddMissingAppsView: View {
     @State private var filter = ""
 
     var body: some View {
-        let missing = state.missingApps.filter { filter.isEmpty || Search.score($0.name, query: filter) != nil }
+        let all = state.missingApps
+        let missing = all.filter { filter.isEmpty || Search.score($0.name, query: filter) != nil }
+        // Picks survive filtering; apps that stopped being missing (e.g. a rescan) don't count.
+        let picked = all.filter { chosen.contains($0.path) }
         VStack(alignment: .leading, spacing: 12) {
             Text("Add Missing Apps").font(.title2.weight(.semibold))
             Text("Installed apps that are not on the grid, including ones you removed.")
@@ -379,16 +384,16 @@ struct AddMissingAppsView: View {
                 if missing.isEmpty { Text("Every installed app is on the grid.").foregroundStyle(.secondary) }
             }
             HStack {
-                Button("Select All") { chosen = Set(missing.map(\.path)) }.disabled(missing.isEmpty)
+                Button("Select All") { chosen.formUnion(missing.map(\.path)) }.disabled(missing.isEmpty)
                 Button("Browse for App…") { browse() }
                 Spacer()
                 Button("Cancel") { close() }.keyboardShortcut(.cancelAction)
-                Button("Add \(chosen.count)") {
-                    state.addApps(state.missingApps.filter { chosen.contains($0.path) })
+                Button("Add \(picked.count)") {
+                    state.addApps(picked)
                     close()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(chosen.isEmpty)
+                .disabled(picked.isEmpty)
             }
         }
         .padding(20)

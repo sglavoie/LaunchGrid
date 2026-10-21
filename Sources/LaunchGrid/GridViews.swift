@@ -286,6 +286,7 @@ struct ItemCell: View {
             onDelete: { state.remove([item.id]) }
         )
         .onTapGesture { tapped() }
+        .accessibilityAction { state.activate(item) }
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.7).onEnded { _ in
                 if !state.drag.active { withAnimation { state.editing = true } }
@@ -516,6 +517,7 @@ struct SearchResultsView: View {
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, app in
                     ItemView(item: .app(app), iconSize: icon, focused: state.focusIndex == i)
                         .onTapGesture { state.launch(app) }
+                        .accessibilityAction { state.launch(app) }
                         .contextMenu { ItemMenu(item: .app(app)) }
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(i))
@@ -622,8 +624,10 @@ struct FolderItemCell: View {
                 let mods = NSEvent.modifierFlags
                 if mods.contains(.command) { state.toggleSelection(app.id) }
                 else if mods.contains(.shift) { state.extendSelection(to: app.id) }
+                else if state.editing && !state.selection.isEmpty { state.toggleSelection(app.id) }
                 else { state.launch(app) }
             }
+            .accessibilityAction { state.launch(app) }
             .contextMenu { ItemMenu(item: .app(app)) }
     }
 }

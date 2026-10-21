@@ -394,8 +394,11 @@ final class AppState {
     }
 
     func sortEverything() {
+        let hadTitles = grid.pages.contains { $0.title != nil }
         apply { $0.sortEverything(folders: prefs.folderPlacement) }
         goToPage(0)
+        // Re-flowing makes page titles meaningless, so they go; say so.
+        if hadTitles { showToast("Sorted; page titles were cleared — ⌘Z to undo") }
     }
 
     func beginRename(_ id: UUID) {
