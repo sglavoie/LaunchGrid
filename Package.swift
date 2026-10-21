@@ -22,5 +22,9 @@ let package = Package(
             name: "LaunchGridCoreTests",
             dependencies: ["LaunchGridCore"]
         ),
+        .testTarget(
+            name: "LaunchGridTests",
+            dependencies: ["LaunchGrid", "LaunchGridCore"]
+        ),
     ]
 )

@@ -113,6 +113,8 @@ final class AppState {
         redoStack.append(grid)
         grid = previous
         afterChange()
+        // The snapshot predates later scans; bring it up to date with the disk.
+        reconcile()
     }
 
     func redo() {
@@ -120,6 +122,7 @@ final class AppState {
         undoStack.append(grid)
         grid = next
         afterChange()
+        reconcile()
     }
 
     private func afterChange() {
@@ -166,16 +169,32 @@ final class AppState {
             let started = Date()
             let apps = await Task.detached(priority: .utility) { AppScanner.scan(roots: roots) }.value
             NSLog("LaunchGrid: scanned \(apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
-            self.installed = apps
-            self.installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
             self.scanning = false
-            if self.hasGridFile { self.reconcile() }
+            self.catalogScanned(apps)
             completion?()
             if self.rescanQueued {
                 self.rescanQueued = false
                 self.rescan()
             }
         }
+    }
+
+    /// Takes in a finished scan.
+    func catalogScanned(_ apps: [InstalledApp]) {
+        installed = apps
+        installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        if hasGridFile { reconcile() }
+    }
+
+    /// Whether a scan could have seen an app at `path`. Absence says nothing about apps on
+    /// an unmounted volume or under a scan folder that is currently missing.
+    private func isReachable(_ path: String, missingRoots: [String]) -> Bool {
+        if missingRoots.contains(where: { path.hasPrefix($0 + "/") }) { return false }
+        let parts = (path as NSString).pathComponents
+        if parts.count > 2, parts[0] == "/", parts[1] == "Volumes" {
+            return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
+        }
+        return true
     }
 
     /// Merges the catalog into the grid. Not an undo step: it mirrors the disk.
@@ -187,7 +206,9 @@ final class AppState {
             .filter { !keys.contains($0.key) && installedByPath[$0.path] == nil && FileManager.default.fileExists(atPath: $0.path) }
             .compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0.path)) }
         var g = grid
-        let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps)
+        let missingRoots = prefs.scanRoots.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) }
+        let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
+                                          isReachable: { self.isReachable($0, missingRoots: missingRoots) })
         guard g != grid else { return }
         if !report.isEmpty {
             NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved)")
@@ -232,24 +253,26 @@ final class AppState {
         Task {
             do {
                 let path = try await Launcher.launch(app)
-                if path != app.path {
-                    // The app moved; remember where it is now.
-                    apply { g in
-                        guard let loc = g.locate(app.id) else { return }
-                        if case .folder(var f) = g.pages[loc.page].items[loc.index], let fi = loc.folderIndex {
-                            f.apps[fi].path = path
-                            g.pages[loc.page].items[loc.index] = .folder(f)
-                        } else if case .app(var a) = g.pages[loc.page].items[loc.index] {
-                            a.path = path
-                            g.pages[loc.page].items[loc.index] = .app(a)
-                        }
-                    }
-                }
+                if path != app.path { rememberPath(path, of: app.id) }
                 if prefs.hideAfterLaunch { onHide() }
             } catch {
                 showToast("Could not open \(app.title)")
             }
         }
+    }
+
+    /// Records where a moved app now lives. Not an undo step: like `reconcile()`, it mirrors the disk.
+    func rememberPath(_ path: String, of id: UUID) {
+        guard let loc = grid.locate(id) else { return }
+        var g = grid
+        if case .folder(var f) = g.pages[loc.page].items[loc.index], let fi = loc.folderIndex {
+            f.apps[fi].path = path
+            g.pages[loc.page].items[loc.index] = .folder(f)
+        } else if case .app(var a) = g.pages[loc.page].items[loc.index] {
+            a.path = path
+            g.pages[loc.page].items[loc.index] = .app(a)
+        }
+        grid = g
     }
 
     /// Click / Return on an item.
