@@ -1,6 +1,6 @@
 import AppKit
 
-nonisolated(unsafe) var scratchSignalSources: [DispatchSourceSignal] = []
+nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
 
 MainActor.assumeIsolated {
     // Single instance: hand over to the running copy and quit. A scratch run keeps its own
@@ -15,14 +15,15 @@ MainActor.assumeIsolated {
         let marker = AppDelegate.scratchMarker(for: ProcessInfo.processInfo.processIdentifier)
         FileManager.default.createFile(atPath: marker.path, contents: nil)
         atexit { try? FileManager.default.removeItem(at: AppDelegate.scratchMarker(for: getpid())) }
-        // Ctrl-C or kill skips atexit, so turn them into a normal quit.
-        for sig in [SIGINT, SIGTERM] {
-            signal(sig, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler { NSApp.terminate(nil) }
-            source.resume()
-            scratchSignalSources.append(source)
-        }
+    }
+    // Ctrl-C or kill (scripts/install.sh quits the installed copy that way) would skip
+    // applicationWillTerminate, losing a pending save, and atexit; turn them into a normal quit.
+    for sig in [SIGINT, SIGTERM] {
+        signal(sig, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        source.setEventHandler { NSApp.terminate(nil) }
+        source.resume()
+        signalSources.append(source)
     }
 
     let app = NSApplication.shared

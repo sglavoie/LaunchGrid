@@ -97,8 +97,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             self.catalogReady = true
             if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
-                DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
-                return
+                // A script rebuilds and edits the layout: only against a scratch one.
+                if Preferences.isScratch {
+                    DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
+                    return
+                }
+                FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
             }
             if let url = self.pendingOpen {
                 // Loading needs the catalog, so a file that launched us waits for the first scan.
@@ -497,7 +501,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.launchGridLayout, .json, UTType(filenameExtension: "agrid") ?? .data, .data]
+        // Layouts, plus SQLite databases for the importer: `.agrid` files and copies of a
+        // Launchpad or AppGrid database. Their live, extension-less `db` files are imported
+        // from the Import menu instead.
+        panel.allowedContentTypes = [.launchGridLayout, .json]
+            + ["agrid", "db", "sqlite", "sqlite3"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         loadLayout(at: url)
