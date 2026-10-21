@@ -45,7 +45,7 @@ On first launch, a welcome window lets you choose which installed apps to includ
 
 **Settings:**
 
-- **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons, auto-add new apps, hide behaviour.
+- **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons (monochrome or in the logo's colours), auto-add new apps, hide behaviour.
 - **Appearance:** Full Screen, Full Screen Behind Dock, or a resizable Window (with frames saved per display). Backgrounds: blurred desktop, wallpaper, Liquid Glass, solid colour or custom image. Icon size and labels.
 - **Layout:** grid rows × columns, with re-flow that keeps page boundaries; folder placement when sorting.
 - **Library:** choose which apps to include or exclude, add missing apps (also ones from anywhere via Browse), extra scan folders, save/load `.appgrid` files (double-clicking one in Finder loads it too), import from AppGrid or Launchpad, rebuild, regenerate icons.

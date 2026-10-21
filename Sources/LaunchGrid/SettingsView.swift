@@ -64,6 +64,11 @@ struct GeneralSettings: View {
                 Toggle("Show in menu bar", isOn: $prefs.showInMenuBar)
                     .disabled(prefs.showInMenuBar && !prefs.showInDock)
                     .onChange(of: prefs.showInMenuBar) { actions?.menuBarChanged() }
+                Picker("Menu bar icon", selection: $prefs.menuBarIconStyle) {
+                    ForEach(MenuBarIconStyle.allCases) { Text($0.label).tag($0) }
+                }
+                .disabled(!prefs.showInMenuBar)
+                .onChange(of: prefs.menuBarIconStyle) { actions?.menuBarChanged() }
                 Text("At least one of the Dock icon and the menu bar icon stays on.")
                     .font(.caption).foregroundStyle(.secondary)
             }

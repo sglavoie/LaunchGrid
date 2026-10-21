@@ -127,14 +127,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             statusItem = nil
             return
         }
-        guard statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "square.grid.3x3.fill", accessibilityDescription: "LaunchGrid")
-        item.button?.target = self
-        item.button?.action = #selector(statusItemClicked(_:))
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        statusItem = item
+        if statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.button?.target = self
+            item.button?.action = #selector(statusItemClicked(_:))
+            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            statusItem = item
+        }
+        statusItem?.button?.image = switch prefs.menuBarIconStyle {
+        case .monochrome: NSImage(systemSymbolName: "square.grid.3x3.fill", accessibilityDescription: "LaunchGrid")
+        case .colour: Self.colourMenuBarIcon
+        }
     }
+
+    /// The app logo (see scripts/make-icon.swift) redrawn at menu-bar size, so it stays crisp at any scale.
+    private static let colourMenuBarIcon: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            let body = rect.insetBy(dx: 0.5, dy: 0.5)
+            let shape = NSBezierPath(roundedRect: body, xRadius: body.width * 0.225, yRadius: body.width * 0.225)
+            NSGradient(colors: [NSColor(srgbRed: 0.16, green: 0.20, blue: 0.42, alpha: 1),
+                                NSColor(srgbRed: 0.36, green: 0.22, blue: 0.62, alpha: 1)])!.draw(in: shape, angle: -60)
+            let colors: [NSColor] = [
+                .systemPink, .systemOrange, .systemYellow,
+                .systemGreen, .systemTeal, .systemBlue,
+                .systemIndigo, .systemPurple, .white,
+            ]
+            let tile = body.width * 0.206, gap = body.width * 0.063
+            let origin = (body.width - tile * 3 - gap * 2) / 2
+            for i in 0..<9 {
+                let c = i % 3, r = 2 - i / 3
+                let tileRect = NSRect(x: body.minX + origin + CGFloat(c) * (tile + gap),
+                                      y: body.minY + origin + CGFloat(r) * (tile + gap), width: tile, height: tile)
+                colors[i].setFill()
+                NSBezierPath(roundedRect: tileRect, xRadius: tile * 0.26, yRadius: tile * 0.26).fill()
+            }
+            return true
+        }
+        image.accessibilityDescription = "LaunchGrid"
+        return image
+    }()
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent

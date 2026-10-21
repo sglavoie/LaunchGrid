@@ -29,6 +29,17 @@ enum BackgroundStyle: String, CaseIterable, Identifiable {
     }
 }
 
+enum MenuBarIconStyle: String, CaseIterable, Identifiable {
+    case monochrome, colour
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .monochrome: "Monochrome"
+        case .colour: "Colour"
+        }
+    }
+}
+
 /// User settings, persisted in UserDefaults. Grid size lives in the grid itself.
 @MainActor @Observable
 final class Preferences {
@@ -46,6 +57,7 @@ final class Preferences {
     var customImagePath: String? { didSet { d.set(customImagePath, forKey: "customImagePath") } }
     var showInDock: Bool { didSet { d.set(showInDock, forKey: "showInDock") } }
     var showInMenuBar: Bool { didSet { d.set(showInMenuBar, forKey: "showInMenuBar") } }
+    var menuBarIconStyle: MenuBarIconStyle { didSet { d.set(menuBarIconStyle.rawValue, forKey: "menuBarIconStyle") } }
     var autoAddApps: Bool { didSet { d.set(autoAddApps, forKey: "autoAddApps") } }
     var hideAfterLaunch: Bool { didSet { d.set(hideAfterLaunch, forKey: "hideAfterLaunch") } }
     var hideOnEmptyClick: Bool { didSet { d.set(hideOnEmptyClick, forKey: "hideOnEmptyClick") } }
@@ -68,6 +80,7 @@ final class Preferences {
             "blurRadius": 30.0,
             "showInDock": false,
             "showInMenuBar": true,
+            "menuBarIconStyle": MenuBarIconStyle.monochrome.rawValue,
             "autoAddApps": true,
             "hideAfterLaunch": true,
             "hideOnEmptyClick": true,
@@ -86,6 +99,7 @@ final class Preferences {
         customImagePath = d.string(forKey: "customImagePath")
         showInDock = d.bool(forKey: "showInDock")
         showInMenuBar = d.bool(forKey: "showInMenuBar")
+        menuBarIconStyle = MenuBarIconStyle(rawValue: d.string(forKey: "menuBarIconStyle") ?? "") ?? .monochrome
         autoAddApps = d.bool(forKey: "autoAddApps")
         hideAfterLaunch = d.bool(forKey: "hideAfterLaunch")
         hideOnEmptyClick = d.bool(forKey: "hideOnEmptyClick")
