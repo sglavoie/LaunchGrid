@@ -47,9 +47,12 @@ final class Preferences {
     /// and settings and leaves the installed app's alone.
     nonisolated static let isScratch = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"] != nil
 
-    @ObservationIgnored private let d = isScratch
-        ? UserDefaults(suiteName: "com.sglavoie.launchgrid.scratch") ?? .standard
-        : .standard
+    /// The app's settings domain, or the scratch one.
+    static var appDefaults: UserDefaults {
+        isScratch ? UserDefaults(suiteName: "com.sglavoie.launchgrid.scratch") ?? .standard : .standard
+    }
+
+    @ObservationIgnored private let d: UserDefaults
 
     var hotkeyKeyCode: UInt32 { didSet { d.set(Int(hotkeyKeyCode), forKey: "hotkeyKeyCode") } }
     var hotkeyModifiers: UInt32 { didSet { d.set(Int(hotkeyModifiers), forKey: "hotkeyModifiers") } }
@@ -74,7 +77,9 @@ final class Preferences {
     /// Window-mode frames keyed by screen (name + display ID).
     var windowFrames: [String: String] { didSet { d.set(windowFrames, forKey: "windowFrames") } }
 
-    init() {
+    /// - Parameter defaults: where settings are read and written; tests pass a throwaway suite.
+    init(defaults: UserDefaults = Preferences.appDefaults) {
+        d = defaults
         d.register(defaults: [
             "hotkeyKeyCode": kVK_Space,
             "hotkeyModifiers": optionKey,
