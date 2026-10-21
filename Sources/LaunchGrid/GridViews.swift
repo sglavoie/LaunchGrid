@@ -619,13 +619,16 @@ struct FolderPanel: View {
                 if pages > 1 {
                     HStack(spacing: 10) {
                         ForEach(0..<pages, id: \.self) { p in
+                            // Hit target as large as the page dots'.
                             Circle()
                                 .fill(.white.opacity(p == state.folderPage ? 0.95 : 0.35))
                                 .frame(width: 7, height: 7)
-                                .onTapGesture { state.folderPage = p }
+                                .padding(4)
+                                .contentShape(Circle().inset(by: -4))
+                                .onTapGesture { state.flipPage(p - state.folderPage) }
                                 .accessibilityLabel("Folder page \(p + 1) of \(pages)")
                                 .accessibilityAddTraits(p == state.folderPage ? [.isButton, .isSelected] : .isButton)
-                                .accessibilityAction { state.folderPage = p }
+                                .accessibilityAction { state.flipPage(p - state.folderPage) }
                         }
                     }
                 }
@@ -678,11 +681,14 @@ struct FolderItemCell: View {
     let app: AppRef
     let iconSize: CGFloat
     let focused: Bool
+    /// Set while a long press that entered edit mode is held: its release is not a tap.
+    @State private var swallowTap = false
 
     var body: some View {
         ItemView(item: .app(app), iconSize: iconSize, selected: state.selection.contains(app.id), focused: focused,
                  editing: state.editing, onDelete: { state.remove([app.id]) })
             .onTapGesture {
+                if swallowTap { swallowTap = false; return }
                 let mods = NSEvent.modifierFlags
                 if mods.contains(.command) { state.toggleSelection(app.id) }
                 else if mods.contains(.shift) { state.extendSelection(to: app.id) }
@@ -691,6 +697,19 @@ struct FolderItemCell: View {
                 else { state.launch(app) }
             }
             .modifier(ItemAccessibilityActions(id: app.id, open: { state.launch(app) }))
+            .simultaneousGesture(
+                // As on a page: a long press enters edit mode.
+                LongPressGesture(minimumDuration: 0.7).onEnded { _ in
+                    guard !state.drag.active, !state.editing else { return }
+                    swallowTap = true
+                    withAnimation { state.editing = true }
+                    Task {
+                        while NSEvent.pressedMouseButtons & 1 != 0 { try? await Task.sleep(for: .milliseconds(50)) }
+                        try? await Task.sleep(for: .milliseconds(150))
+                        swallowTap = false
+                    }
+                }
+            )
             .contextMenu { ItemMenu(item: .app(app)) }
     }
 }
