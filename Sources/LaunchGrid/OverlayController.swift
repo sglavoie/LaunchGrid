@@ -142,9 +142,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let id = screen?.displayID
         screen = NSScreen.screens.first { $0.displayID == id } ?? NSScreen.main
         guard let panel, let screen else { return }
-        if let host = panel.contentView as? NSHostingView<AnyView> {
-            host.rootView = AnyView(GridRootView().environment(state).environment(\.screenID, screen.displayID))
-        }
+        showBackground(for: screen)
         switch state.prefs.windowMode {
         case .fullScreen:
             panel.setFrame(screen.frame, display: true)
@@ -165,15 +163,38 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Points the background (blurred desktop or wallpaper) at `screen`.
+    private func showBackground(for screen: NSScreen) {
+        if let host = panel?.contentView as? NSHostingView<AnyView> {
+            host.rootView = AnyView(GridRootView().environment(state).environment(\.screenID, screen.displayID))
+        }
+    }
+
     // MARK: NSWindowDelegate
 
     func windowDidResize(_ notification: Notification) { saveWindowFrame() }
     func windowDidMove(_ notification: Notification) { saveWindowFrame() }
 
+    /// A window dragged to another display takes that display's background with it.
+    func windowDidChangeScreen(_ notification: Notification) {
+        guard let current = panel?.screen, current.displayID != screen?.displayID else { return }
+        screen = current
+        showBackground(for: current)
+    }
+
     /// Clicking another app, or our own Settings, takes key status away: hide like Launchpad.
+    /// A rename in progress is cancelled, unless the panel was only briefly not key.
     func windowDidResignKey(_ notification: Notification) {
-        guard isVisible, state.textEdit == nil else { return }
-        hide(deactivate: false)
+        guard isVisible else { return }
+        guard state.textEdit != nil else {
+            hide(deactivate: false)
+            return
+        }
+        DispatchQueue.main.async { [self] in
+            guard isVisible, panel?.isKeyWindow == false else { return }
+            state.textEdit = nil
+            hide(deactivate: false)
+        }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -284,7 +305,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             return nil
         case kVK_Tab:
-            state.flipPage(mods.contains(.shift) ? -1 : 1)
+            // Pages are hidden behind search results; don't turn them unseen.
+            if state.query.isEmpty { state.flipPage(mods.contains(.shift) ? -1 : 1) }
             return nil
         default:
             break
