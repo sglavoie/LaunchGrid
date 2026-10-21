@@ -23,8 +23,9 @@ public enum AppScanner {
         var results: [InstalledApp] = []
         var paths = Set<String>()
 
-        func consider(_ url: URL) {
-            guard paths.insert(url.resolvingSymlinksInPath().path).inserted, let app = read(appAt: url) else { return }
+        /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
+        func consider(_ url: URL, realPath: String) {
+            guard paths.insert(realPath).inserted, let app = read(appAt: url) else { return }
             results.append(app)
         }
 
@@ -32,16 +33,18 @@ public enum AppScanner {
             let real = dir.resolvingSymlinksInPath().path
             if let seen = visited[real], seen <= depth { return } // symlink cycle or repeat
             visited[real] = depth
-            guard let children = try? fm.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentTypeKey, .isPackageKey, .isHiddenKey]
-            ) else { return }
+            guard let children = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(scanKeys)) else { return }
             for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 if child.lastPathComponent.hasPrefix(".") { continue }
+                // Answered from the values prefetched with the listing. Only a symlink is
+                // resolved, to ask about its target (e.g. Safari's).
+                guard let own = try? child.resourceValues(forKeys: scanKeys) else { continue }
+                let target = own.isSymbolicLink == true ? child.resolvingSymlinksInPath() : nil
+                guard let v = target.map({ try? $0.resourceValues(forKeys: scanKeys) }) ?? own else { continue }
                 // Apps flagged hidden still count: /Applications/Safari.app is a hidden symlink.
-                if isApplication(child) {
-                    consider(child)
-                } else if depth < maxDepth, !isHidden(child), isPlainDirectory(child) {
+                if child.pathExtension == "app", v.contentType?.conforms(to: .applicationBundle) == true {
+                    consider(child, realPath: target?.path ?? (real as NSString).appendingPathComponent(child.lastPathComponent))
+                } else if depth < maxDepth, own.isHidden != true, v.isDirectory == true, v.isPackage != true {
                     walk(child, depth: depth + 1)
                 }
             }
@@ -51,30 +54,23 @@ public enum AppScanner {
         return results
     }
 
-    static func isApplication(_ url: URL) -> Bool {
-        guard url.pathExtension == "app" else { return false }
-        // Use the enumerated path for identity but the target's type (e.g. Safari's symlink).
-        let target = url.resolvingSymlinksInPath()
-        let type = (try? target.resourceValues(forKeys: [.contentTypeKey]))?.contentType
-        return type?.conforms(to: .applicationBundle) ?? false
-    }
+    static let scanKeys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .contentTypeKey, .isPackageKey, .isHiddenKey]
 
-    static func isHidden(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isHiddenKey]))?.isHidden == true
-    }
-
-    static func isPlainDirectory(_ url: URL) -> Bool {
-        let v = try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
-        return v?.isDirectory == true && v?.isPackage != true
+    /// A bundle's Info.plist, read from disk every time: `Bundle` caches it per path for the
+    /// life of the process, so a rescan would miss an updated bundle ID or category.
+    static func infoDictionary(ofBundleAt url: URL) -> [String: Any]? {
+        let real = url.resolvingSymlinksInPath()
+        if let info = NSDictionary(contentsOf: real.appendingPathComponent("Contents/Info.plist")) as? [String: Any] {
+            return info
+        }
+        // Odd layouts (e.g. Info.plist at the bundle's root) are left to Bundle.
+        return Bundle(url: real)?.infoDictionary.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     public static func read(appAt url: URL) -> InstalledApp? {
         let path = url.path
-        let real = url.resolvingSymlinksInPath()
         // Not an app without an Info.plist (e.g. a half-copied bundle or a stray folder).
-        guard let info = Bundle(url: real)?.infoDictionary.flatMap({ $0.isEmpty ? nil : $0 })
-            ?? NSDictionary(contentsOf: real.appendingPathComponent("Contents/Info.plist")) as? [String: Any]
-        else { return nil }
+        guard let info = infoDictionary(ofBundleAt: url) else { return nil }
         let bundleID = info["CFBundleIdentifier"] as? String
         var name = FileManager.default.displayName(atPath: path)
         if name.hasSuffix(".app") { name = String(name.dropLast(4)) }
