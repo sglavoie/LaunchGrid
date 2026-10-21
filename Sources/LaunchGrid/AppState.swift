@@ -80,6 +80,8 @@ final class AppState {
     @ObservationIgnored private var toastPostedAt = Date.distantPast
     @ObservationIgnored private var scanning = false
     @ObservationIgnored private var rescanQueued = false
+    /// Completions waiting for the queued scan: the one under way may predate what they need.
+    @ObservationIgnored private var queuedCompletions: [@MainActor () -> Void] = []
     /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
     @ObservationIgnored private var savesBlocked = false
 
@@ -134,8 +136,10 @@ final class AppState {
 
     /// Replaces the whole grid (import, rebuild, load) as one undo step.
     func replaceGrid(_ new: Grid) {
-        if grid.allApps.isEmpty {
-            // Nothing worth undoing back to (first run).
+        if grid.allApps.isEmpty && undoStack.isEmpty {
+            // Nothing worth undoing back to (first run). Redo history would replay edits of
+            // the empty grid over the new one.
+            redoStack.removeAll()
             grid = new
             afterChange()
         } else {
@@ -179,6 +183,14 @@ final class AppState {
         canRedo = !redoStack.isEmpty
         currentPage = min(currentPage, grid.pages.count - 1)
         if let id = openFolderID, grid.folder(id) == nil { openFolderID = nil }
+        // A folder that lost its last page's apps shrinks; don't leave the view on a page it no longer has.
+        if let f = openFolder {
+            folderPage = max(0, min(folderPage, FolderLayout.pageCount(apps: f.apps.count, grid: grid) - 1))
+        }
+        if let i = focusIndex {
+            let count = !query.isEmpty ? searchResults.count : openFolder?.apps.count ?? currentItems.count
+            focusIndex = count > 0 ? min(i, count - 1) : nil
+        }
         selection = selection.filter { grid.locate($0) != nil }
     }
 
@@ -232,10 +244,12 @@ final class AppState {
 
     // MARK: Catalog
 
-    /// Rescans the application folders off the main thread, then reconciles.
+    /// Rescans the application folders off the main thread, then reconciles. A request while
+    /// a scan is under way queues one more, and `completion` runs after that one.
     func rescan(completion: (@MainActor () -> Void)? = nil) {
         if scanning {
             rescanQueued = true
+            if let completion { queuedCompletions.append(completion) }
             return
         }
         scanning = true
@@ -249,7 +263,9 @@ final class AppState {
             completion?()
             if self.rescanQueued {
                 self.rescanQueued = false
-                self.rescan()
+                let waiting = self.queuedCompletions
+                self.queuedCompletions = []
+                self.rescan { for done in waiting { done() } }
             }
         }
     }
