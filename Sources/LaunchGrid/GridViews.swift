@@ -380,21 +380,22 @@ struct ItemView: View {
 }
 
 struct AppIcon: View {
+    @Environment(AppState.self) private var state
     let path: String
     let size: CGFloat
     @State private var loaded: NSImage?
 
     var body: some View {
         Group {
-            if let image = loaded ?? IconProvider.shared.cached(path) {
+            if let image = IconProvider.shared.cached(path) ?? loaded {
                 Image(nsImage: image).resizable().interpolation(.high)
             } else {
                 RoundedRectangle(cornerRadius: size * 0.22).fill(.white.opacity(0.08))
             }
         }
         .frame(width: size, height: size)
-        .task(id: path) {
-            if IconProvider.shared.cached(path) == nil { loaded = await IconProvider.shared.icon(path) }
+        .task(id: "\(path)|\(state.iconGeneration)") {
+            if IconProvider.shared.cached(path) == nil || loaded != nil { loaded = await IconProvider.shared.icon(path) }
         }
     }
 }
@@ -483,14 +484,25 @@ struct PageDots: View {
         HStack(spacing: 10) {
             if count > 1 {
                 ForEach(0..<count, id: \.self) { p in
+                    let title = state.grid.pages.indices.contains(p) ? state.grid.pages[p].title : nil
                     Circle()
                         .fill(.white.opacity(p == state.currentPage ? 0.95 : 0.35))
                         .frame(width: 8, height: 8)
                         .padding(4)
                         .contentShape(Circle().inset(by: -4))
                         .onTapGesture { state.goToPage(p) }
-                        .help(state.grid.pages.indices.contains(p) ? state.grid.pages[p].title ?? "Page \(p + 1)" : "New page")
-                        .accessibilityLabel("Page \(p + 1)")
+                        .help(state.grid.pages.indices.contains(p) ? title ?? "Page \(p + 1)" : "New page")
+                        .accessibilityLabel(title.map { "Page \(p + 1), \($0)" } ?? "Page \(p + 1)")
+                        .accessibilityAddTraits(p == state.currentPage ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityAction { state.goToPage(p) }
+                }
+            } else if !state.query.isEmpty {
+                // Search shows one page of matches; say how many didn't fit.
+                let hidden = state.allSearchResults.count - state.searchResults.count
+                if hidden > 0 {
+                    Text("\(hidden) more \(hidden == 1 ? "match" : "matches") — keep typing to narrow the search")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.6))
                 }
             }
         }

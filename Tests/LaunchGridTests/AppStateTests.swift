@@ -88,3 +88,100 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
     }
 }
+
+@MainActor @Suite struct SelectionTests {
+    func ids(_ state: AppState) -> [String: UUID] {
+        Dictionary(uniqueKeysWithValues: state.grid.allApps.map { ($0.name, $0.id) })
+    }
+
+    func selected(_ state: AppState) -> [String] {
+        state.grid.allApps.filter { state.selection.contains($0.id) }.map(\.name)
+    }
+
+    @Test func shiftClickRangeStartsAtTheLastClickAndCanShrink() {
+        let state = makeState(["A", "B", "C", "D", "E", "F"])
+        let id = ids(state)
+        state.toggleSelection(id["E"]!)
+        state.extendSelection(to: id["B"]!)
+        #expect(selected(state) == ["B", "C", "D", "E"])
+        state.extendSelection(to: id["D"]!)
+        #expect(selected(state) == ["D", "E"], "the next shift-click replaces the previous range")
+    }
+
+    @Test func shiftClickKeepsItemsSelectedOtherwise() {
+        let state = makeState(["A", "B", "C", "D", "E", "F"])
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["E"]!)
+        state.extendSelection(to: id["C"]!)
+        #expect(selected(state) == ["A", "C", "D", "E"])
+        state.extendSelection(to: id["F"]!)
+        #expect(selected(state) == ["A", "E", "F"])
+    }
+
+    @Test func clearingTheSelectionForgetsTheAnchor() {
+        let state = makeState(["A", "B", "C", "D"])
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.selection.removeAll()
+        state.extendSelection(to: id["C"]!)
+        #expect(selected(state) == ["C"])
+    }
+}
+
+@MainActor @Suite struct ToastTests {
+    @Test func aToastWhileHiddenWaitsForTheNextShow() async throws {
+        let state = makeState(["A"])
+        state.showToast("Loaded layout")
+        try await Task.sleep(for: .seconds(3))
+        #expect(state.toast == "Loaded layout", "nobody has seen it yet")
+        state.didShow()
+        #expect(state.toast == "Loaded layout")
+        try await Task.sleep(for: .seconds(3))
+        #expect(state.toast == nil, "dismissed once seen")
+    }
+}
+
+@MainActor @Suite struct SearchCountTests {
+    @Test func searchResultsShowOnePageButCountEveryMatch() {
+        let names = (1...50).map { "App \($0)" }
+        let state = makeState([])
+        state.replaceGrid(Grid(rows: 2, columns: 3, pages: [Page(items: names.map {
+            .app(AppRef(bundleID: "com.test.\($0)", path: "/Applications/\($0).app", name: $0))
+        })]))
+        state.query = "app"
+        #expect(state.searchResults.count == 6)
+        #expect(state.allSearchResults.count == 50)
+    }
+}
+
+@Suite struct WatcherTests {
+    @Test func ignoresChangesDeepInsideBundles() {
+        #expect(FolderWatcher.isRelevant("/Applications/"))
+        #expect(FolderWatcher.isRelevant("/Applications/Utilities/"))
+        #expect(FolderWatcher.isRelevant("/Applications/Foo.app/"))
+        #expect(FolderWatcher.isRelevant("/Applications/Foo.app/Contents/"))
+        #expect(!FolderWatcher.isRelevant("/Applications/Foo.app/Contents/Resources/"))
+        #expect(!FolderWatcher.isRelevant("/Applications/Foo.app/Contents/Frameworks/X.framework/Versions/A/"))
+    }
+}
+
+@Suite struct IconTests {
+    @Test func iconsOfAppsUpdatedInPlaceAreDropped() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Foo.app")
+        let plist = app.appendingPathComponent("Contents/Info.plist")
+        try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<plist><dict/></plist>".utf8).write(to: plist)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let icons = IconProvider()
+        _ = await icons.icon(app.path)
+        #expect(icons.cached(app.path) != nil)
+        #expect(icons.dropStale([app.path]).isEmpty, "unchanged")
+
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: plist.path)
+        #expect(icons.dropStale([app.path]) == [app.path])
+        #expect(icons.cached(app.path) == nil)
+    }
+}

@@ -179,7 +179,8 @@ struct AppearanceSettings: View {
                     }
                 }
                 if prefs.background == .wallpaper || prefs.background == .image {
-                    Slider(value: $prefs.blurRadius, in: 0...60) { Text("Blur") }
+                    // Whole steps: each radius is blurred and cached separately.
+                    Slider(value: $prefs.blurRadius, in: 0...60, step: 1) { Text("Blur") }
                 }
                 Slider(value: $prefs.backgroundOpacity, in: 0...0.9) {
                     Text(prefs.background == .solid ? "Transparency" : "Dimming")
@@ -274,10 +275,7 @@ struct LibrarySettings: View {
                 HStack {
                     Button("Add Missing Apps…") { actions.addMissing() }
                     Button("Rescan Now") { state.rescan() }
-                    Button("Regenerate Icons") {
-                        IconProvider.shared.clear()
-                        IconProvider.shared.prewarm(state.grid.allApps.map(\.path))
-                    }
+                    Button("Regenerate Icons") { state.regenerateIcons() }
                 }
             }
             Section("Extra folders to scan") {
@@ -444,8 +442,10 @@ struct FirstRunView: View {
                 .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
             }
             option("Build by category", "One page per kind of app — Productivity, Developer Tools, Creativity…",
-                   "square.grid.3x3.square") { actions.rebuild(.byCategory) }
-            option("Build alphabetically", "All apps in name order.", "textformat.abc") { actions.rebuild(.alphabetical) }
+                   "square.grid.3x3.square", requiresScan: true) { actions.rebuild(.byCategory) }
+            option("Build alphabetically", "All apps in name order.", "textformat.abc", requiresScan: true) {
+                actions.rebuild(.alphabetical)
+            }
             if LaunchpadImporter.appGridDatabaseURL != nil {
                 option("Import from AppGrid", "Bring over your AppGrid pages and folders.", "square.and.arrow.down") {
                     actions.importAppGrid()
@@ -465,7 +465,9 @@ struct FirstRunView: View {
         .frame(width: 520)
     }
 
-    private func option(_ title: String, _ detail: String, _ icon: String, action: @escaping () -> Void) -> some View {
+    /// - Parameter requiresScan: unavailable until the first scan has found the installed apps.
+    private func option(_ title: String, _ detail: String, _ icon: String, requiresScan: Bool = false,
+                        action: @escaping () -> Void) -> some View {
         Button {
             action()
             if state.hasGridFile { close() }
@@ -484,6 +486,6 @@ struct FirstRunView: View {
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .disabled(state.installed.isEmpty && title.hasPrefix("Build"))
+        .disabled(requiresScan && state.installed.isEmpty)
     }
 }

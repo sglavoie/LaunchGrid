@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import CoreServices
+import os
 import ServiceManagement
 import LaunchGridCore
 
@@ -45,6 +46,8 @@ final class IconProvider: @unchecked Sendable {
 
     private let cache = NSCache<NSString, NSImage>()
     private let queue = DispatchQueue(label: "launchgrid.icons", qos: .userInitiated, attributes: .concurrent)
+    /// When each cached icon's app was last modified, to spot apps updated in place.
+    private let versions = OSAllocatedUnfairLock(initialState: [String: Date]())
 
     init() {
         cache.countLimit = 2000
@@ -76,11 +79,32 @@ final class IconProvider: @unchecked Sendable {
 
     func clear() {
         cache.removeAllObjects()
+        versions.withLock { $0.removeAll() }
+    }
+
+    /// Removes cached icons whose app changed on disk since they were rendered; returns their paths.
+    func dropStale(_ paths: [String]) -> [String] {
+        let known = versions.withLock { $0 }
+        let stale = paths.filter { path in
+            guard let rendered = known[path] else { return false }
+            return Self.modificationDate(path) != rendered
+        }
+        for path in stale { cache.removeObject(forKey: path as NSString) }
+        versions.withLock { v in for path in stale { v[path] = nil } }
+        return stale
+    }
+
+    /// An update rewrites the bundle's Info.plist (or replaces the whole bundle).
+    private static func modificationDate(_ path: String) -> Date? {
+        let fm = FileManager.default
+        let attrs = (try? fm.attributesOfItem(atPath: path + "/Contents/Info.plist")) ?? (try? fm.attributesOfItem(atPath: path))
+        return attrs?[.modificationDate] as? Date
     }
 
     @discardableResult
     private func render(_ path: String) -> NSImage {
         if let hit = cached(path) { return hit }
+        let version = Self.modificationDate(path)
         let source = NSWorkspace.shared.icon(forFile: path)
         let px = Self.pixelSize
         let size = NSSize(width: px / 2, height: px / 2)
@@ -97,6 +121,7 @@ final class IconProvider: @unchecked Sendable {
         let image = NSImage(size: size)
         image.addRepresentation(rep)
         cache.setObject(image, forKey: path as NSString)
+        versions.withLock { $0[path] = version }
         return image
     }
 }
@@ -236,6 +261,16 @@ enum KeyCombo {
 /// FSEvents on the application folders, coalescing bursts into one callback.
 /// Callbacks arrive on the main queue only.
 final class FolderWatcher: @unchecked Sendable {
+    /// Whether a change in directory `path` can matter to a scan. Apps and updaters write deep
+    /// inside bundles (caches, frameworks); only a bundle's top level and its `Contents`
+    /// (where an update rewrites Info.plist) are worth a rescan.
+    static func isRelevant(_ path: String) -> Bool {
+        let parts = path.split(separator: "/")
+        guard let bundle = parts.firstIndex(where: { $0.hasSuffix(".app") }) else { return true }
+        let inside = parts.count - bundle - 1
+        return inside == 0 || (inside == 1 && parts[bundle + 1] == "Contents")
+    }
+
     private var stream: FSEventStreamRef?
     private let onChange: @MainActor () -> Void
 
@@ -245,14 +280,17 @@ final class FolderWatcher: @unchecked Sendable {
         guard !existing.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
             guard let info else { return }
+            let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
+            // No paths means something unusual (e.g. a dropped history); rescan to be safe.
+            guard paths.isEmpty || paths.contains(where: FolderWatcher.isRelevant) else { return }
             let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
             MainActor.assumeIsolated { watcher.onChange() }
         }
         stream = FSEventStreamCreate(nil, callback, &context, existing as CFArray,
                                      FSEventStreamEventId(kFSEventStreamEventIdSinceNow), latency,
-                                     FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot))
+                                     FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagUseCFTypes))
         guard let stream else { return }
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)

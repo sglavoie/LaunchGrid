@@ -41,11 +41,19 @@ final class AppState {
     var folderPage = 0
     var query = "" { didSet { if query != oldValue { focusIndex = query.isEmpty ? nil : 0 } } }
     var editing = false { didSet { if !editing { selection.removeAll() } } }
-    var selection: Set<UUID> = []
+    var selection: Set<UUID> = [] {
+        didSet { if selection.isEmpty { selectionAnchor = nil; shiftRange = [] } }
+    }
+    /// Where ⇧-click ranges start: the item last clicked without ⇧.
+    @ObservationIgnored private var selectionAnchor: UUID?
+    /// What the last ⇧-click added; the next one replaces it, as in Finder.
+    @ObservationIgnored private var shiftRange: Set<UUID> = []
     /// Keyboard focus: index on the current page, folder or search results.
     var focusIndex: Int?
     var textEdit: TextEditRequest?
     var toast: String?
+    /// Bumped when cached icons were dropped, so icon views load them again.
+    var iconGeneration = 0
     /// Horizontal offset of the pager while a trackpad swipe is in progress.
     var swipeOffset: CGFloat = 0
     var isShown = false
@@ -64,6 +72,7 @@ final class AppState {
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    @ObservationIgnored private var toastPostedAt = Date.distantPast
     @ObservationIgnored private var scanning = false
     @ObservationIgnored private var rescanQueued = false
 
@@ -197,6 +206,25 @@ final class AppState {
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         if hasGridFile { reconcile() }
+        refreshUpdatedIcons()
+    }
+
+    /// Drops icons of apps updated in place since they were rendered, then reloads them.
+    private func refreshUpdatedIcons() {
+        let paths = grid.allApps.map(\.path)
+        Task {
+            let stale = await Task.detached(priority: .utility) { IconProvider.shared.dropStale(paths) }.value
+            guard !stale.isEmpty else { return }
+            IconProvider.shared.prewarm(stale)
+            self.iconGeneration += 1
+        }
+    }
+
+    /// "Regenerate Icons": renders every icon again.
+    func regenerateIcons() {
+        IconProvider.shared.clear()
+        IconProvider.shared.prewarm(grid.allApps.map(\.path))
+        iconGeneration += 1
     }
 
     /// Whether a scan could have seen an app at `path`. Absence says nothing about apps on
@@ -250,8 +278,14 @@ final class AppState {
 
     // MARK: Derived
 
+    /// Every match, best first.
+    var allSearchResults: [AppRef] {
+        Search.results(in: grid.allApps, query: query)
+    }
+
+    /// The matches shown: one page of them.
     var searchResults: [AppRef] {
-        Array(Search.results(in: grid.allApps, query: query).prefix(grid.capacity))
+        Array(allSearchResults.prefix(grid.capacity))
     }
 
     var openFolder: Folder? { openFolderID.flatMap { grid.folder($0) } }
@@ -331,14 +365,24 @@ final class AppState {
 
     func toggleSelection(_ id: UUID) {
         if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        selectionAnchor = id
+        shiftRange = []
     }
 
-    /// Shift-click: select the range on the current page from the last selected item.
+    /// Shift-click: select the range on the current page from the anchor (the item last
+    /// clicked), replacing the range the previous shift-click added.
     func extendSelection(to id: UUID) {
         let ids = (openFolder?.apps.map(\.id)) ?? currentItems.map(\.id)
         guard let end = ids.firstIndex(of: id) else { return }
-        let anchor = ids.lastIndex { selection.contains($0) } ?? end
-        for i in min(anchor, end)...max(anchor, end) { selection.insert(ids[i]) }
+        let start = selectionAnchor.flatMap { selection.contains($0) ? ids.firstIndex(of: $0) : nil }
+            ?? ids.lastIndex { selection.contains($0) } ?? end
+        if selectionAnchor == nil { selectionAnchor = ids[start] }
+        var kept = selection.subtracting(shiftRange)
+        let range = Set(ids[min(start, end)...max(start, end)])
+        let added = range.subtracting(kept)
+        kept.formUnion(range)
+        selection = kept
+        shiftRange = added
     }
 
     /// The items an action on `id` applies to: the selection if `id` is part of it.
@@ -424,13 +468,33 @@ final class AppState {
         apply { $0.resize(rows: rows, columns: columns) }
     }
 
+    /// While the overlay is hidden (an action from Settings, the menu bar or Finder), the
+    /// message waits for the next time it's shown, unless that's a minute or more later.
     func showToast(_ text: String) {
         toast = text
+        toastPostedAt = Date()
         toastTask?.cancel()
+        toastTask = nil
+        if isShown { scheduleToastDismissal() }
+    }
+
+    private func scheduleToastDismissal() {
         toastTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2.5))
             guard !Task.isCancelled else { return }
             self?.toast = nil
+            self?.toastTask = nil
+        }
+    }
+
+    /// Called when the overlay appears.
+    func didShow() {
+        isShown = true
+        guard toast != nil, toastTask == nil else { return }
+        if Date().timeIntervalSince(toastPostedAt) > 60 {
+            toast = nil
+        } else {
+            scheduleToastDismissal()
         }
     }
 

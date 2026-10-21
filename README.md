@@ -11,6 +11,8 @@ cp -R build/LaunchGrid.app /Applications/   # needed for "Open at login"
 swift test                   # core and app-state tests
 ```
 
+CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26.
+
 Set `SIGN_IDENTITY="Developer ID Application: …"` before `scripts/bundle.sh` to sign for notarisation. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
 
 On first launch, a welcome window offers these ways to set up the grid:

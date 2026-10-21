@@ -95,6 +95,11 @@ final class ImageBlurCache: @unchecked Sendable {
     private let cache = NSCache<NSString, NSImage>()
     private let context = CIContext()
 
+    init() {
+        // A few screens' wallpapers and a custom image; older blurs are cheap to redo.
+        cache.countLimit = 8
+    }
+
     func image(url: URL, radius: Double) -> NSImage? {
         let key = "\(url.path)|\(radius)" as NSString
         if let hit = cache.object(forKey: key) { return hit }

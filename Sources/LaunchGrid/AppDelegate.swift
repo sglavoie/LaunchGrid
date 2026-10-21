@@ -292,7 +292,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         present("firstRun", title: "Welcome") { close in FirstRunView(actions: actions, close: close) }
     }
 
-    @objc func sortEverything() { state.sortEverything() }
+    /// From the menu bar the grid is hidden, so the change and its undo aren't in view: confirm first.
+    @objc func sortEverything() {
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "Sort everything alphabetically?"
+        alert.informativeText = "Every page is re-flowed and page titles are cleared. Folders stay intact. ⌘Z in the grid undoes it."
+        alert.addButton(withTitle: "Sort")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        state.sortEverything()
+    }
 
     @objc func confirmRebuild() {
         overlay.hide(deactivate: false)

@@ -69,12 +69,12 @@ public enum LaunchpadImporter {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("launchgrid-import-\(UUID().uuidString).db")
         try fm.copyItem(at: url, to: tmp)
+        defer {
+            for suffix in ["", "-wal", "-shm"] { try? fm.removeItem(atPath: tmp.path + suffix) }
+        }
         let wal = URL(fileURLWithPath: url.path + "-wal")
         if fm.fileExists(atPath: wal.path) {
             try fm.copyItem(at: wal, to: URL(fileURLWithPath: tmp.path + "-wal"))
-        }
-        defer {
-            for suffix in ["", "-wal", "-shm"] { try? fm.removeItem(atPath: tmp.path + suffix) }
         }
 
         var db: OpaquePointer?

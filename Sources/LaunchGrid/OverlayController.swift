@@ -47,7 +47,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         state.focusIndex = nil
         panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
-        state.isShown = true
+        state.didShow()
     }
 
     func hide(deactivate: Bool = true) {
@@ -124,7 +124,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func placePanel() {
-        guard let panel, let screen = screen ?? NSScreen.main else { return }
+        // After a display change the remembered screen may be gone (or a new object for the
+        // same display); match it by ID and fall back to the main screen.
+        let id = screen?.displayID
+        screen = NSScreen.screens.first { $0.displayID == id } ?? NSScreen.main
+        guard let panel, let screen else { return }
         if let host = panel.contentView as? NSHostingView<AnyView> {
             host.rootView = AnyView(GridRootView().environment(state).environment(\.screenID, screen.displayID))
         }
