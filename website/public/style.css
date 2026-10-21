@@ -1,8 +1,8 @@
 /* Both families are SIL Open Font License 1.1; see fonts/README.md. */
 @font-face {
-    font-family: "Bricolage Grotesque";
-    src: url("/fonts/bricolage.woff2") format("woff2");
-    font-weight: 200 800;
+    font-family: "Instrument Sans";
+    src: url("/fonts/instrument-sans.woff2") format("woff2");
+    font-weight: 400 700;
     font-stretch: 75% 100%;
     font-display: swap;
 }
@@ -33,7 +33,7 @@
     --link: #4a2c88;
     --screen-from: #29336b;
     --screen-to: #5c389e;
-    --display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+    --display: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
     --text: "Atkinson Hyperlegible Next", ui-sans-serif, system-ui, sans-serif;
     --measure: 66ch;
     --gutter: clamp(16px, 4vw, 48px);
@@ -83,9 +83,9 @@ a:hover { text-decoration-thickness: 2px; }
 
 /* Type */
 h1, h2, h3 { font-family: var(--display); line-height: 1.08; letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
-h1 { font-size: clamp(2.5rem, 6.2vw, 4.6rem); font-weight: 750; font-stretch: 82%; }
-h2 { font-size: clamp(1.7rem, 3.4vw, 2.4rem); font-weight: 700; font-stretch: 88%; }
-h3 { font-size: 1.2rem; font-weight: 650; letter-spacing: -0.01em; }
+h1 { font-size: clamp(2.5rem, 5.6vw, 4.2rem); font-weight: 650; letter-spacing: -0.03em; line-height: 1.04; }
+h2 { font-size: clamp(1.7rem, 3.4vw, 2.4rem); font-weight: 650; }
+h3 { font-size: 1.2rem; font-weight: 600; letter-spacing: -0.01em; }
 p { margin: 0 0 1em; }
 .lede { font-size: 1.22rem; line-height: 1.5; color: var(--muted); max-width: 34ch; margin-top: 20px; }
 
@@ -122,7 +122,7 @@ p { margin: 0 0 1em; }
 .tile .glyph {
     display: grid; place-items: center; width: min(58px, 100%); aspect-ratio: 1; border-radius: 24%;
     background: linear-gradient(180deg, color-mix(in srgb, var(--c) 75%, #fff), var(--c));
-    color: rgb(0 0 0 / 0.55); font: 750 1.05rem/1 var(--display);
+    color: rgb(0 0 0 / 0.55); font: 700 1.05rem/1 var(--display);
     box-shadow: 0 3px 8px -3px rgb(0 0 0 / 0.45);
 }
 .tile .name { font-size: 0.76rem; line-height: 1.2; color: #fff; text-shadow: 0 1px 2px rgb(0 0 0 / 0.4); overflow-wrap: anywhere; }
