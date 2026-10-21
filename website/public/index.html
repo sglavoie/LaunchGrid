@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LaunchGrid: a full-screen app grid for your Mac</title>
+    <meta
+      name="description"
+      content="LaunchGrid shows every app on your Mac in a full-screen grid of pages and folders you arrange yourself. Free, with no account, no tracking and no network access."
+    />
+    <link rel="canonical" href="https://launchgrid.sglavoie.com/" />
+    <meta property="og:title" content="LaunchGrid" />
+    <meta
+      property="og:description"
+      content="Every app on your Mac in a full-screen grid of pages and folders you arrange yourself."
+    />
+    <meta property="og:url" content="https://launchgrid.sglavoie.com/" />
+    <meta
+      property="og:image"
+      content="https://launchgrid.sglavoie.com/icon.png"
+    />
+    <meta name="theme-color" content="#29336b" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link
+      rel="preload"
+      href="/fonts/bricolage.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/demo.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="/"
+          ><img src="/favicon.png" alt="" width="34" height="34" />LaunchGrid</a
+        >
+        <nav class="site-nav" aria-label="Site">
+          <a href="/support/">Support</a>
+          <a href="/privacy/">Privacy</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <div class="wrap">
+          <div>
+            <h1>All your apps, one keystroke away.</h1>
+            <p class="lede">
+              Press <kbd>⌥</kbd> <kbd>Space</kbd> and every app on your Mac
+              fills the screen, in pages and folders you arrange. Start typing
+              to find one.
+            </p>
+            <div class="cta">
+              <a class="button" href="https://github.com/sglavoie/LaunchGrid"
+                >Get the source</a
+              >
+              <p class="status">
+                Coming to the Mac App Store. Free, for macOS 14 Sonoma and
+                later.
+              </p>
+            </div>
+          </div>
+          <div>
+            <div class="screen">
+              <label class="search">
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                >
+                  <circle
+                    cx="6.8"
+                    cy="6.8"
+                    r="5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+                  <path
+                    d="m10.6 10.6 4 4"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <input
+                  id="demo-search"
+                  type="search"
+                  placeholder="Search"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="Search the sample grid"
+                  aria-describedby="demo-note"
+                />
+              </label>
+              <ul class="tiles" id="demo-tiles" aria-label="Sample apps"></ul>
+              <div class="dots" aria-hidden="true">
+                <span></span><span></span>
+              </div>
+              <p class="screen-note" id="demo-note" aria-live="polite"></p>
+            </div>
+            <p class="tries">
+              Try it: <button type="button" data-try="vsc">vsc</button> for
+              initials, <button type="button" data-try="cal">cal</button> for a
+              prefix, <button type="button" data-try="nts">nts</button> for a
+              loose match.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="arrange">
+        <div class="wrap split">
+          <div>
+            <h2 id="arrange">Arranged the way you think.</h2>
+            <p>
+              LaunchGrid finds the apps you have installed and lays them out by
+              category or alphabetically. From there, the grid is yours.
+            </p>
+          </div>
+          <ul class="features">
+            <li>
+              <h3>Folders and pages</h3>
+              <p>
+                Hold one app over another to make a folder. Drag to the edge of
+                the screen to move to the next page, or onto a new one.
+              </p>
+            </li>
+            <li>
+              <h3>Search that guesses well</h3>
+              <p>
+                Names that start with what you typed come first, then word
+                starts, then initials, so <kbd>vsc</kbd> finds Visual Studio
+                Code. Return opens the top result.
+              </p>
+            </li>
+            <li>
+              <h3>New apps find their place</h3>
+              <p>
+                Install an app and it appears on the grid. Delete one and it
+                disappears. Apps you removed by choice stay removed.
+              </p>
+            </li>
+            <li>
+              <h3>Full screen or a window</h3>
+              <p>
+                Cover the screen, stop above the Dock, or use a resizable
+                window. Choose a blurred desktop, your wallpaper, Liquid Glass
+                on macOS 26, a solid colour or a picture of your own.
+              </p>
+            </li>
+            <li>
+              <h3>Undo anything</h3>
+              <p>
+                Fifty levels of undo, including imports, rebuilds and changes to
+                the grid size. Save your layout to a file and load it on another
+                Mac.
+              </p>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="keys">
+        <div class="wrap split">
+          <div>
+            <h2 id="keys">Made for the keyboard.</h2>
+            <p>
+              Everything works with a mouse or trackpad too: swipe between
+              pages, right-click for options.
+            </p>
+          </div>
+          <table>
+            <tbody>
+              <tr>
+                <th scope="row"><kbd>⌥</kbd> <kbd>Space</kbd></th>
+                <td>
+                  Show or hide the grid. You can pick another shortcut in
+                  Settings.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Type</th>
+                <td>Search. Return opens the first result.</td>
+              </tr>
+              <tr>
+                <th scope="row">Arrow keys</th>
+                <td>Move between apps. Return opens one.</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>⌘</kbd> <kbd>1</kbd> to <kbd>9</kbd></th>
+                <td>
+                  Jump to a page. <kbd>←</kbd> <kbd>→</kbd> and
+                  <kbd>Tab</kbd> step through them.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>⌘</kbd> <kbd>E</kbd></th>
+                <td>Edit the layout: select, rename, group and remove.</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>⌘</kbd> <kbd>G</kbd></th>
+                <td>Put the selected apps in a folder.</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>⌘</kbd> <kbd>Z</kbd></th>
+                <td>Undo. <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Z</kbd> redoes.</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>Esc</kbd></th>
+                <td>
+                  Clear the search, close the folder, leave edit mode, then
+                  hide.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="private">
+        <div class="wrap split">
+          <div>
+            <h2 id="private">Nothing leaves your Mac.</h2>
+          </div>
+          <div class="prose">
+            <p>
+              LaunchGrid makes no network connections. It has no account, no
+              analytics, no ads and no purchases. Your layout and settings are
+              stored on your Mac and nowhere else.
+            </p>
+            <p>
+              The <a href="/privacy/">privacy policy</a> says exactly what it
+              reads and where it keeps it.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="made">
+        <div class="wrap split">
+          <div>
+            <h2 id="made">How it was made.</h2>
+          </div>
+          <div class="prose">
+            <p>
+              About 99.9% of LaunchGrid was written by AI: its code, its tests,
+              and the text and design of this website were generated by Claude,
+              Anthropic's AI model. Sébastien decided what LaunchGrid should do,
+              directed the work, tested it and chose what ships, and is
+              responsible for it, bugs included.
+            </p>
+            <p>
+              None of that AI is in the app. LaunchGrid contains no AI features
+              and doesn't connect to any AI service, or to anything else. The
+              <a href="https://github.com/sglavoie/LaunchGrid">source code</a>
+              is on GitHub, so you can read exactly what it does.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="get">
+        <div class="wrap split">
+          <div>
+            <h2 id="get">Get LaunchGrid.</h2>
+          </div>
+          <dl class="facts">
+            <dt>Price</dt>
+            <dd>Free. Every feature is included.</dd>
+            <dt>Requires</dt>
+            <dd>macOS 14 Sonoma or later.</dd>
+            <dt>Where</dt>
+            <dd>
+              Coming to the Mac App Store. Until then, you can
+              <a href="https://github.com/sglavoie/LaunchGrid"
+                >build it from the source</a
+              >.
+            </dd>
+            <dt>Help</dt>
+            <dd>
+              Questions and bug reports go to the
+              <a href="/support/">support page</a>.
+            </dd>
+          </dl>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <p>
+          © 2026 Sébastien Lavoie. Written entirely by AI:
+          <a href="/#made">how it was made</a>.
+        </p>
+        <nav aria-label="Footer">
+          <a href="/support/">Support</a>
+          <a href="/privacy/">Privacy policy</a>
+          <a href="https://github.com/sglavoie/LaunchGrid">Source code</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

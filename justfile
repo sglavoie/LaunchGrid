@@ -54,6 +54,14 @@ uninstall:
 # Build, test and bundle, as CI does
 ci: build test (bundle "release")
 
+# Serve the website (launchgrid.sglavoie.com) locally with the Workers runtime
+website:
+    cd website && npx -y wrangler@4 dev
+
+# Publish the website to launchgrid.sglavoie.com
+website-deploy:
+    cd website && npx -y wrangler@4 deploy
+
 # Remove build products
 clean:
     rm -rf .build build

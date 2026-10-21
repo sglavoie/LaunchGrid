@@ -46,7 +46,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Free and open. No paywall.</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Sébastien Lavoie</string>
+    <key>ITSAppUsesNonExemptEncryption</key><false/>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

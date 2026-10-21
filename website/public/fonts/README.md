@@ -1,0 +1,1 @@
+Bricolage Grotesque and Atkinson Hyperlegible Next, Latin subsets from Google Fonts, served from this site so visitors' browsers never contact a third party. Both are licensed under the SIL Open Font License 1.1: https://openfontlicense.org

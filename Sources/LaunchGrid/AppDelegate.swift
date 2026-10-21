@@ -273,6 +273,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.setSubmenu(importMenu, for: importItem)
         menu.addItem(withTitle: "Rebuild from Scratch…", action: #selector(confirmRebuild), keyEquivalent: "").target = self
         menu.addItem(.separator())
+        menu.addItem(withTitle: "LaunchGrid Support", action: #selector(openSupport), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Privacy Policy", action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit LaunchGrid", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         return menu
     }
@@ -300,6 +303,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenu.addItem(withTitle: "About LaunchGrid", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "LaunchGrid Support", action: #selector(openSupport), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Privacy Policy", action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide LaunchGrid", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit LaunchGrid", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -385,6 +391,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func showOverlay() { overlay.show() }
+
+    // The App Store asks for both pages to be reachable from inside the app.
+    static let website = URL(string: "https://launchgrid.sglavoie.com/")!
+    @objc func openSupport() { NSWorkspace.shared.open(Self.website.appendingPathComponent("support/")) }
+    @objc func openPrivacyPolicy() { NSWorkspace.shared.open(Self.website.appendingPathComponent("privacy/")) }
 
     @objc func showSettings() {
         let actions = libraryActions
