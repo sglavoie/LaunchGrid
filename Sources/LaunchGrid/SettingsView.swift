@@ -427,6 +427,7 @@ struct FirstRunView: View {
                     Text("Welcome to LaunchGrid").font(.title.weight(.semibold))
                     Text("Choose how to set up your grid. You can change it later in Settings › Library.")
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if let problem = state.loadProblem {
@@ -477,6 +478,7 @@ struct FirstRunView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.headline)
                     Text(detail).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)
