@@ -111,15 +111,16 @@ struct TopBar: View {
             SearchField()
             HStack {
                 Spacer()
+                // A selection made with ⌘-click or ⇧-click outside edit mode gets the same actions.
+                if state.selection.count > 1 {
+                    Button("Group") { state.groupSelection() }
+                        .buttonStyle(PillButtonStyle())
+                }
+                if !state.selection.isEmpty {
+                    Button("Remove") { state.remove(state.orderedSelection) }
+                        .buttonStyle(PillButtonStyle())
+                }
                 if state.editing {
-                    if state.selection.count > 1 {
-                        Button("Group") { state.groupSelection() }
-                            .buttonStyle(PillButtonStyle())
-                    }
-                    if !state.selection.isEmpty {
-                        Button("Remove") { state.remove(state.orderedSelection) }
-                            .buttonStyle(PillButtonStyle())
-                    }
                     Button("Done") { state.editing = false }
                         .buttonStyle(PillButtonStyle(prominent: true))
                 }
