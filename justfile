@@ -56,9 +56,13 @@ uninstall:
     if [ -w "{{install_dir}}" ]; then rm -rf "$DEST"; else sudo rm -rf "$DEST"; fi
     echo "Removed $DEST"
 
-# Build the signed, notarised, universal build/LaunchGrid.zip for a GitHub release
+# Build the signed, notarised, universal build/release/LaunchGrid.zip
 release:
     scripts/release.sh
+
+# Create the GitHub release for that build and update the Homebrew cask (optional release notes)
+publish *notes:
+    scripts/publish.sh "{{notes}}"
 
 # Build, test and bundle, as CI does
 ci: build test (bundle "release")

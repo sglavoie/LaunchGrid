@@ -1,15 +1,17 @@
 #!/bin/sh
 # Builds the downloadable LaunchGrid: universal, signed with Developer ID, notarised and
-# stapled, zipped to build/LaunchGrid.zip for a GitHub release.
-# Usage: SIGN_IDENTITY="Developer ID Application: …" scripts/release.sh
-# Notarisation reads a notarytool keychain profile (NOTARY_PROFILE, default "launchgrid"),
-# stored once with: xcrun notarytool store-credentials launchgrid --apple-id … --team-id …
+# stapled, zipped to build/release/LaunchGrid.zip for a GitHub release (see publish.sh).
+# Usage: scripts/release.sh
+# SIGN_IDENTITY defaults to the keychain's only "Developer ID Application" identity, by its
+# hash: codesign can misread a name with accents. Notarisation reads a notarytool keychain
+# profile (NOTARY_PROFILE, default "launchgrid"), stored once with:
+#   xcrun notarytool store-credentials launchgrid --apple-id … --team-id …
 set -eu
 cd "$(dirname "$0")/.."
-: "${SIGN_IDENTITY:?Set SIGN_IDENTITY to your Developer ID Application identity}"
 PROFILE="${NOTARY_PROFILE:-launchgrid}"
-APP="build/LaunchGrid.app"
-ZIP="build/LaunchGrid.zip"
+OUT_DIR="build/release"
+APP="$OUT_DIR/LaunchGrid.app"
+ZIP="$OUT_DIR/LaunchGrid.zip"
 
 # The build number is the commit count, so uncommitted changes would ship under a used number.
 if [ -n "$(git status --porcelain)" ]; then
@@ -17,25 +19,48 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-UNIVERSAL=1 scripts/bundle.sh release
-codesign --verify --strict --verbose=2 "$APP"
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+    IDS="$(security find-identity -v -p codesigning | sed -n 's/.*) \([0-9A-F]\{40\}\) "Developer ID Application: .*/\1/p')"
+    if [ "$(echo "$IDS" | grep -c .)" != 1 ]; then
+        echo "Found $(echo "$IDS" | grep -c .) Developer ID Application identities; set SIGN_IDENTITY to one's hash." >&2
+        exit 1
+    fi
+    SIGN_IDENTITY="$IDS"
+fi
+export SIGN_IDENTITY
 
-rm -f "$ZIP"
-ditto -c -k --keepParent "$APP" "$ZIP"
-OUT="$(xcrun notarytool submit "$ZIP" --keychain-profile "$PROFILE" --wait --output-format json)"
-echo "$OUT"
-if ! echo "$OUT" | grep -q '"status" *: *"Accepted"'; then
-    ID="$(echo "$OUT" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p')"
+UNIVERSAL=1 scripts/bundle.sh release
+codesign --verify --strict --verbose=2 build/LaunchGrid.app
+
+# From here on, work only on copies in build/release: other recipes rebuild build/LaunchGrid.app,
+# and the notarisation ticket only matches the exact binary that was submitted.
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+ditto -c -k --keepParent build/LaunchGrid.app "$ZIP"
+git rev-parse HEAD > "$OUT_DIR/COMMIT"
+
+RESULT="$(xcrun notarytool submit "$ZIP" --keychain-profile "$PROFILE" --wait --output-format json)"
+echo "$RESULT"
+if ! echo "$RESULT" | grep -q '"status" *: *"Accepted"'; then
+    ID="$(echo "$RESULT" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p')"
     echo "Notarisation failed; see: xcrun notarytool log $ID --keychain-profile $PROFILE" >&2
     exit 1
 fi
 
-# Staple the ticket so the app opens offline, then zip the stapled copy.
-xcrun stapler staple "$APP"
+# Staple the ticket to the submitted app so it opens offline, then zip the stapled copy.
+# A ticket can take a moment to become available after acceptance, so retry briefly.
+ditto -x -k "$ZIP" "$OUT_DIR"
+n=0
+until xcrun stapler staple "$APP"; do
+    n=$((n + 1))
+    [ "$n" -lt 5 ] || exit 1
+    echo "Retrying the staple in 30 s…"
+    sleep 30
+done
 rm -f "$ZIP"
-ditto -c -k --keepParent "$APP" "$ZIP"
+(cd "$OUT_DIR" && ditto -c -k --keepParent LaunchGrid.app LaunchGrid.zip)
 spctl --assess --type execute --verbose "$APP"
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-echo "Built $ZIP (version $VERSION)"
+echo "Built $ZIP (version $VERSION, commit $(cut -c1-7 "$OUT_DIR/COMMIT")); publish it with: just publish"
 shasum -a 256 "$ZIP"

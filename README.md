@@ -6,7 +6,7 @@ About 99% of LaunchGrid (code, tests, documentation and website) was written by 
 
 ## Install
 
-Download `LaunchGrid.zip` from the [latest release](https://github.com/sglavoie/LaunchGrid/releases/latest), unzip it and move LaunchGrid to your Applications folder. It is signed and notarised, and runs on Apple silicon and Intel Macs with macOS 14 or later.
+Download `LaunchGrid.zip` from the [latest release](https://github.com/sglavoie/LaunchGrid/releases/latest), unzip it and move LaunchGrid to your Applications folder. Or use [Homebrew](https://brew.sh): `brew install --cask sglavoie/tap/launchgrid`, and `brew upgrade` for updates. It is signed and notarised, and runs on Apple silicon and Intel Macs with macOS 14 or later.
 
 ## Build and run
 
@@ -25,7 +25,7 @@ The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home
 
 Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.appgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 
-`just release` (`scripts/release.sh`) makes the downloadable build: universal, signed with the `SIGN_IDENTITY` Developer ID, notarised, stapled and zipped to `build/LaunchGrid.zip`. The script's header describes the one-time notarisation setup. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
+`just release` (`scripts/release.sh`) makes the downloadable build: universal, signed with your Developer ID (found in the keychain, or `SIGN_IDENTITY`), notarised, stapled and zipped to `build/release/LaunchGrid.zip`. The script's header describes the one-time notarisation setup. `just publish` (`scripts/publish.sh`) then creates the GitHub release for it and updates the Homebrew cask in [sglavoie/homebrew-tap](https://github.com/sglavoie/homebrew-tap). To release, bump `VERSION` in `scripts/bundle.sh`, commit, push, then run both. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
 
 On first launch, a welcome window lets you choose which installed apps to include (all by default), then offers these ways to set up the grid:
 
