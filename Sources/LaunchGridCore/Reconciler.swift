@@ -66,8 +66,9 @@ public enum Reconciler {
             return nil
         }
 
-        /// Returns the refreshed ref, or nil when it should leave the grid.
-        func refresh(_ ref: AppRef, at slot: PrunedApp) -> AppRef? {
+        /// Returns the refreshed ref, or nil when it should leave the grid. `slot` is only
+        /// built for an app actually pruned.
+        func refresh(_ ref: AppRef, at slot: () -> PrunedApp) -> AppRef? {
             var ref = ref
             if let (found, moved) = match(for: ref) {
                 if moved { report.moved.append(found.name) }
@@ -76,7 +77,7 @@ public enum Reconciler {
                 ref.bundleID = found.bundleID ?? ref.bundleID
             } else if prune && isReachable(ref.path) {
                 report.removed.append(ref.title)
-                var slot = slot
+                var slot = slot()
                 slot.app = ref
                 pruned.append(slot)
                 return nil
@@ -92,17 +93,19 @@ public enum Reconciler {
             let pageID = grid.pages[p].id
             let items = grid.pages[p].items
             grid.pages[p].items = items.enumerated().compactMap { i, item in
-                let before = items[..<i].suffix(neighbourMemory).map(\.id)
+                func before() -> [UUID] { items[..<i].suffix(neighbourMemory).map(\.id) }
                 switch item {
                 case .app(let a):
-                    let slot = PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before)
-                    return refresh(a, at: slot).map(GridItem.app)
+                    return refresh(a) { PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before()) }
+                        .map(GridItem.app)
                 case .folder(var f):
-                    let apps = f.apps
+                    let (apps, folderID, folderName) = (f.apps, f.id, f.name)
                     f.apps = apps.enumerated().compactMap { fi, a in
-                        refresh(a, at: PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,
-                                                 folderID: f.id, folderName: f.name, folderIndex: fi,
-                                                 before: before, folderBefore: apps[..<fi].suffix(neighbourMemory).map(\.id)))
+                        refresh(a) {
+                            PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,
+                                      folderID: folderID, folderName: folderName, folderIndex: fi,
+                                      before: before(), folderBefore: apps[..<fi].suffix(neighbourMemory).map(\.id))
+                        }
                     }
                     guard f.apps.isEmpty else { return .folder(f) }
                     for k in pruned.indices where pruned[k].folderID == f.id { pruned[k].folderEmptied = true }
@@ -160,9 +163,11 @@ public enum Reconciler {
     /// Adds apps explicitly, clearing them from the removed list. `installed` tells which
     /// apps share a bundle ID, so including one copy keeps the others excluded.
     public static func add(_ apps: [InstalledApp], to grid: inout Grid, installed: [InstalledApp] = []) {
-        let paths = Set(grid.allApps.map(\.path))
-        let new = apps.filter { !paths.contains($0.path) }
-        for app in apps { grid.setExcluded(app, false, among: installed + apps) }
+        var paths = Set(grid.allApps.map(\.path))
+        // `insert` also drops an app listed twice in `apps`.
+        let new = apps.filter { paths.insert($0.path).inserted }
+        let copies = CopyIndex(installed + apps)
+        for app in apps { grid.setExcluded(app, false, copies: copies) }
         grid.appendToFirstFree(new.map { .app($0.makeRef()) })
     }
 
@@ -171,12 +176,13 @@ public enum Reconciler {
     public static func choose(include: [InstalledApp], exclude: [InstalledApp], in grid: inout Grid,
                               installed: [InstalledApp] = []) {
         let among = installed + include + exclude + grid.allApps.map(InstalledApp.init)
+        let copies = CopyIndex(among)
         let paths = Set(exclude.map(\.path))
         // Match by key too (a ref whose path is stale), unless other copies share that key.
-        let keys = Set(exclude.filter { !$0.hasCopies(among: among) }.map(\.key))
+        let keys = Set(exclude.filter { !copies.hasCopies($0) }.map(\.key))
         let ids = grid.allApps.filter { paths.contains($0.path) || keys.contains($0.key) }.map(\.id)
         grid.removingEmptiedPages { $0.remove(ids, installed: among) }
-        for app in exclude { grid.setExcluded(app, true, among: among) }
+        for app in exclude { grid.setExcluded(app, true, copies: copies) }
         add(include, to: &grid, installed: among)
     }
 }
@@ -185,11 +191,26 @@ extension InstalledApp {
     init(_ ref: AppRef) {
         self.init(bundleID: ref.bundleID, path: ref.path, name: ref.name)
     }
+}
 
-    /// Whether another app in `among` shares this one's bundle ID (Xcode and Xcode-beta).
-    func hasCopies(among: [InstalledApp]) -> Bool {
-        bundleID != nil && among.contains { $0.bundleID == bundleID && $0.path != path }
+/// Paths per bundle ID, built once so looking up an app's copies doesn't rescan the list.
+struct CopyIndex {
+    private var paths: [String: Set<String>] = [:]
+
+    init(_ apps: [InstalledApp]) {
+        for app in apps {
+            if let id = app.bundleID { paths[id, default: []].insert(app.path) }
+        }
     }
+
+    /// Paths of the other apps sharing `app`'s bundle ID (Xcode and Xcode-beta).
+    func copies(of app: InstalledApp) -> Set<String> {
+        guard let id = app.bundleID, var found = paths[id] else { return [] }
+        found.remove(app.path)
+        return found
+    }
+
+    func hasCopies(_ app: InstalledApp) -> Bool { !copies(of: app).isEmpty }
 }
 
 extension Grid {
@@ -206,7 +227,12 @@ extension Grid {
     /// `among` is excluded by path, and including it when the whole bundle ID was excluded
     /// keeps the other copies out.
     public mutating func setExcluded(_ app: InstalledApp, _ excluded: Bool, among: [InstalledApp]) {
-        let copies = among.filter { app.hasCopies(among: [$0]) }.map(\.path)
+        setExcluded(app, excluded, copies: CopyIndex(among))
+    }
+
+    /// `setExcluded(_:_:among:)` with the copies indexed once, for callers setting many apps.
+    mutating func setExcluded(_ app: InstalledApp, _ excluded: Bool, copies index: CopyIndex) {
+        let copies = index.copies(of: app)
         if excluded {
             removedBundleIDs.insert(copies.isEmpty ? app.key : app.path)
         } else {

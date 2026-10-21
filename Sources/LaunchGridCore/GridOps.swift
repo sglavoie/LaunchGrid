@@ -162,8 +162,8 @@ extension Grid {
     /// by path, so the other copy can stay.
     public mutating func remove(_ ids: [UUID], installed: [InstalledApp] = []) {
         let removed = detach(ids).flatMap(\.apps).map(InstalledApp.init)
-        let among = installed + removed + allApps.map(InstalledApp.init)
-        for app in removed { setExcluded(app, true, among: among) }
+        let copies = CopyIndex(installed + removed + allApps.map(InstalledApp.init))
+        for app in removed { setExcluded(app, true, copies: copies) }
         normalize()
     }
 
@@ -240,7 +240,7 @@ extension Grid {
 
     @discardableResult
     public mutating func addPage(after index: Int? = nil, title: String? = nil) -> Int {
-        let at = min((index ?? pages.count - 1) + 1, pages.count)
+        let at = min(max(0, (index ?? pages.count - 1) + 1), pages.count)
         pages.insert(Page(title: title), at: at)
         return at
     }
@@ -316,13 +316,14 @@ extension Grid {
         pages[index].items = Grid.sorted(pages[index].items, folders: folders)
     }
 
-    /// Sorts every top-level item and re-flows them across pages. Folders stay intact.
+    /// Sorts every top-level item and re-flows them across pages. Folders stay intact; page
+    /// `n` keeps the old page `n`'s ID and title.
     public mutating func sortEverything(folders: FolderPlacement = .first) {
         let all = Grid.sorted(pages.flatMap(\.items), folders: folders)
-        let ids = pages.map(\.id)
+        let old = pages
         pages = stride(from: 0, to: max(all.count, 1), by: capacity).enumerated().map { n, start in
             let chunk = all.isEmpty ? [] : Array(all[start..<min(start + capacity, all.count)])
-            return Page(id: n < ids.count ? ids[n] : UUID(), items: chunk)
+            return n < old.count ? Page(id: old[n].id, title: old[n].title, items: chunk) : Page(items: chunk)
         }
     }
 }
