@@ -116,3 +116,14 @@ document.querySelectorAll("[data-try]").forEach((b) => b.addEventListener("click
 }));
 
 render();
+
+// A link to the section already in the address bar doesn't re-trigger :target, so replay its flash (style.css).
+document.querySelectorAll('a[href^="/#"], a[href^="#"]').forEach((a) => a.addEventListener("click", () => {
+    const hash = new URL(a.href).hash;
+    if (hash !== location.hash) return;
+    const section = document.querySelector(hash)?.closest(".section");
+    if (!section) return;
+    section.style.animation = "none";
+    void section.offsetWidth;
+    section.style.animation = "";
+}));

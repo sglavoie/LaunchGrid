@@ -141,6 +141,9 @@ p { margin: 0 0 1em; }
 
 /* Sections */
 .section { padding: clamp(48px, 7vw, 88px) 0; border-top: 1px solid var(--line); }
+/* Near the bottom of a tall window the page can't scroll a linked section to the top, so flash it instead. */
+.section:has(:target) { animation: arrive 1.6s ease-out; }
+@keyframes arrive { from { background: color-mix(in srgb, var(--accent) 14%, transparent); } }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: clamp(24px, 5vw, 72px); }
 .split > div > p:first-child { margin-top: 0; }
 .prose { max-width: var(--measure); }
