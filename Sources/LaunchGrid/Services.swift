@@ -12,6 +12,11 @@ enum Launcher {
         var errorDescription: String? { "The app is no longer on this Mac." }
     }
 
+    struct VolumeNotMounted: LocalizedError {
+        var volume: String
+        var errorDescription: String? { "It's on “\(volume)”, which isn't connected." }
+    }
+
     /// Opens the app at its stored path, falling back to its bundle ID.
     /// Returns the path that was actually launched.
     @MainActor
@@ -27,12 +32,25 @@ enum Launcher {
                 failure = error
             }
         }
+        // An app on a volume that isn't mounted hasn't gone anywhere: say so, rather than open
+        // another copy with its bundle ID (Xcode for Xcode-beta).
+        if let volume = Volume.unmountedVolume(for: app.path) { throw VolumeNotMounted(volume: volume) }
         // Retry elsewhere only if Launch Services knows another copy.
         if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id), url.path != app.path {
             _ = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
             return url.path
         }
         throw failure
+    }
+}
+
+enum Volume {
+    /// The name of the volume holding `path` when that volume isn't mounted. Only paths
+    /// under /Volumes can be on one that isn't.
+    static func unmountedVolume(for path: String) -> String? {
+        let parts = (path as NSString).pathComponents
+        guard parts.count > 2, parts[0] == "/", parts[1] == "Volumes" else { return nil }
+        return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2]) ? nil : parts[2]
     }
 }
 

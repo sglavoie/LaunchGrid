@@ -251,11 +251,11 @@ final class AppState {
     /// an unmounted volume or under a scan folder that is currently missing.
     private func isReachable(_ path: String, missingRoots: [String]) -> Bool {
         if missingRoots.contains(where: { path.hasPrefix($0 + "/") }) { return false }
-        let parts = (path as NSString).pathComponents
-        if parts.count > 2, parts[0] == "/", parts[1] == "Volumes" {
-            return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
-        }
-        return true
+        return Volume.unmountedVolume(for: path) == nil
+    }
+
+    private var missingRoots: [String] {
+        prefs.scanRoots.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) }
     }
 
     /// Merges the catalog into the grid. Not an undo step: it mirrors the disk.
@@ -378,7 +378,11 @@ final class AppState {
         Task {
             do {
                 let path = try await Launcher.launch(app)
-                if path != app.path { rememberPath(path, of: app.id) }
+                let missingRoots = missingRoots
+                if Self.followsLaunch(to: path, of: app, in: grid,
+                                      isReachable: { self.isReachable($0, missingRoots: missingRoots) }) {
+                    rememberPath(path, of: app.id)
+                }
             } catch {
                 if isShown {
                     showToast("Could not open \(app.title): \(error.localizedDescription)")
@@ -387,6 +391,19 @@ final class AppState {
                 }
             }
         }
+    }
+
+    /// Whether launching `app` through its bundle ID, which opened the copy at `launched`,
+    /// means the app moved there. Not when another tile already stands for that copy
+    /// (Xcode-beta's tile opened Xcode), when its own path is only out of reach (an unmounted
+    /// volume), or when its app is still there and merely failed to open.
+    nonisolated static func followsLaunch(
+        to launched: String, of app: AppRef, in grid: Grid,
+        isReachable: (String) -> Bool,
+        pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> Bool {
+        launched != app.path && isReachable(app.path) && !pathExists(app.path)
+            && !grid.allApps.contains { $0.id != app.id && $0.path == launched }
     }
 
     /// Records where a moved app now lives. Not an undo step: like `reconcile()`, it mirrors the disk.
