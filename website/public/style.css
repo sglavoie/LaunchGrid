@@ -139,6 +139,32 @@ p { margin: 0 0 1em; }
 }
 .tries button:hover { border-color: var(--accent); }
 
+/* Video of the real app (scripts/record-demo.sh) */
+.shot { padding-bottom: clamp(48px, 7vw, 88px); }
+.shot figure { margin: 0; }
+.shot video {
+    display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: clamp(8px, 1.4vw, 16px); background: #000;
+    box-shadow: 0 30px 60px -30px rgb(0 0 0 / 0.6), 0 0 0 1px var(--line);
+}
+.shot figcaption { margin-top: 14px; text-align: center; font-size: 0.95rem; color: var(--muted); }
+
+/* Settings screenshots: every panel shares one grid cell, so switching tabs never changes the height. */
+.tablist { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.tablist button {
+    font: 600 0.95rem/1 var(--text); color: var(--ink); background: none; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px;
+}
+.tablist button:hover { border-color: var(--accent); }
+.tablist button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.panels { display: grid; gap: 40px; }
+.settings-tabs.ready .panels { gap: 0; }
+.settings-tabs.ready .panel { grid-area: 1 / 1; }
+.settings-tabs.ready .panel:not(.current) { visibility: hidden; }
+.panel { margin: 0; }
+.panel figcaption { color: var(--muted); margin-bottom: 18px; min-height: 3.2em; }
+.panel figcaption strong { color: var(--ink); }
+.panel img { display: block; width: min(100%, 520px); filter: drop-shadow(0 18px 30px rgb(0 0 0 / 0.28)); }
+
 /* Sections */
 .section { padding: clamp(48px, 7vw, 88px) 0; border-top: 1px solid var(--line); }
 /* Near the bottom of a tall window the page can't scroll a linked section to the top, so flash it instead. */

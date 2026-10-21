@@ -117,6 +117,30 @@
         </div>
       </section>
 
+      <section class="shot" aria-label="Video of LaunchGrid">
+        <div class="wrap">
+          <figure>
+            <!-- Recorded by scripts/record-demo.sh; demo.js pauses it for reduced motion. -->
+            <video
+              id="demo-video"
+              src="/video/demo.mp4"
+              poster="/video/demo-poster.webp"
+              width="1920"
+              height="1080"
+              autoplay
+              muted
+              loop
+              playsinline
+              aria-label="LaunchGrid in use: moving through the grid with the arrow keys, finding Visual Studio Code by typing vsc and Calculator and Calendar by typing cal, turning to the second page and back, then grouping Discord, FaceTime and Messages into a folder named Social and undoing it."
+            ></video>
+            <figcaption>
+              The real app, driven from the keyboard: arrows, search, pages,
+              a folder, and undo.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
       <section class="section" aria-labelledby="arrange">
         <div class="wrap split">
           <div>
@@ -223,6 +247,78 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="settings">
+        <div class="wrap split">
+          <div>
+            <h2 id="settings">Every setting, in four tabs.</h2>
+            <p>
+              These are the real Settings, captured from the app. Everything
+              shown is included, with nothing locked.
+            </p>
+          </div>
+          <!-- Captured by scripts/record-demo.sh; demo.js turns the list into tabs. -->
+          <div class="settings-tabs">
+            <div class="tablist" role="tablist" aria-label="Settings tabs" hidden>
+              <button type="button" role="tab" id="tab-general" aria-controls="panel-general" aria-selected="true">General</button>
+              <button type="button" role="tab" id="tab-appearance" aria-controls="panel-appearance" aria-selected="false" tabindex="-1">Appearance</button>
+              <button type="button" role="tab" id="tab-layout" aria-controls="panel-layout" aria-selected="false" tabindex="-1">Layout</button>
+              <button type="button" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false" tabindex="-1">Library</button>
+            </div>
+            <div class="panels">
+              <figure class="panel" id="panel-general" role="tabpanel" aria-labelledby="tab-general">
+                <figcaption>
+                  <strong>General.</strong> Pick the shortcut, open at login,
+                  show LaunchGrid in the Dock, the menu bar or both, and choose
+                  whether new apps join the grid on their own.
+                </figcaption>
+                <picture>
+                  <source srcset="/images/settings-general-dark.webp" media="(prefers-color-scheme: dark)" />
+                  <img src="/images/settings-general-light.webp" width="1160" height="1296" loading="lazy" decoding="async"
+                    alt="The General tab: the show and hide shortcut, open at login, Dock and menu bar icons, and whether to add new apps, hide after opening one, and hide on a click in an empty area." />
+                </picture>
+              </figure>
+              <figure class="panel" id="panel-appearance" role="tabpanel" aria-labelledby="tab-appearance">
+                <figcaption>
+                  <strong>Appearance.</strong> Full screen, full screen above
+                  the Dock, or a resizable window. A blurred desktop, your
+                  wallpaper, Liquid Glass, a solid colour or a picture of your
+                  own, and the size of the icons.
+                </figcaption>
+                <picture>
+                  <source srcset="/images/settings-appearance-dark.webp" media="(prefers-color-scheme: dark)" />
+                  <img src="/images/settings-appearance-light.webp" width="1160" height="1256" loading="lazy" decoding="async"
+                    alt="The Appearance tab: window mode, background style and dimming, icon size, and whether to show app names." />
+                </picture>
+              </figure>
+              <figure class="panel" id="panel-layout" role="tabpanel" aria-labelledby="tab-layout">
+                <figcaption>
+                  <strong>Layout.</strong> How many rows and columns fit on a
+                  page, and where folders go when you sort.
+                </figcaption>
+                <picture>
+                  <source srcset="/images/settings-layout-dark.webp" media="(prefers-color-scheme: dark)" />
+                  <img src="/images/settings-layout-light.webp" width="1160" height="1256" loading="lazy" decoding="async"
+                    alt="The Layout tab: the number of rows and columns, where folders go when sorting, and a Sort Everything button." />
+                </picture>
+              </figure>
+              <figure class="panel" id="panel-library" role="tabpanel" aria-labelledby="tab-library">
+                <figcaption>
+                  <strong>Library.</strong> Choose which apps belong on the
+                  grid, add ones from anywhere, scan extra folders, save or load
+                  a layout file, import from AppGrid or Launchpad, or rebuild
+                  from scratch.
+                </figcaption>
+                <picture>
+                  <source srcset="/images/settings-library-dark.webp" media="(prefers-color-scheme: dark)" />
+                  <img src="/images/settings-library-light.webp" width="1160" height="1616" loading="lazy" decoding="async"
+                    alt="The Library tab: app counts, Choose Apps, Add Missing Apps, Rescan and Regenerate Icons; rebuild by category or alphabetically; extra folders to scan; and saving, loading and importing grid files." />
+                </picture>
+              </figure>
+            </div>
+          </div>
         </div>
       </section>
 

@@ -127,3 +127,42 @@ document.querySelectorAll('a[href^="/#"], a[href^="#"]').forEach((a) => a.addEve
     void section.offsetWidth;
     section.style.animation = "";
 }));
+
+// The video below the hero loops; with reduced motion, it waits for its controls instead.
+const video = document.getElementById("demo-video");
+if (video && matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    video.removeAttribute("autoplay");
+    video.pause();
+    video.controls = true;
+}
+
+// Settings screenshots: one panel at a time behind a tab list, arrow keys moving between tabs.
+const settings = document.querySelector(".settings-tabs");
+if (settings) {
+    const tabs = [...settings.querySelectorAll('[role="tab"]')];
+    const select = (tab, focus) => {
+        for (const t of tabs) {
+            const on = t === tab;
+            t.setAttribute("aria-selected", String(on));
+            t.tabIndex = on ? 0 : -1;
+            const panel = document.getElementById(t.getAttribute("aria-controls"));
+            panel.classList.toggle("current", on);
+            panel.toggleAttribute("inert", !on);
+        }
+        if (focus) tab.focus();
+    };
+    tabs.forEach((tab, i) => {
+        tab.addEventListener("click", () => select(tab, false));
+        tab.addEventListener("keydown", (e) => {
+            const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+            const target = step ? tabs[(i + step + tabs.length) % tabs.length]
+                : e.key === "Home" ? tabs[0] : e.key === "End" ? tabs.at(-1) : null;
+            if (!target) return;
+            e.preventDefault();
+            select(target, true);
+        });
+    });
+    settings.querySelector('[role="tablist"]').hidden = false;
+    settings.classList.add("ready");
+    select(tabs[0], false);
+}
