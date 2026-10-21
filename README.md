@@ -7,15 +7,15 @@ A free, Launchpad-style app grid for macOS 14+, rebuilt from the observed behavi
 ```sh
 scripts/bundle.sh            # release build → build/LaunchGrid.app (ad-hoc signed, hardened runtime)
 open build/LaunchGrid.app
-scripts/install.sh           # build, quit any running copy, replace /Applications/LaunchGrid.app, relaunch
+scripts/install.sh           # build, quit the installed copy, replace /Applications/LaunchGrid.app, relaunch
 swift test                   # core and app-state tests
 ```
 
-With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just test`, `just ci` and `just clean`.
+With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just test`, `just ci` and `just clean`.
 
 CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26.
 
-Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.appgrid` handler.
+Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.appgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 
 Set `SIGN_IDENTITY="Developer ID Application: …"` before `scripts/bundle.sh` to sign for notarisation. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
 

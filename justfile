@@ -1,7 +1,6 @@
 # Run `just` to list the recipes.
 
 app := "build/LaunchGrid.app"
-bundle_id := "com.sglavoie.launchgrid"
 install_dir := env("INSTALL_DIR", "/Applications")
 lsregister := "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
@@ -40,13 +39,19 @@ scratch config="debug": (bundle config)
 install *args:
     INSTALL_DIR="{{install_dir}}" scripts/install.sh {{args}}
 
-# Quit and remove the installed app; the layout and settings are kept
+# Remove the login item, quit and remove the installed app; the layout and settings are kept
 uninstall:
     #!/bin/sh
     set -eu
     DEST="{{install_dir}}/LaunchGrid.app"
     [ -e "$DEST" ] || { echo "Nothing installed at $DEST"; exit 0; }
-    osascript -e 'tell application id "{{bundle_id}}" to quit' >/dev/null 2>&1 || true
+    # The login item belongs to the bundle, so drop it while the bundle is still there. A copy
+    # from before --unregister-login-item would just start up instead, so only ask one that has it.
+    BIN="$DEST/Contents/MacOS/LaunchGrid"
+    if ! { grep -qaF -- --unregister-login-item "$BIN" && "$BIN" --unregister-login-item; }; then
+        echo "If LaunchGrid opened at login, remove it in System Settings › General › Login Items."
+    fi
+    scripts/quit-app.sh "$DEST"
     "{{lsregister}}" -u "$DEST" >/dev/null 2>&1 || true
     if [ -w "{{install_dir}}" ]; then rm -rf "$DEST"; else sudo rm -rf "$DEST"; fi
     echo "Removed $DEST"

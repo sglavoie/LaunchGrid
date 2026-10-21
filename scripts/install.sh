@@ -11,7 +11,6 @@ for arg in "$@"; do
     esac
 done
 
-BUNDLE_ID="com.sglavoie.launchgrid"
 DEST_DIR="${INSTALL_DIR:-/Applications}"
 DEST="$DEST_DIR/LaunchGrid.app"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -27,13 +26,8 @@ if [ ! -w "$DEST_DIR" ] || { [ -e "$DEST" ] && [ ! -w "$DEST" ]; }; then
 fi
 $SUDO mkdir -p "$DEST_DIR"
 
-# Quit a running copy so its bundle can be replaced; force it if it doesn't go quietly.
-if pgrep -xq LaunchGrid; then
-    osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
-    i=0
-    while pgrep -xq LaunchGrid && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-    pkill -x LaunchGrid 2>/dev/null || true
-fi
+# Quit the installed copy so its bundle can be replaced (a scratch run keeps going).
+scripts/quit-app.sh "$DEST"
 
 # Stage beside the destination, then swap, so a failed copy never leaves a half-installed app.
 STAGE="$DEST_DIR/.LaunchGrid.app.installing"

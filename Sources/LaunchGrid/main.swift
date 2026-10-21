@@ -3,6 +3,22 @@ import AppKit
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
 
 MainActor.assumeIsolated {
+    // `just uninstall`: drop the login item while the bundle that registered it still exists.
+    if CommandLine.arguments.contains("--unregister-login-item") {
+        guard LoginItem.isRequested else {
+            print("LaunchGrid: no login item to remove")
+            exit(0)
+        }
+        do {
+            try LoginItem.set(false)
+            print("LaunchGrid: login item removed")
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("LaunchGrid: could not remove the login item: \(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+
     // Single instance: hand over to the running copy and quit. A scratch run keeps its own
     // data, so it runs beside the installed copy.
     if !Preferences.isScratch && !AppDelegate.otherInstances.isEmpty {
