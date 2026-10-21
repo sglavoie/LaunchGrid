@@ -17,7 +17,7 @@ scripts/install.sh           # build, quit the installed copy, replace /Applicat
 swift test                   # core and app-state tests
 ```
 
-With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just test`, `just ci` and `just clean`.
+With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just sandbox` (the build signed with the Mac App Store sandbox, so its layout and settings live in its container; quit the installed copy first), `just test`, `just ci` and `just clean`.
 
 CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26.
 
@@ -25,7 +25,9 @@ The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home
 
 Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.appgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 
-`just release` (`scripts/release.sh`) makes the downloadable build: universal, signed with your Developer ID (found in the keychain, or `SIGN_IDENTITY`), notarised, stapled and zipped to `build/release/LaunchGrid.zip`. The script's header describes the one-time notarisation setup. `just publish` (`scripts/publish.sh`) then creates the GitHub release for it and updates the Homebrew cask in [sglavoie/homebrew-tap](https://github.com/sglavoie/homebrew-tap). To release, bump `VERSION` in `scripts/bundle.sh`, commit, push, then run both. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
+`just release` (`scripts/release.sh`) makes the downloadable build: universal, signed with your Developer ID (found in the keychain, or `SIGN_IDENTITY`), notarised, stapled and zipped to `build/release/LaunchGrid.zip`. The script's header describes the one-time notarisation setup. `just publish` (`scripts/publish.sh`) then creates the GitHub release for it and updates the Homebrew cask in [sglavoie/homebrew-tap](https://github.com/sglavoie/homebrew-tap). To release, bump `VERSION` in `scripts/bundle.sh`, commit, push, then run both. This build is **not sandboxed**, so it can scan any folder and read the old Launchpad/AppGrid databases without asking.
+
+`just app-store` (`scripts/app-store.sh`) makes the Mac App Store build: the same code in the App Sandbox (`scripts/LaunchGrid.entitlements`), without the debug scripts, signed with Apple Distribution and packaged as `build/app-store/LaunchGrid.pkg` for Transporter. The script's header describes the certificates and provisioning profile it needs. Inside the sandbox, LaunchGrid keeps security-scoped bookmarks to the extra scan folders, the custom background picture and apps added with Browse (`FileAccess` in `Services.swift`), and the AppGrid and Launchpad imports first ask for the database's folder. `~/Applications` is read through a temporary-exception entitlement. Both builds ship `scripts/PrivacyInfo.xcprivacy`.
 
 On first launch, a welcome window lets you choose which installed apps to include (all by default), then offers these ways to set up the grid:
 
@@ -80,7 +82,7 @@ Two targets, each with a test target (`LaunchGridCoreTests`, `LaunchGridTests`):
   - `Interaction`: one root `DragGesture` with arithmetic hit-testing, dwell timers for merge, reorder and edge-flip, and a live gap.
   - Carbon hotkey, FSEvents watcher with a debounced rescan (plus a 10-minute and on-wake fallback), icon cache rendered off the main thread, `SMAppService` login item.
 
-**Development aid:** `LAUNCHGRID_DEBUG_SCRIPT="build:alpha;show;drag:0,3;merge:1,2;snap:x;quit"` drives the UI with synthesized events and writes window snapshots to `LAUNCHGRID_DEBUG_DIR`. It only runs together with `LAUNCHGRID_DATA_DIR`, so it never edits your real layout; otherwise it's ignored with a note on stderr. `LAUNCHGRID_DATA_DIR` points the app at a scratch layout and the `com.sglavoie.launchgrid.scratch` settings domain, and lets it run beside the installed copy (which keeps the global shortcut). See `Sources/LaunchGrid/DebugScript.swift`.
+**Development aid:** `LAUNCHGRID_DEBUG_SCRIPT="build:alpha;show;drag:0,3;merge:1,2;snap:x;quit"` drives the UI with synthesized events and writes window snapshots to `LAUNCHGRID_DEBUG_DIR`. It only runs together with `LAUNCHGRID_DATA_DIR`, so it never edits your real layout; otherwise it's ignored with a note on stderr. It's left out of the Mac App Store build. `LAUNCHGRID_DATA_DIR` points the app at a scratch layout and the `com.sglavoie.launchgrid.scratch` settings domain, and lets it run beside the installed copy (which keeps the global shortcut). See `Sources/LaunchGrid/DebugScript.swift`.
 
 ### Deliberately left out
 

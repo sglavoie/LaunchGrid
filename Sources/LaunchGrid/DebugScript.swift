@@ -1,3 +1,4 @@
+#if !APP_STORE
 import AppKit
 import Carbon
 import LaunchGridCore
@@ -275,3 +276,4 @@ enum DebugScript {
         }
     }
 }
+#endif

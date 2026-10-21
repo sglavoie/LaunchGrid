@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let storeURL = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"]
             .map { URL(fileURLWithPath: $0).appendingPathComponent("grid.json") } ?? GridStore.defaultURL
+        FileAccess.restore()
         state = AppState(prefs: prefs, store: GridStore(url: storeURL))
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    FileAccess.restore()
                     self?.startWatching(onlyIfChanged: true)
                     self?.state.rescan()
                 }
@@ -96,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         state.rescan { [weak self] in
             guard let self else { return }
             self.catalogReady = true
+            #if !APP_STORE
             if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
                 // A script rebuilds and edits the layout: only against a scratch one.
                 if Preferences.isScratch {
@@ -104,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
             }
+            #endif
             if let url = self.pendingOpen {
                 // Loading needs the catalog, so a file that launched us waits for the first scan.
                 self.pendingOpen = nil
@@ -457,13 +461,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: Import / export
 
     @objc func importAppGrid() {
-        guard let url = LaunchpadImporter.appGridDatabaseURL else { return }
+        guard let url = LaunchpadImporter.appGridDatabaseURL, allowReading(url, from: "AppGrid") else { return }
         importDatabase(url, from: "AppGrid")
     }
 
     @objc func importLaunchpad() {
-        guard let url = LaunchpadImporter.launchpadDatabaseURL else { return }
+        guard let url = LaunchpadImporter.launchpadDatabaseURL, allowReading(url, from: "Launchpad") else { return }
         importDatabase(url, from: "Launchpad")
+    }
+
+    /// Inside the sandbox, a database outside it can only be read once the person picks its
+    /// folder (which also covers its write-ahead log). The panel opens on that folder, so
+    /// allowing it is one click.
+    private func allowReading(_ url: URL, from source: String) -> Bool {
+        guard Sandbox.isActive, !FileManager.default.isReadableFile(atPath: url.path) else { return true }
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        let panel = NSOpenPanel()
+        panel.message = "To import your \(source) layout, allow LaunchGrid to read this folder."
+        panel.prompt = "Allow"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = url.deletingLastPathComponent()
+        guard panel.runModal() == .OK else { return false }
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            showError("Could not import from \(source)", "Choose the folder that holds the \(source) database: \(url.deletingLastPathComponent().path)")
+            return false
+        }
+        return true
     }
 
     private func importDatabase(_ url: URL, from source: String) {

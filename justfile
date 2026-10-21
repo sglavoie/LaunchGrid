@@ -35,6 +35,15 @@ scratch config="debug": (bundle config)
     trap 'exit 130' INT TERM
     LAUNCHGRID_DATA_DIR="$DIR" "{{app}}/Contents/MacOS/LaunchGrid"
 
+# Bundle with the Mac App Store build's sandbox and run it, with logs in the terminal. Its layout
+# and settings live in its container; quit the installed copy first, or that one takes over
+sandbox config="debug":
+    #!/bin/sh
+    SANDBOX=1 scripts/bundle.sh {{config}}
+    trap '"{{lsregister}}" -u "{{app}}" >/dev/null 2>&1' EXIT
+    trap 'exit 130' INT TERM
+    "{{app}}/Contents/MacOS/LaunchGrid"
+
 # Build and install into /Applications, then relaunch (pass --no-open to skip)
 install *args:
     INSTALL_DIR="{{install_dir}}" scripts/install.sh {{args}}
@@ -59,6 +68,10 @@ uninstall:
 # Build the signed, notarised, universal build/release/LaunchGrid.zip
 release:
     scripts/release.sh
+
+# Build the sandboxed, signed build/app-store/LaunchGrid.pkg for App Store Connect
+app-store:
+    scripts/app-store.sh
 
 # Create the GitHub release for that build and update the Homebrew cask (optional release notes)
 publish *notes:

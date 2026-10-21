@@ -4,10 +4,10 @@
 
 ## Summary
 
-- **The website is ready.** `website/` holds the home page, privacy policy and support page for `launchgrid.sglavoie.com`. They go live with `just website-deploy`.
-- **One blocker remains: the App Sandbox.** Guideline 2.4.5(i) requires every Mac App Store app to be sandboxed, and LaunchGrid deliberately isn't. Several features need changes to work inside it (see [Sandbox](#1-app-sandbox)).
-- **The repository must be public before submission.** The support page sends people to GitHub issues, and a private repository shows reviewers a 404.
-- The rest is App Store Connect paperwork and packaging.
+- **The website is ready.** `website/` holds the home page, privacy policy and support page for `launchgrid.sglavoie.com`.
+- **The app is ready to be sandboxed.** `just app-store` builds the sandboxed, signed package (see [What's done in the app](#whats-done-in-the-app)). It needs a Mac App Store certificate pair and provisioning profile first, and the sandboxed build needs a manual test pass.
+- **The repository is public** under the MIT licence, so the support page's issue links work.
+- The rest is App Store Connect paperwork.
 
 ## URLs for App Store Connect
 
@@ -19,66 +19,73 @@
 
 Guideline 2.1(a) rejects "empty websites and other temporary content", so deploy the site before entering these. Once the app is approved, replace "Coming to the Mac App Store" on the home page (hero and "Get LaunchGrid") with the App Store link, using Apple's official badge from the [marketing resources](https://developer.apple.com/app-store/marketing/guidelines/).
 
-## Done in this change
+## What's done in the app
 
 | Requirement | Change |
 | --- | --- |
 | Privacy policy linked **inside the app** (5.1.1(i)) and an easy way to contact the developer (1.5) | "LaunchGrid Support" and "Privacy Policy" in the menu-bar icon's menu and the app menu (`AppDelegate.swift`) |
 | Export compliance | `ITSAppUsesNonExemptEncryption = false` in `scripts/bundle.sh`. LaunchGrid uses no encryption, so App Store Connect stops asking at each upload |
-| Copyright | `NSHumanReadableCopyright` was "Free and open. No paywall."; it is now "© 2026 Sébastien Lavoie" |
-
-## What is left in the app
+| Copyright | `NSHumanReadableCopyright` is "© 2026 Sébastien Lavoie" |
+| App Sandbox (2.4.5(i)) | `scripts/LaunchGrid.entitlements`; see [Sandbox](#1-app-sandbox) |
+| Privacy manifest | `scripts/PrivacyInfo.xcprivacy`; see [Privacy manifest](#2-privacy-manifest) |
+| Packaging with Xcode's tools (2.4.5(ii)) | `scripts/app-store.sh`; see [Packaging](#3-packaging-and-signing) |
 
 ### 1. App Sandbox
 
-Required by 2.4.5(i). Add `com.apple.security.app-sandbox` and, for the panels LaunchGrid already uses, `com.apple.security.files.user-selected.read-write` and `com.apple.security.files.bookmarks.app-scope`. Then each of these needs work:
+The App Store build is signed with the sandbox, `files.user-selected.read-write` (the save and open panels) and `files.bookmarks.app-scope`. The downloadable build stays unsandboxed; the code checks `Sandbox.isActive` at run time, so both builds share it.
 
-| Feature | Inside the sandbox | What to change |
-| --- | --- | --- |
-| Scanning `/Applications` and `/System/Applications` | Readable; FSEvents works | Nothing |
-| Scanning `~/Applications` (`AppScanner.defaultRoots`) | `homeDirectoryForCurrentUser` returns the container, so the folder is silently skipped | Get the real home from `getpwuid(getuid())`, and either ask for the folder once with `NSOpenPanel` (security-scoped bookmark) or request the `temporary-exception.files.home-relative-path.read-only` entitlement for `/Applications/` and justify it in the review notes |
-| Extra scan folders (`Preferences.scanRoots`) | Stored as paths, so unreadable after relaunch | Store security-scoped bookmarks from the panel; start access before scanning and watching |
-| Custom background picture (`customImagePath`) | Same | Same |
-| Wallpaper background (`desktopImageURL`) | Pictures outside readable locations fail to load | Already falls back to the blurred desktop; acceptable, or offer to pick the picture |
-| Launchpad import (`launchpadDatabaseURL`) | `/private/var/folders/…/com.apple.dock.launchpad` is outside the sandbox; the `fileExists` check fails, so the option disappears | Open an `NSOpenPanel` at that folder and import what the person picks |
-| AppGrid import (`appGridDatabaseURL`) | Another app's container: blocked by the sandbox and by macOS app data protection | Import only files the person picks (`.agrid` exports), or drop the menu item |
-| Layout and settings | Move into `~/Library/Containers/com.sglavoie.launchgrid` | Nothing for new users. Copies built from source today don't migrate; fine, since none were distributed |
-| Launching, Show in Finder, `.appgrid` files opened from Finder, Carbon hotkey, `SMAppService` | Work | Nothing. Open at Login is off until the person turns it on, which satisfies 2.4.5(iii) |
+| Feature | Inside the sandbox |
+| --- | --- |
+| Scanning `/Applications` and `/System/Applications`, FSEvents | Work unchanged |
+| Scanning `~/Applications` | The real home comes from `getpwuid` (`Sandbox.realHome`), and the `temporary-exception.files.home-relative-path.read-only` entitlement for `/Applications/` makes it readable. **Explain it in the review notes** (below). If review refuses it, drop the entitlement: people can still add the folder under Extra folders |
+| Extra scan folders, custom background picture, apps added with Browse | Read-only security-scoped bookmarks, saved when picked and reopened at launch and when a volume mounts (`FileAccess` in `Services.swift`) |
+| Wallpaper background | Pictures outside readable locations fall back to the blurred desktop |
+| Launchpad and AppGrid imports | Their databases are still found (existence checks work outside the sandbox; the Launchpad folder drops the container's suffix that `confstr` adds). Importing opens a panel on the database's folder; one click on Allow grants it, the database and its write-ahead log |
+| Layout and settings | In `~/Library/Containers/com.sglavoie.launchgrid`, apart from the downloadable build's |
+| Debug scripts (`DebugScript.swift`) | Compiled out (`-DAPP_STORE`), with their synthetic events |
+| Launching, Show in Finder, `.appgrid` files from Finder, Carbon hotkey, `SMAppService` | Work unchanged. Open at Login is off until the person turns it on, which satisfies 2.4.5(iii) |
 
-The privacy and support pages already name the container path for the App Store version, and describe the Launchpad import as "if your Mac still has the database". If the AppGrid import is dropped, nothing on the site changes; if `~/Applications` stops being scanned by default, update "the applications in your Applications folders" in the privacy policy.
+Checked: a sandboxed build (`SANDBOX=1 scripts/bundle.sh`) finds the same 128 apps as the unsandboxed one, including the five in `~/Applications`. **Still to test by hand with `just sandbox`** (quit the installed copy first): add an extra folder and a custom picture, relaunch and check they still work; add an app from `~/Downloads` with Browse and relaunch; import from AppGrid and from Launchpad (on a Mac that still has one) through the Allow panel; save and load a grid file; Open at Login.
 
 ### 2. Privacy manifest
 
-Add `Contents/Resources/PrivacyInfo.xcprivacy` with `NSPrivacyTracking` false, no tracking domains, no collected data types, and the APIs below. Apple's wording requires it for apps that use these APIs; whether App Store Connect enforces it for Mac apps is unclear, and adding it costs nothing.
+`Contents/Resources/PrivacyInfo.xcprivacy`, in both builds: no tracking, no collected data, and these APIs.
 
 | API category | Where | Reason |
 | --- | --- | --- |
-| User defaults | `Preferences.swift`, `Services.swift` | `CA92.1` (the app's own defaults) |
+| User defaults | `Preferences.swift`, `FileAccess` | `CA92.1` (the app's own defaults) |
 | File timestamps | `AppDelegate.isScratch` (`creationDate` of a marker in the app's temp folder) | `C617.1` (files in the app's container) |
-| File timestamps | `IconProvider` in `Services.swift` (`modificationDate` of other apps' `Info.plist`) | No approved reason fits well. Simplest fix: key the cache on `CFBundleVersion` and `CFBundleShortVersionString` instead of the date |
-| System boot time | `DebugScript.swift` (`systemUptime`) | `35F9.1`, or compile `DebugScript` out of release builds with `#if DEBUG`, which also keeps the synthetic-event hooks out of the shipped app |
+
+The icon cache no longer reads other apps' modification dates, for which no approved reason fits: it spots an app updated in place by its Info.plist versions and icon name. System boot time was only read by the debug scripts, which the App Store build leaves out.
 
 ### 3. Packaging and signing
 
-2.4.5(ii) requires packaging "using technologies provided in Xcode". `codesign`, `productbuild` and `altool` are Xcode tools, so `scripts/bundle.sh` can stay, with a Mac App Store mode that:
+`just app-store` (`scripts/app-store.sh`) needs a clean working tree, then:
 
-1. Builds universal (`swift build -c release --arch arm64 --arch x86_64`). Not required, but Intel Macs still run macOS 14 through 26.
-2. Copies the Mac App Store provisioning profile to `Contents/embedded.provisionprofile`.
-3. Signs with the **Apple Distribution** certificate and an entitlements file holding the sandbox keys plus `com.apple.application-identifier` (`TEAMID.com.sglavoie.launchgrid`) and `com.apple.developer.team-identifier`.
-4. Wraps the app with `productbuild --component build/LaunchGrid.app /Applications --sign "3rd Party Mac Developer Installer: …" LaunchGrid.pkg`.
-5. Uploads with `xcrun altool --upload-package` or the Transporter app.
+1. Reads the team ID from the provisioning profile, and checks the profile is for `com.sglavoie.launchgrid`.
+2. Builds universal with `-DAPP_STORE`, adds Xcode's build keys (`DTXcode`, `DTSDKName`…), which App Store Connect uses to check the SDK, and embeds the profile.
+3. Signs with **Apple Distribution** and the sandbox entitlements plus `com.apple.application-identifier` and `com.apple.developer.team-identifier`.
+4. Wraps the app with `productbuild`, signed with the **Mac Installer Distribution** certificate, into `build/app-store/LaunchGrid.pkg`.
+
+Upload the package with the Transporter app. One-time setup in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/):
+
+- Create the **Apple Distribution** and **Mac Installer Distribution** certificates and install them. The keychain has only Apple Development and Developer ID Application ones today.
+- Register the explicit App ID `com.sglavoie.launchgrid` (no capabilities needed).
+- Create a **Mac App Store Connect** provisioning profile for it and save it as `private/LaunchGrid.provisionprofile`, which git ignores (or set `PROVISIONING_PROFILE`).
 
 `CFBundleVersion` is the commit count, which rises with each commit, as App Store Connect requires. The icon set already includes the 1024 px (`512@2x`) size.
 
+## Names, licence and contact
+
 ### 4. Names, trademarks and the AppGrid origin
 
-- **4.1 (copycats) and 5.2.1 (intellectual property).** The README says LaunchGrid was "rebuilt from the observed behaviour of AppGrid" with "every former Pro feature" free. AppGrid is a paid Mac App Store app. A reviewer or AppGrid's developer reading that could see a copy. Before the repository goes public, rewrite those lines, and the "Deliberately left out" section that names RevenueCat and the paywall, to describe LaunchGrid on its own terms. The name, icon and interface are already distinct.
+- **4.1 (copycats) and 5.2.1 (intellectual property).** Done: the README describes LaunchGrid on its own terms, with no comparison to AppGrid's paid features. The name, icon and interface are distinct. Keep it that way in the App Store description.
 - **2.3.7 (metadata).** Keep "Launchpad" and "AppGrid" out of the name, subtitle and keywords. The description may say factually that it can import an older Launchpad layout. "Launchpad" is Apple's trademark; Apple's [trademark guidelines](https://www.apple.com/legal/intellectual-property/guidelinesfor3rdparties.html) allow referring to it in plain text, not as part of your product's branding.
 - **Name availability.** App Store Connect rejects a name another developer already uses; reserve "LaunchGrid" when creating the app record.
 
 ### 5. Open-sourcing
 
-- Make `sglavoie/LaunchGrid` public, with a licence, before submitting, so the support page's issue links work. MIT or Apache 2.0 avoids the long-running questions about the GPL and the App Store's terms.
+- Done: `sglavoie/LaunchGrid` is public under the MIT licence.
 - Reviewers sometimes reject support pages whose only contact needs an account. If that happens, add an email address (for example a Cloudflare Email Routing alias) to the support page's summary box.
 
 ## App Store Connect
@@ -95,7 +102,7 @@ Add `Contents/Resources/PrivacyInfo.xcprivacy` with `NSPrivacyTracking` false, n
 | Age rating | Answer the questionnaire; every answer is "none", which gives the lowest rating |
 | EU trader status | Required to be available in the EU under the Digital Services Act. A trader has the address, phone and email given to Apple shown on the product page in the EU. A free hobby app may qualify as non-trader; leaving out the EU is the other option |
 | Review contact | Name, email and a phone number in international format; not shown publicly |
-| Review notes | LaunchGrid lives in the menu bar (`LSUIElement`). ⌥Space shows the grid; right-click the menu-bar icon for Settings. The welcome window appears on first launch. Explain any temporary-exception entitlement from [Sandbox](#1-app-sandbox) |
+| Review notes | LaunchGrid lives in the menu bar (`LSUIElement`). ⌥Space shows the grid; right-click the menu-bar icon for Settings. The welcome window appears on first launch. For the entitlement: "LaunchGrid is an app launcher. It reads ~/Applications (read-only, through com.apple.security.temporary-exception.files.home-relative-path.read-only) because macOS and browsers install apps there, such as Chrome and Safari web apps, and a launcher that left them out would be incomplete. It only lists the app bundles there and reads their names, icons and Info.plist; it writes nothing." |
 | Copyright | 2026 Sébastien Lavoie |
 | AI disclosure | Not required by the guidelines for AI-written code; they cover AI only where an app shares personal data with a third-party AI (5.1.2(i)), which LaunchGrid doesn't. To match the website, end the description with: "About 99% of LaunchGrid was written with AI (Claude, by Anthropic). The app contains no AI features and makes no network connections." Keep it out of the name, subtitle and keywords (2.3.7) |
 

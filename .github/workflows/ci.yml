@@ -25,6 +25,8 @@ jobs:
             spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
       - name: Build
         run: swift build
+      - name: Build the Mac App Store variant
+        run: swift build -Xswiftc -DAPP_STORE
       - name: Test
         run: swift test
       - name: Bundle

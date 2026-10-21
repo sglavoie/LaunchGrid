@@ -4,7 +4,8 @@ import UniformTypeIdentifiers
 /// Finds application bundles on disk.
 public enum AppScanner {
     public static var defaultRoots: [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        // ~/Applications is readable in the sandbox through a temporary-exception entitlement.
+        let home = Sandbox.realHome
         return [
             "/Applications",
             "/System/Applications",

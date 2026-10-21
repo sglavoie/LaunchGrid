@@ -36,15 +36,16 @@ public enum LaunchpadImporter {
     public static var launchpadDatabaseURL: URL? {
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard confstr(_CS_DARWIN_USER_DIR, &buf, buf.count) > 0 else { return nil }
-        let dir = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        var dir = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        // Inside the sandbox the folder is the app's own subfolder of the real one.
+        if let id = Sandbox.containerID, dir.hasSuffix("/\(id)/") { dir.removeLast(id.utf8.count + 1) }
         let url = URL(fileURLWithPath: "/private" + dir + "com.apple.dock.launchpad/db/db")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     /// AppGrid's database inside its sandbox container, if present.
     public static var appGridDatabaseURL: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Containers/com.zekalogic.appgrid.app/Data/Library/Application Support/db")
+        let url = Sandbox.realHome.appendingPathComponent("Library/Containers/com.zekalogic.appgrid.app/Data/Library/Application Support/db")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 

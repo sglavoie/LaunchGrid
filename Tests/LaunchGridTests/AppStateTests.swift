@@ -233,7 +233,7 @@ func installed(_ name: String) -> InstalledApp {
         #expect(icons.cached(app.path) != nil)
         #expect(icons.dropStale([app.path]).isEmpty, "unchanged")
 
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: plist.path)
+        try Data("<plist><dict><key>CFBundleVersion</key><string>2</string></dict></plist>".utf8).write(to: plist)
         #expect(icons.dropStale([app.path]) == [app.path])
         #expect(icons.cached(app.path) == nil)
     }

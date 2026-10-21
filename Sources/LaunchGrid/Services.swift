@@ -64,8 +64,8 @@ final class IconProvider: @unchecked Sendable {
 
     private let cache = NSCache<NSString, NSImage>()
     private let queue = DispatchQueue(label: "launchgrid.icons", qos: .userInitiated, attributes: .concurrent)
-    /// When each cached icon's app was last modified, to spot apps updated in place.
-    private let versions = OSAllocatedUnfairLock(initialState: [String: Date]())
+    /// Each cached icon's app version, to spot apps updated in place.
+    private let versions = OSAllocatedUnfairLock(initialState: [String: String]())
     /// Renders under way, so a prewarm and an icon view asking for the same path share one.
     private let inFlight = OSAllocatedUnfairLock(initialState: [String: PendingRender]())
 
@@ -137,16 +137,14 @@ final class IconProvider: @unchecked Sendable {
         return stale
     }
 
-    /// An update rewrites the bundle's Info.plist (or replaces the whole bundle).
-    private static func modificationDate(_ path: String) -> Date? {
-        let fm = FileManager.default
-        let attrs = (try? fm.attributesOfItem(atPath: path + "/Contents/Info.plist")) ?? (try? fm.attributesOfItem(atPath: path))
-        return attrs?[.modificationDate] as? Date
-    }
-
-    /// The modification date, or `.distantPast` for a missing app so its icon is still tracked.
-    private static func version(_ path: String) -> Date {
-        modificationDate(path) ?? .distantPast
+    /// What an update changes in the bundle's Info.plist: its versions, and the icon's name.
+    /// A missing app gets a version of its own, so its icon is still tracked. (Not the file's
+    /// modification date: Apple's privacy manifest rules allow no reason for reading other apps'.)
+    private static func version(_ path: String) -> String {
+        guard FileManager.default.fileExists(atPath: path) else { return "missing" }
+        let info = NSDictionary(contentsOfFile: path + "/Contents/Info.plist")
+        return ["CFBundleShortVersionString", "CFBundleVersion", "CFBundleIconFile", "CFBundleIconName"]
+            .map { info?[$0] as? String ?? "" }.joined(separator: "|")
     }
 
     @discardableResult
@@ -413,6 +411,58 @@ final class FolderWatcher: @unchecked Sendable {
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
         }
+    }
+}
+
+// MARK: - Sandbox file access
+
+/// Keeps access, across launches, to what the person picked in a panel: extra scan folders,
+/// a custom background picture and apps added from elsewhere. Only the sandboxed (Mac App
+/// Store) build needs it; in the other, every call does nothing.
+@MainActor
+enum FileAccess {
+    private static let key = "bookmarks"
+    /// Bookmarked items in use, by the path they were picked at.
+    private static var granted: [String: URL] = [:]
+
+    /// Starts using the saved bookmarks not yet in use. At launch, and when a volume mounts:
+    /// a bookmark to an unmounted volume only resolves once it's back.
+    static func restore() {
+        guard Sandbox.isActive else { return }
+        let d = Preferences.appDefaults
+        var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
+        for (path, data) in saved where granted[path] == nil {
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, bookmarkDataIsStale: &stale),
+                  url.startAccessingSecurityScopedResource() else { continue }
+            granted[path] = url
+            if stale, let fresh = bookmark(url) { saved[path] = fresh }
+        }
+        d.set(saved, forKey: key)
+    }
+
+    /// Remembers an item just picked in a panel.
+    static func remember(_ url: URL) {
+        guard Sandbox.isActive, granted[url.path] == nil, let data = bookmark(url) else { return }
+        let d = Preferences.appDefaults
+        var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
+        saved[url.path] = data
+        d.set(saved, forKey: key)
+        if url.startAccessingSecurityScopedResource() { granted[url.path] = url }
+    }
+
+    static func forget(_ path: String) {
+        guard Sandbox.isActive else { return }
+        granted.removeValue(forKey: path)?.stopAccessingSecurityScopedResource()
+        let d = Preferences.appDefaults
+        var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
+        saved[path] = nil
+        d.set(saved, forKey: key)
+    }
+
+    private static func bookmark(_ url: URL) -> Data? {
+        try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                              includingResourceValuesForKeys: nil, relativeTo: nil)
     }
 }
 

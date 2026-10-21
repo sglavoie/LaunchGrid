@@ -1,5 +1,8 @@
 #!/bin/sh
 # Builds LaunchGrid.app into ./build. Usage: scripts/bundle.sh [debug|release]
+# SANDBOX=1 signs it with the App Sandbox entitlements, to try the Mac App Store build's
+# sandbox locally. APP_STORE=1 (set by app-store.sh) builds that variant itself: without the
+# debug scripts, with Xcode's build details and with ENTITLEMENTS and PROVISIONING_PROFILE.
 set -eu
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
@@ -9,6 +12,7 @@ VERSION="1.0.0"
 # UNIVERSAL=1 builds for both Apple silicon and Intel, as the downloadable release does.
 set -- -c "$CONFIG"
 [ "${UNIVERSAL:-0}" = 1 ] && set -- "$@" --arch arm64 --arch x86_64
+[ "${APP_STORE:-0}" = 1 ] && set -- "$@" -Xswiftc -DAPP_STORE
 swift build "$@"
 BIN="$(swift build "$@" --show-bin-path)/LaunchGrid"
 
@@ -31,6 +35,7 @@ if [ ! -f "$ICNS" ] || [ scripts/make-icon.swift -nt "$ICNS" ]; then
     rm -rf "$TMP"
 fi
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
+cp scripts/PrivacyInfo.xcprivacy "$APP/Contents/Resources/PrivacyInfo.xcprivacy"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -74,12 +79,32 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# App Store Connect checks which Xcode and SDK built the app, from the keys Xcode adds.
+if [ "${APP_STORE:-0}" = 1 ]; then
+    XCODE_VERSION="$(xcodebuild -version | sed -n 's/^Xcode //p')"
+    SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+    SDK_BUILD="$(xcrun --sdk macosx --show-sdk-build-version)"
+    PB=/usr/libexec/PlistBuddy
+    PLIST="$APP/Contents/Info.plist"
+    $PB -c "Add :CFBundleSupportedPlatforms array" -c "Add :CFBundleSupportedPlatforms:0 string MacOSX" "$PLIST"
+    $PB -c "Add :DTPlatformName string macosx" -c "Add :DTPlatformVersion string $SDK_VERSION" \
+        -c "Add :DTPlatformBuild string $SDK_BUILD" -c "Add :DTSDKName string macosx$SDK_VERSION" \
+        -c "Add :DTSDKBuild string $SDK_BUILD" -c "Add :DTCompiler string com.apple.compilers.llvm.clang.1_0" \
+        -c "Add :DTXcode string $(echo "$XCODE_VERSION.0.0" | awk -F. '{ printf "%d%d%d", $1, $2, $3 }')" \
+        -c "Add :DTXcodeBuild string $(xcodebuild -version | sed -n 's/^Build version //p')" \
+        -c "Add :BuildMachineOSBuild string $(sw_vers -buildVersion)" "$PLIST"
+    cp "$PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+fi
+
 # Ad-hoc signature with the hardened runtime; use a Developer ID identity to notarise
 # (notarisation also needs a secure timestamp, which ad-hoc signing can't have).
 IDENTITY="${SIGN_IDENTITY:--}"
+[ "${SANDBOX:-0}" = 1 ] && : "${ENTITLEMENTS:=scripts/LaunchGrid.entitlements}"
+set -- --force --options runtime
+[ -n "${ENTITLEMENTS:-}" ] && set -- "$@" --entitlements "$ENTITLEMENTS"
 if [ "$IDENTITY" = "-" ]; then
-    codesign --force --options runtime --sign - "$APP"
+    codesign "$@" --sign - "$APP"
 else
-    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+    codesign "$@" --timestamp --sign "$IDENTITY" "$APP"
 fi
 echo "Built $APP"

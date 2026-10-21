@@ -231,6 +231,8 @@ struct AppearanceSettings: View {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
+            if let old = state.prefs.customImagePath { FileAccess.forget(old) }
+            FileAccess.remember(url)
             state.prefs.customImagePath = url.path
         }
     }
@@ -348,6 +350,7 @@ struct LibrarySettings: View {
                         Spacer()
                         Button(role: .destructive) {
                             prefs.extraFolders.removeAll { $0 == path }
+                            FileAccess.forget(path)
                             actions.foldersChanged()
                         } label: { Image(systemName: "minus.circle") }
                         .buttonStyle(.borderless)
@@ -358,6 +361,7 @@ struct LibrarySettings: View {
                     panel.canChooseDirectories = true
                     panel.canChooseFiles = false
                     if panel.runModal() == .OK, let url = panel.url, !prefs.extraFolders.contains(url.path) {
+                        FileAccess.remember(url)
                         prefs.extraFolders.append(url.path)
                         actions.foldersChanged()
                     }
@@ -463,6 +467,8 @@ struct AddMissingAppsView: View {
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         guard panel.runModal() == .OK else { return }
         let browsed = panel.urls.compactMap { AppScanner.read(appAt: $0) }
+        // Apps outside the scan folders are read again at each scan.
+        for app in browsed { FileAccess.remember(URL(fileURLWithPath: app.path)) }
         guard !browsed.isEmpty else { return }
         let apps = picked + browsed.filter { app in !picked.contains { $0.path == app.path } }
         state.addApps(apps)
