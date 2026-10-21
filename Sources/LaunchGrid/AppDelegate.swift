@@ -69,6 +69,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return false
     }
 
+    /// A layout file opened from Finder.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first else { return }
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        if !state.grid.allApps.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?"
+            alert.informativeText = "Your current pages and folders will be replaced. ⌘Z in the grid undoes it."
+            alert.addButton(withTitle: "Replace")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        loadLayout(at: url)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         state?.saveNow()
     }
@@ -346,6 +362,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.allowedContentTypes = [.launchGridLayout, .json, UTType(filenameExtension: "agrid") ?? .data, .data]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadLayout(at: url)
+    }
+
+    private func loadLayout(at url: URL) {
         do {
             let data = try Data(contentsOf: url)
             if data.prefix(16) == Data("SQLite format 3\0".utf8) {
