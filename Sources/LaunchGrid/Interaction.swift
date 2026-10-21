@@ -365,6 +365,8 @@ extension AppState {
     private func drop() {
         let ids = drag.ids
         let page = currentPage
+        // Emptying the source page removes it, which shifts later pages; follow the target by ID.
+        let pageID = grid.pages.indices.contains(page) ? grid.pages[page].id : nil
         if let target = drag.mergeTarget, let targetItem = grid.item(target) {
             switch targetItem {
             case .folder(let f):
@@ -384,7 +386,13 @@ extension AppState {
             apply { g in g.removingEmptiedPages { $0.move(ids, toPage: page, at: gap) } }
         }
         selection.removeAll()
-        // The grid may have lost an emptied page; keep the view on a real page.
+        // Stay on the page dropped onto. A drop on the extra empty page created a new one;
+        // find it through the dropped item.
+        if let pageID, let i = grid.pages.firstIndex(where: { $0.id == pageID }) {
+            currentPage = i
+        } else if let first = ids.first, let loc = grid.locate(first) {
+            currentPage = loc.page
+        }
         currentPage = min(currentPage, grid.pages.count - 1)
     }
 }
