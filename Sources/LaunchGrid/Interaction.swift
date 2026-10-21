@@ -114,6 +114,12 @@ extension AppState {
     static let edgeDwell: TimeInterval = 0.6
     static let reorderDwell: TimeInterval = 0.18
 
+    /// Drag motion (lifts, gap shifts, merge highlights); none with Reduce Motion, so
+    /// icons change place without sliding.
+    static func dragMotion(_ animation: Animation) -> Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : animation
+    }
+
     var pageLayout: GridLayout {
         GridLayout(size: drag.pagerFrame.size, rows: grid.rows, columns: grid.columns)
     }
@@ -151,7 +157,7 @@ extension AppState {
             drag.decided = true
             drag.gestureStart = start
             if !beginItemDrag(at: start) {
-                drag.panning = query.isEmpty && openFolder == nil && drag.pagerFrame.contains(start)
+                drag.panning = query.isEmpty && openFolder == nil && textEdit == nil && drag.pagerFrame.contains(start)
             }
         }
         if drag.panning {
@@ -220,7 +226,7 @@ extension AppState {
         let siblings: [UUID] = openFolder.map { $0.apps.map(\.id) } ?? currentItems.map(\.id)
         let before = siblings.prefix { $0 != hit }.filter { !ids.contains($0) }.count
         drag.gap = before
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { drag.active = true }
+        withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.8))) { drag.active = true }
         drag.timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.dragTick() }
         }
@@ -243,16 +249,26 @@ extension AppState {
             closeFolder()
             drag.gap = nil
             drag.pendingGap = nil
+            drag.edgeSide = 0
         }
         updatePageTargets(p)
     }
 
     private func updateFolderGap(_ p: CGPoint) {
-        let local = CGPoint(x: p.x - drag.folderGridFrame.minX, y: p.y - drag.folderGridFrame.minY)
+        let frame = drag.folderGridFrame
+        // Holding at the side of a folder with several pages flips its pages. The zone is
+        // narrow and extends past the grid into the panel's margin.
+        let edge = min(36, frame.width * 0.05)
+        let side = p.x < frame.minX + edge ? -1 : (p.x > frame.maxX - edge ? 1 : 0)
+        if side != drag.edgeSide {
+            drag.edgeSide = side
+            drag.edgeSince = Date()
+        }
+        let local = CGPoint(x: p.x - frame.minX, y: p.y - frame.minY)
         guard let cell = folderLayout.cellIndex(at: local) else { return }
         let index = min(folderPage * FolderLayout.perPage(grid) + cell, remainingFolderApps().count)
         if index != drag.gap {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { drag.gap = index }
+            withAnimation(Self.dragMotion(.spring(response: 0.3, dampingFraction: 0.8))) { drag.gap = index }
         }
     }
 
@@ -265,7 +281,11 @@ extension AppState {
             drag.edgeSide = side
             drag.edgeSince = Date()
         }
-        guard let cell = pageLayout.cellIndex(at: local) else { return }
+        guard let cell = pageLayout.cellIndex(at: local) else {
+            drag.candidate = nil
+            if drag.mergeTarget != nil { withAnimation(.easeOut(duration: 0.15)) { drag.mergeTarget = nil } }
+            return
+        }
         let remaining = remainingItems(page: currentPage)
         let gap = drag.gap ?? remaining.count
         // Which item is displayed in this cell, given the gap shifts later items right.
@@ -302,12 +322,31 @@ extension AppState {
         let now = Date()
         if let g = drag.pendingGap, now.timeIntervalSince(drag.pendingGapSince) > Self.reorderDwell {
             drag.pendingGap = nil
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { drag.gap = g }
+            withAnimation(Self.dragMotion(.spring(response: 0.3, dampingFraction: 0.8))) { drag.gap = g }
         }
         if let c = drag.candidate, drag.mergeTarget != c, now.timeIntervalSince(drag.candidateSince) > Self.mergeDwell {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { drag.mergeTarget = c }
+            withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.7))) { drag.mergeTarget = c }
         }
-        if drag.edgeSide != 0, openFolder == nil, now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell {
+        guard drag.edgeSide != 0 else { return }
+        // An icon in the edge column reaches into the edge zone: while the pointer rests on
+        // one to merge, the edge dwell waits and starts over once it moves off.
+        if drag.candidate != nil || drag.mergeTarget != nil {
+            drag.edgeSince = now
+            return
+        }
+        if let folder = openFolder {
+            guard case .folder(folder.id) = drag.source, now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell else { return }
+            drag.edgeSince = now
+            let pages = FolderLayout.pageCount(apps: folder.apps.count, grid: grid)
+            let target = folderPage + drag.edgeSide
+            guard target >= 0, target < pages else { return }
+            withAnimation(Self.pageAnimation) { folderPage = target }
+            // The gap follows the pointer onto the new page.
+            drag.pendingGap = nil
+            updateFolderGap(drag.location)
+            return
+        }
+        if now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell {
             drag.edgeSince = now
             let target = currentPage + drag.edgeSide
             // Past the last page there is one empty page to drop onto.

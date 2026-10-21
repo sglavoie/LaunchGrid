@@ -134,6 +134,18 @@ extension NSScreen {
         (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
     }
 
-    /// Key for per-screen window frames.
-    var frameKey: String { "\(localizedName)-\(displayID)" }
+    /// Key for per-screen window frames: the display's UUID, which survives reconnecting
+    /// and restarts, unlike its number.
+    var frameKey: String {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue(),
+              let string = CFUUIDCreateString(nil, uuid) else { return legacyFrameKey }
+        return Self.stableKeyPrefix + (string as String)
+    }
+
+    /// The key frames were saved under before; read once to migrate them.
+    var legacyFrameKey: String { "\(localizedName)-\(displayID)" }
+
+    static let stableKeyPrefix = "display-"
+
+    static func isStableFrameKey(_ key: String) -> Bool { key.hasPrefix(stableKeyPrefix) }
 }

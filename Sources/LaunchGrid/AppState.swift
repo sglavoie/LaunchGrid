@@ -20,8 +20,11 @@ final class AppState {
     // MARK: Model
 
     private(set) var grid: Grid {
-        didSet { scheduleSave() }
+        didSet { gridGeneration &+= 1; scheduleSave() }
     }
+    /// Bumped on every grid change; keys the search cache without comparing grids.
+    @ObservationIgnored private var gridGeneration = 0
+    @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [AppRef])?
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
     /// LaunchGrid's own bundle ID: it never belongs on its own grid.
@@ -342,9 +345,15 @@ final class AppState {
 
     // MARK: Derived
 
-    /// Every match, best first.
+    /// Every match, best first. Cached per query and grid: several views and the key
+    /// handler read it on each keystroke.
     var allSearchResults: [AppRef] {
-        Search.results(in: grid.allApps, query: query)
+        // Read both through observation so views still track them on a cache hit.
+        let q = query, g = grid
+        if let c = searchCache, c.query == q, c.generation == gridGeneration { return c.results }
+        let results = Search.results(in: g.allApps, query: q)
+        searchCache = (q, gridGeneration, results)
+        return results
     }
 
     /// The matches shown: one page of them.
@@ -405,9 +414,11 @@ final class AppState {
         withAnimationIfShown { openFolderID = id }
     }
 
-    func closeFolder() {
+    /// - Parameter restoringFocus: put keyboard focus back on the folder's cell (Esc).
+    func closeFolder(restoringFocus: Bool = false) {
+        let cell = restoringFocus ? openFolderID.flatMap { id in currentItems.firstIndex { $0.id == id } } : nil
         withAnimationIfShown { openFolderID = nil }
-        focusIndex = nil
+        focusIndex = cell
     }
 
     func goToPage(_ p: Int) {
@@ -573,8 +584,15 @@ final class AppState {
         editing = false
         focusIndex = nil
         textEdit = nil
-        drag.cancel()
+        cancelDrag()
         swipeOffset = 0
+    }
+
+    /// Cancels a drag in progress. An edge flip may have moved the view onto the extra
+    /// empty page, which goes away with the drag, so the view returns to a real page.
+    func cancelDrag() {
+        drag.cancel()
+        currentPage = min(currentPage, grid.pages.count - 1)
     }
 
     /// Page and folder transitions; none with Reduce Motion, so nothing slides.

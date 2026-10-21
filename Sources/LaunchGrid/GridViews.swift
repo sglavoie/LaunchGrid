@@ -5,6 +5,7 @@ import LaunchGridCore
 /// Root of the overlay: background, search, pager, page dots, folder and drag layers.
 struct GridRootView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -37,18 +38,14 @@ struct GridRootView: View {
                     .onTapGesture { state.closeFolder() }
                     .transition(.opacity)
                 FolderPanel(folder: folder)
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
             }
 
-            if state.drag.active, let item = state.drag.primary {
-                DragGhost(item: item, count: state.drag.ids.count)
-                    .position(state.drag.location)
-                    .allowsHitTesting(false)
-            }
+            DragLayer()
 
             if let edit = state.textEdit {
                 TextEditCard(request: edit)
-                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
             }
 
             if let toast = state.toast {
@@ -60,7 +57,7 @@ struct GridRootView: View {
                         .background(.regularMaterial, in: Capsule())
                         .padding(.bottom, 80)
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 .allowsHitTesting(false)
             }
         }
@@ -70,7 +67,8 @@ struct GridRootView: View {
                 .onChanged { state.dragChanged(start: $0.startLocation, location: $0.location) }
                 .onEnded { state.dragEnded(start: $0.startLocation, location: $0.location, predicted: $0.predictedEndLocation) }
         )
-        .scaleEffect(state.isShown ? 1 : 1.04)
+        // With Reduce Motion the overlay only fades in.
+        .scaleEffect(state.isShown || reduceMotion ? 1 : 1.04)
         .opacity(state.isShown ? 1 : 0)
         .animation(.easeOut(duration: 0.15), value: state.isShown)
         .animation(.easeOut(duration: 0.2), value: state.toast)
@@ -153,6 +151,7 @@ struct SearchField: View {
         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.12)))
         .accessibilityLabel("Search, type to filter apps")
+        .accessibilityValue(state.query)
     }
 }
 
@@ -274,6 +273,8 @@ struct ItemCell: View {
     let iconSize: CGFloat
     let index: Int
     let page: Int
+    /// Set while a long press that entered edit mode is held: its release is not a tap.
+    @State private var swallowTap = false
 
     var body: some View {
         ItemView(
@@ -289,20 +290,33 @@ struct ItemCell: View {
         .accessibilityAction { state.activate(item) }
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.7).onEnded { _ in
-                if !state.drag.active { withAnimation { state.editing = true } }
+                guard !state.drag.active, !state.editing else { return }
+                swallowTap = true
+                withAnimation { state.editing = true }
+                Task {
+                    while NSEvent.pressedMouseButtons & 1 != 0 { try? await Task.sleep(for: .milliseconds(50)) }
+                    // Leave time for the release's tap to arrive and be swallowed.
+                    try? await Task.sleep(for: .milliseconds(150))
+                    swallowTap = false
+                }
             }
         )
         .contextMenu { ItemMenu(item: item) }
     }
 
     private func tapped() {
+        if swallowTap {
+            swallowTap = false
+            return
+        }
         let mods = NSEvent.modifierFlags
         if mods.contains(.command) {
             state.toggleSelection(item.id)
         } else if mods.contains(.shift) {
             state.extendSelection(to: item.id)
-        } else if state.editing && !state.selection.isEmpty {
-            state.toggleSelection(item.id)
+        } else if state.editing {
+            // Edit mode never launches: a click selects, or opens a folder to arrange it.
+            if item.folder != nil && state.selection.isEmpty { state.activate(item) } else { state.toggleSelection(item.id) }
         } else {
             state.activate(item)
         }
@@ -311,6 +325,7 @@ struct ItemCell: View {
 
 struct ItemView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: GridItem
     let iconSize: CGFloat
     var selected = false
@@ -331,7 +346,7 @@ struct ItemView: View {
                                 .frame(width: iconSize * 1.25, height: iconSize * 1.25)
                         }
                     }
-                    .scaleEffect(mergeTarget ? 1.12 : 1)
+                    .scaleEffect(mergeTarget && !reduceMotion ? 1.12 : 1)
                 if editing, let onDelete {
                     Button(action: onDelete) {
                         Image(systemName: "xmark")
@@ -368,7 +383,7 @@ struct ItemView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.folder != nil ? "Folder \(item.title)" : item.title)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
     @ViewBuilder private var icon: some View {
@@ -445,6 +460,20 @@ struct Jiggle: ViewModifier {
     }
 }
 
+/// The dragged item following the pointer. Its own view, so pointer moves re-render only
+/// this layer rather than the whole overlay.
+struct DragLayer: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        if state.drag.active, let item = state.drag.primary {
+            DragGhost(item: item, count: state.drag.ids.count)
+                .position(state.drag.location)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
 struct DragGhost: View {
     @Environment(AppState.self) private var state
     let item: GridItem
@@ -492,7 +521,8 @@ struct PageDots: View {
                         .contentShape(Circle().inset(by: -4))
                         .onTapGesture { state.goToPage(p) }
                         .help(state.grid.pages.indices.contains(p) ? title ?? "Page \(p + 1)" : "New page")
-                        .accessibilityLabel(title.map { "Page \(p + 1), \($0)" } ?? "Page \(p + 1)")
+                        .accessibilityLabel(state.grid.pages.indices.contains(p)
+                                            ? title.map { "Page \(p + 1), \($0)" } ?? "Page \(p + 1)" : "New page")
                         .accessibilityAddTraits(p == state.currentPage ? [.isButton, .isSelected] : .isButton)
                         .accessibilityAction { state.goToPage(p) }
                 }
@@ -561,6 +591,9 @@ struct FolderPanel: View {
                     .foregroundStyle(.white)
                     .onTapGesture { state.beginRename(folder.id) }
                     .help("Click to rename")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Renames the folder")
+                    .accessibilityAction { state.beginRename(folder.id) }
                 ZStack(alignment: .topLeading) {
                     FolderPageContent(folder: folder, size: gridSize)
                 }
@@ -576,6 +609,9 @@ struct FolderPanel: View {
                                 .fill(.white.opacity(p == state.folderPage ? 0.95 : 0.35))
                                 .frame(width: 7, height: 7)
                                 .onTapGesture { state.folderPage = p }
+                                .accessibilityLabel("Folder page \(p + 1) of \(pages)")
+                                .accessibilityAddTraits(p == state.folderPage ? [.isButton, .isSelected] : .isButton)
+                                .accessibilityAction { state.folderPage = p }
                         }
                     }
                 }
@@ -636,7 +672,8 @@ struct FolderItemCell: View {
                 let mods = NSEvent.modifierFlags
                 if mods.contains(.command) { state.toggleSelection(app.id) }
                 else if mods.contains(.shift) { state.extendSelection(to: app.id) }
-                else if state.editing && !state.selection.isEmpty { state.toggleSelection(app.id) }
+                // Edit mode never launches: a click selects.
+                else if state.editing { state.toggleSelection(app.id) }
                 else { state.launch(app) }
             }
             .accessibilityAction { state.launch(app) }

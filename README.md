@@ -35,9 +35,9 @@ On first launch, a welcome window lets you choose which installed apps to includ
 | Launch | Click, or arrow keys + Return |
 | Search | Just type. Results rank prefix > word start > initials ("vsc") > substring > fuzzy. Return opens the first result |
 | Pages | Swipe, scroll, ←/→, Tab, ⌘1…9, click the page dots |
-| Esc | Clears search → closes folder → leaves edit mode → hides |
-| Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. ✕ removes an item |
-| Select | ⌘-click / ⇧-click, ⌘A. Then drag them together, **Group** (⌘G), **Remove** (⌫), or Move to Page |
+| Esc | Clears search → closes folder (focus returns to it) → leaves edit mode → hides |
+| Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. Clicking selects instead of launching. ✕ removes an item; with the keyboard, Return renames the focused item (or the open folder) and ⌫ removes it |
+| Select | ⌘-click / ⇧-click, ⌘A, or Space on the focused item. Then drag them together, **Group** (⌘G), **Remove** (⌫), or Move to Page |
 | Drag & drop | Drop in a gap to reorder. Hold over an app for a moment to make a folder, or over a folder to add to it. Hold at the screen edge to flip pages, including onto a new page. Drag out of an open folder to take an app out |
 | Folders | Click the title to rename. Ungroup from the context menu. A folder disappears when its last app leaves |
 | Undo / redo | ⌘Z / ⇧⌘Z, 50 levels, including imports, rebuilds and resizes |

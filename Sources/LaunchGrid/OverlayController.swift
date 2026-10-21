@@ -138,7 +138,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case .behindDock:
             panel.setFrame(screen.visibleFrame, display: true)
         case .window:
-            if let saved = state.prefs.windowFrames[screen.frameKey] {
+            if let saved = savedFrame(for: screen) {
                 let r = NSRectFromString(saved)
                 if screen.visibleFrame.intersects(r) {
                     panel.setFrame(r, display: true)
@@ -170,7 +170,35 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func saveWindowFrame() {
         guard state.prefs.windowMode == .window, let panel, panel.isVisible, let screen = panel.screen else { return }
-        state.prefs.windowFrames[screen.frameKey] = NSStringFromRect(panel.frame)
+        var frames = state.prefs.windowFrames
+        frames[screen.frameKey] = NSStringFromRect(panel.frame)
+        Self.prune(&frames)
+        if frames != state.prefs.windowFrames { state.prefs.windowFrames = frames }
+    }
+
+    /// The frame saved for a display. One saved under the old name-and-number key, which
+    /// changed whenever the display reconnected, moves to the stable key the first time.
+    private func savedFrame(for screen: NSScreen) -> String? {
+        var frames = state.prefs.windowFrames
+        if let saved = frames[screen.frameKey] { return saved }
+        guard let old = frames.removeValue(forKey: screen.legacyFrameKey) else { return nil }
+        frames[screen.frameKey] = old
+        state.prefs.windowFrames = frames
+        return old
+    }
+
+    static let maxSavedFrames = 12
+
+    /// Old-format keys of connected displays are superseded. Past the cap, keys of displays
+    /// not connected now go, old-format ones first.
+    private static func prune(_ frames: inout [String: String]) {
+        let screens = NSScreen.screens
+        for s in screens where s.frameKey != s.legacyFrameKey && frames[s.frameKey] != nil { frames[s.legacyFrameKey] = nil }
+        guard frames.count > maxSavedFrames else { return }
+        let connected = Set(screens.map(\.frameKey))
+        let stale = frames.keys.filter { !connected.contains($0) }
+            .sorted { !NSScreen.isStableFrameKey($0) && NSScreen.isStableFrameKey($1) }
+        for key in stale.prefix(frames.count - maxSavedFrames) { frames[key] = nil }
     }
 
     // MARK: Input
@@ -199,15 +227,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
         switch code {
         case kVK_Escape:
-            if state.drag.active { state.drag.cancel(); state.currentPage = min(state.currentPage, state.grid.pages.count - 1) }
+            if state.drag.active { state.cancelDrag() }
             else if !state.query.isEmpty { state.query = "" }
-            else if state.openFolder != nil { state.closeFolder() }
+            else if state.openFolder != nil { state.closeFolder(restoringFocus: true) }
             else if state.editing { state.editing = false }
             else if !state.selection.isEmpty { state.selection.removeAll() }
             else { hide() }
             return nil
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            activateFocused()
+            if state.editing && state.query.isEmpty {
+                // Edit mode renames: the focused item, else the open folder.
+                if let id = focusedID ?? state.openFolderID { state.beginRename(id) }
+            } else {
+                activateFocused()
+            }
             return nil
         case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow:
             if cmd && (code == kVK_LeftArrow || code == kVK_RightArrow) {
@@ -219,8 +252,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case kVK_Delete, kVK_ForwardDelete:
             if !state.query.isEmpty {
                 if cmd { state.query = "" } else { state.query.removeLast() }
+            } else if event.isARepeat {
+                // Holding ⌫ only edits the search; removing is one press at a time.
             } else if !state.selection.isEmpty {
                 state.remove(state.orderedSelection)
+            } else if state.editing, let id = focusedID {
+                state.remove([id])
+                // Stay on the item that took its place (the folder may have gone with it).
+                let count = focusableCount
+                state.focusIndex = count > 0 ? state.focusIndex.map { min($0, count - 1) } : nil
             }
             return nil
         case kVK_Tab:
@@ -258,12 +298,23 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if mods.contains(.control) { return event }
         if let chars = event.characters, !chars.isEmpty,
            chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .privateUse }) {
-            if state.query.isEmpty && chars == " " { return nil }
+            if state.query.isEmpty && chars == " " {
+                // Space selects (or deselects) the focused item.
+                if !event.isARepeat, let id = focusedID { state.toggleSelection(id) }
+                return nil
+            }
             state.openFolderID = nil
             state.query += chars
             return nil
         }
         return nil
+    }
+
+    /// The item with keyboard focus on the page or in the open folder (not search results).
+    private var focusedID: UUID? {
+        guard state.query.isEmpty, let i = state.focusIndex else { return nil }
+        if let f = state.openFolder { return f.apps[safe: i]?.id }
+        return state.currentItems[safe: i]?.id
     }
 
     private var focusableCount: Int {
@@ -309,6 +360,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 state.focusIndex = code == kVK_LeftArrow ? max(0, state.currentItems.count - 1) : 0
             }
             return
+        }
+        if code == kVK_UpArrow || code == kVK_DownArrow {
+            // Past the top or bottom row, stay put. ↓ from a row above a short last row
+            // lands on the last item.
+            if next < 0 || (next >= count && i / cols == (count - 1) / cols) { return }
         }
         state.focusIndex = max(0, min(next, count - 1))
         if state.openFolder != nil, let f = state.focusIndex {

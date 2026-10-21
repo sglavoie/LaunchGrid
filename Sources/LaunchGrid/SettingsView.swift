@@ -79,6 +79,15 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+        // The login item can change in System Settings while this window stays open.
+        .onAppear(perform: refreshLoginItem)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshLoginItem() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in refreshLoginItem() }
+    }
+
+    private func refreshLoginItem() {
+        loginEnabled = LoginItem.isRequested
+        loginStatus = LoginItem.statusDescription
     }
 }
 
@@ -88,6 +97,9 @@ struct HotkeyRecorder: View {
     @State private var recording = false
     @State private var monitor: Any?
     @State private var hint: String?
+    /// The window recording started in; recording stops when it loses key status.
+    @State private var window: NSWindow?
+    @State private var timeout: Task<Void, Never>?
 
     var body: some View {
         let prefs = state.prefs
@@ -101,6 +113,11 @@ struct HotkeyRecorder: View {
         }
         // Closing Settings mid-recording must not leave the monitor up and the shortcut off.
         .onDisappear { if recording { stop() } }
+        // Switching away mid-recording would leave the shortcut unregistered until Settings
+        // came back; so would walking away.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            if recording, note.object as? NSWindow === window { stop() }
+        }
         if let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
             Label("Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another.",
                   systemImage: "exclamationmark.triangle")
@@ -117,6 +134,11 @@ struct HotkeyRecorder: View {
         recording = true
         hint = "Include ⌘, ⌥ or ⌃ (⇧ can be added), or use a function key. Esc cancels."
         HotkeyService.shared.unregister()
+        window = NSApp.keyWindow
+        timeout = Task {
+            try? await Task.sleep(for: .seconds(30))
+            if !Task.isCancelled, recording { stop() }
+        }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let code = Int(event.keyCode)
             let mods = KeyCombo.carbonModifiers(event.modifierFlags)
@@ -139,6 +161,9 @@ struct HotkeyRecorder: View {
         hint = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        window = nil
+        timeout?.cancel()
+        timeout = nil
         actions?.hotkeyChanged()
     }
 }
@@ -255,6 +280,8 @@ struct LayoutSettings: View {
         }
         .formStyle(.grouped)
         .onAppear { rows = grid.rows; columns = grid.columns }
+        // Undo, a load or an import can resize the grid while this tab is open.
+        .onChange(of: [grid.rows, grid.columns]) { rows = state.grid.rows; columns = state.grid.columns }
         .confirmationDialog("Re-flow the grid?", isPresented: $confirm) {
             Button("Resize to \(rows) × \(columns)") { apply() }
         } message: {
