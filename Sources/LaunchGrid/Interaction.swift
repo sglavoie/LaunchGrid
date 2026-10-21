@@ -70,8 +70,12 @@ final class DragController {
     @ObservationIgnored var edgeSide = 0
     @ObservationIgnored var edgeSince = Date()
     @ObservationIgnored var decided = false
+    @ObservationIgnored var gestureStart: CGPoint = .zero
     @ObservationIgnored var panning = false
     @ObservationIgnored var timer: Timer?
+    /// Start of a gesture cancelled while still in progress (Esc, hiding). Its remaining
+    /// events are ignored instead of starting a new drag.
+    @ObservationIgnored var abandonedStart: CGPoint?
 
     // Frames reported by views, in root coordinates.
     @ObservationIgnored var pagerFrame: CGRect = .zero
@@ -80,7 +84,14 @@ final class DragController {
 
     func isDragged(_ id: UUID) -> Bool { active && ids.contains(id) }
 
+    /// Cancels the drag; the rest of the gesture in progress, if any, is ignored.
     func cancel() {
+        if decided { abandonedStart = gestureStart }
+        reset()
+    }
+
+    /// Clears all drag state once a gesture has ended.
+    func reset() {
         timer?.invalidate()
         timer = nil
         active = false
@@ -132,8 +143,13 @@ extension AppState {
 
     func dragChanged(start: CGPoint, location: CGPoint) {
         if debugDrag { NSLog("drag changed start=\(start) loc=\(location) active=\(drag.active) gap=\(String(describing: drag.gap)) cand=\(String(describing: drag.candidate)) merge=\(String(describing: drag.mergeTarget)) pager=\(drag.pagerFrame)") }
+        if let abandoned = drag.abandonedStart {
+            if abandoned == start { return }
+            drag.abandonedStart = nil // A new gesture: its end event never arrived.
+        }
         if !drag.decided {
             drag.decided = true
+            drag.gestureStart = start
             if !beginItemDrag(at: start) {
                 drag.panning = query.isEmpty && openFolder == nil && drag.pagerFrame.contains(start)
             }
@@ -149,7 +165,11 @@ extension AppState {
 
     func dragEnded(start: CGPoint, location: CGPoint, predicted: CGPoint) {
         if debugDrag { NSLog("drag ended loc=\(location) active=\(drag.active) gap=\(String(describing: drag.gap)) merge=\(String(describing: drag.mergeTarget))") }
-        defer { drag.cancel() }
+        if drag.abandonedStart != nil {
+            drag.abandonedStart = nil
+            return
+        }
+        defer { drag.reset() }
         if drag.panning {
             let w = max(drag.pagerFrame.width, 1)
             let dx = location.x - start.x, flick = predicted.x - start.x
