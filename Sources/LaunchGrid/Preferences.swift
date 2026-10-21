@@ -43,7 +43,13 @@ enum MenuBarIconStyle: String, CaseIterable, Identifiable {
 /// User settings, persisted in UserDefaults. Grid size lives in the grid itself.
 @MainActor @Observable
 final class Preferences {
-    @ObservationIgnored private let d = UserDefaults.standard
+    /// `just scratch` (LAUNCHGRID_DATA_DIR set): a development copy that keeps its own layout
+    /// and settings and leaves the installed app's alone.
+    nonisolated static let isScratch = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"] != nil
+
+    @ObservationIgnored private let d = isScratch
+        ? UserDefaults(suiteName: "com.sglavoie.launchgrid.scratch") ?? .standard
+        : .standard
 
     var hotkeyKeyCode: UInt32 { didSet { d.set(Int(hotkeyKeyCode), forKey: "hotkeyKeyCode") } }
     var hotkeyModifiers: UInt32 { didSet { d.set(Int(hotkeyModifiers), forKey: "hotkeyModifiers") } }

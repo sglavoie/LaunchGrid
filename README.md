@@ -11,7 +11,7 @@ scripts/install.sh           # build, quit any running copy, replace /Applicatio
 swift test                   # core and app-state tests
 ```
 
-With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (keeps your layout and settings), `just run`, `just scratch` (a throwaway layout, logs in the terminal), `just test`, `just ci` and `just clean`.
+With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just test`, `just ci` and `just clean`.
 
 CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26.
 
@@ -72,7 +72,7 @@ Two targets, each with a test target (`LaunchGridCoreTests`, `LaunchGridTests`):
   - `Interaction`: one root `DragGesture` with arithmetic hit-testing, dwell timers for merge, reorder and edge-flip, and a live gap.
   - Carbon hotkey, FSEvents watcher with a debounced rescan (plus a 10-minute and on-wake fallback), icon cache rendered off the main thread, `SMAppService` login item.
 
-**Development aid:** `LAUNCHGRID_DEBUG_SCRIPT="build:alpha;show;drag:0,3;merge:1,2;snap:x;quit"` drives the UI with synthesized events and writes window snapshots to `LAUNCHGRID_DEBUG_DIR`. `LAUNCHGRID_DATA_DIR` points the app at a scratch layout. See `Sources/LaunchGrid/DebugScript.swift`.
+**Development aid:** `LAUNCHGRID_DEBUG_SCRIPT="build:alpha;show;drag:0,3;merge:1,2;snap:x;quit"` drives the UI with synthesized events and writes window snapshots to `LAUNCHGRID_DEBUG_DIR`. `LAUNCHGRID_DATA_DIR` points the app at a scratch layout and the `com.sglavoie.launchgrid.scratch` settings domain, and lets it run beside the installed copy (which keeps the global shortcut). See `Sources/LaunchGrid/DebugScript.swift`.
 
 ### Deliberately left out
 

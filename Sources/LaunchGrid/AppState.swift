@@ -168,14 +168,24 @@ final class AppState {
         }
     }
 
-    func saveNow() {
+    /// Set once a failed save was reported, so a failing disk doesn't alert on every change.
+    @ObservationIgnored private var saveFailureReported = false
+
+    func saveNow(reportingFailure: Bool = true) {
         saveTask?.cancel()
         guard hasGridFile || !grid.allApps.isEmpty else { return }
         do {
             try store.save(grid)
             hasGridFile = true
+            saveFailureReported = false
         } catch {
             NSLog("LaunchGrid: save failed: \(error)")
+            guard reportingFailure else { return }
+            // An alert would open behind the full-screen overlay and block it.
+            if isShown { showToast("Could not save your layout"); return }
+            guard !saveFailureReported else { return }
+            saveFailureReported = true
+            onError("Could not save your layout", "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
         }
     }
 
@@ -216,9 +226,13 @@ final class AppState {
     private func refreshUpdatedIcons() {
         let paths = grid.allApps.map(\.path)
         Task {
-            let stale = await Task.detached(priority: .utility) { IconProvider.shared.dropStale(paths) }.value
+            // Re-render before bumping the generation, so views reload the new icons, not a miss.
+            let stale = await Task.detached(priority: .utility) {
+                let stale = IconProvider.shared.dropStale(paths)
+                IconProvider.shared.renderAll(stale)
+                return stale
+            }.value
             guard !stale.isEmpty else { return }
-            IconProvider.shared.prewarm(stale)
             self.iconGeneration += 1
         }
     }
@@ -528,9 +542,13 @@ final class AppState {
         if isShown { scheduleToastDismissal() }
     }
 
+    /// How long a seen toast stays up; tests shorten it.
+    @ObservationIgnored var toastDuration: Duration = .seconds(2.5)
+
     private func scheduleToastDismissal() {
+        let duration = toastDuration
         toastTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled else { return }
             self?.toast = nil
             self?.toastTask = nil

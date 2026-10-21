@@ -48,9 +48,18 @@ final class IconProvider: @unchecked Sendable {
     private let queue = DispatchQueue(label: "launchgrid.icons", qos: .userInitiated, attributes: .concurrent)
     /// When each cached icon's app was last modified, to spot apps updated in place.
     private let versions = OSAllocatedUnfairLock(initialState: [String: Date]())
+    /// Renders under way, so a prewarm and an icon view asking for the same path share one.
+    private let inFlight = OSAllocatedUnfairLock(initialState: [String: PendingRender]())
+
+    private final class PendingRender: @unchecked Sendable {
+        let done = DispatchGroup()
+        var image: NSImage?
+    }
 
     init() {
         cache.countLimit = 2000
+        // Each icon is a 256 px RGBA bitmap (256 KB): about 1000 icons.
+        cache.totalCostLimit = 256 << 20
     }
 
     func cached(_ path: String) -> NSImage? {
@@ -70,10 +79,13 @@ final class IconProvider: @unchecked Sendable {
     func prewarm(_ paths: [String]) {
         let missing = paths.filter { cached($0) == nil }
         guard !missing.isEmpty else { return }
-        queue.async {
-            DispatchQueue.concurrentPerform(iterations: missing.count) { i in
-                _ = self.render(missing[i])
-            }
+        queue.async { self.renderAll(missing) }
+    }
+
+    /// Renders icons for the given paths and returns once they're all cached.
+    func renderAll(_ paths: [String]) {
+        DispatchQueue.concurrentPerform(iterations: paths.count) { i in
+            _ = self.render(paths[i])
         }
     }
 
@@ -104,6 +116,25 @@ final class IconProvider: @unchecked Sendable {
     @discardableResult
     private func render(_ path: String) -> NSImage {
         if let hit = cached(path) { return hit }
+        let (pending, isOwner) = inFlight.withLock { map in
+            if let pending = map[path] { return (pending, false) }
+            let pending = PendingRender()
+            pending.done.enter()
+            map[path] = pending
+            return (pending, true)
+        }
+        guard isOwner else {
+            pending.done.wait()
+            return pending.image ?? NSWorkspace.shared.icon(forFile: path)
+        }
+        let image = draw(path)
+        pending.image = image
+        inFlight.withLock { $0[path] = nil }
+        pending.done.leave()
+        return image
+    }
+
+    private func draw(_ path: String) -> NSImage {
         let version = Self.modificationDate(path)
         let source = NSWorkspace.shared.icon(forFile: path)
         let px = Self.pixelSize
@@ -120,7 +151,7 @@ final class IconProvider: @unchecked Sendable {
         NSGraphicsContext.restoreGraphicsState()
         let image = NSImage(size: size)
         image.addRepresentation(rep)
-        cache.setObject(image, forKey: path as NSString)
+        cache.setObject(image, forKey: path as NSString, cost: rep.bytesPerRow * rep.pixelsHigh)
         versions.withLock { $0[path] = version }
         return image
     }
@@ -295,10 +326,13 @@ final class FolderWatcher: @unchecked Sendable {
 
     private var stream: FSEventStreamRef?
     private let onChange: @MainActor () -> Void
+    /// The folders being watched: those of `paths` that existed when the watcher was made.
+    let paths: [String]
 
     init(paths: [String], latency: TimeInterval = 2.0, onChange: @escaping @MainActor () -> Void) {
         self.onChange = onChange
         let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
+        self.paths = existing
         guard !existing.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
@@ -346,7 +380,13 @@ enum LoginItem {
         }
     }
 
+    struct ScratchRun: LocalizedError {
+        var errorDescription: String? { "Not available in a scratch run (LAUNCHGRID_DATA_DIR is set)." }
+    }
+
     static func set(_ on: Bool) throws {
+        // A scratch build must not replace the installed copy's login item.
+        guard !Preferences.isScratch else { throw ScratchRun() }
         if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
     }
 }

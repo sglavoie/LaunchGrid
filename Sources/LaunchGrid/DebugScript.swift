@@ -6,7 +6,7 @@ import LaunchGridCore
 @MainActor
 enum DebugScript {
     static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate) {
-        let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let dir = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_DIR"] ?? NSTemporaryDirectory()
         Task {
             for step in steps {
@@ -45,10 +45,11 @@ enum DebugScript {
                         try? await Task.sleep(for: .milliseconds(120))
                     }
                 case "state":
-                    print("state: page=\(state.currentPage) query='\(state.query)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing)")
+                    print("state: page=\(state.currentPage) query='\(state.query)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active)")
+                    if let f = state.openFolder { print("folder: \(f.apps.count) apps, first \(f.apps.prefix(3).map(\.title)), last \(f.apps.suffix(3).map(\.title))") }
                     fflush(stdout)
-                case "press":
-                    // Long-press item N on the current page.
+                case "press", "click":
+                    // Long-press (or click) item N on the current page.
                     guard let window = overlay.window else { break }
                     let c = state.pageLayout.center(Int(arg) ?? 0)
                     let o = state.drag.pagerFrame.origin
@@ -60,12 +61,12 @@ enum DebugScript {
                                                       pressure: type == .leftMouseUp ? 0 : 1) {
                             NSApp.postEvent(e, atStart: false)
                         }
-                        if type == .leftMouseDown { try? await Task.sleep(for: .seconds(1)) }
+                        if type == .leftMouseDown { try? await Task.sleep(for: .seconds(parts[0] == "press" ? 1 : 0.05)) }
                     }
-                case "drag", "merge", "edge", "fdrag":
+                case "drag", "merge", "edge", "fdrag", "fedge", "edgehide":
                     let n = arg.split(separator: ",").compactMap { Int($0) }
                     guard let window = overlay.window, let from = n.first else { break }
-                    await simulateDrag(parts[0], from: from, to: n.count > 1 ? n[1] : 0, state: state, window: window)
+                    await simulateDrag(parts[0], from: from, to: n.count > 1 ? n[1] : 0, state: state, window: window, overlay: overlay)
                 case "pages": print("pages(\(state.currentPage)):", state.grid.pages.map { $0.items.prefix(5).map(\.title) + ["#\($0.items.count)"] }); fflush(stdout)
                 case "wait": try? await Task.sleep(for: .seconds(Double(arg) ?? 1))
                 case "snap": snapshot(name: arg.isEmpty ? "snap" : arg, dir: dir)
@@ -81,7 +82,9 @@ enum DebugScript {
     /// Sends real mouse events through the panel so the SwiftUI gesture path is exercised.
     /// drag: drop item `from` into the gap at slot `to`; merge: dwell on item `to`'s centre;
     /// edge: dwell at the right edge to flip a page, then drop at slot `to`.
-    static func simulateDrag(_ kind: String, from: Int, to: Int, state: AppState, window: NSWindow) async {
+    /// fedge: like fdrag, dwelling at the open folder's right edge to flip its page first.
+    /// edgehide: dwell at the right edge until the page flips, then hide without releasing.
+    static func simulateDrag(_ kind: String, from: Int, to: Int, state: AppState, window: NSWindow, overlay: OverlayController) async {
         let layout = state.pageLayout
         let origin = state.drag.pagerFrame.origin
         func rootPoint(_ index: Int, dx: CGFloat = 0) -> CGPoint {
@@ -103,7 +106,7 @@ enum DebugScript {
             }
         }
         var start = rootPoint(from)
-        if kind == "fdrag" {
+        if kind == "fdrag" || kind == "fedge" {
             let f = state.drag.folderGridFrame
             let fl = state.folderLayout
             let c = fl.center(from)
@@ -125,6 +128,23 @@ enum DebugScript {
             for _ in 0..<9 { send(.leftMouseDragged, edge); try? await Task.sleep(for: .milliseconds(100)) }
             end = rootPoint(to, dx: -layout.cell.width * 0.4)
             await glide(edge, end)
+        case "fedge":
+            let f = state.drag.folderGridFrame
+            let edge = CGPoint(x: f.maxX - 10, y: f.midY)
+            await glide(start, edge)
+            for _ in 0..<12 { send(.leftMouseDragged, edge); try? await Task.sleep(for: .milliseconds(100)) }
+            let c = state.folderLayout.center(to)
+            end = CGPoint(x: f.minX + c.x - state.folderLayout.cell.width * 0.4, y: f.minY + c.y)
+            await glide(edge, end)
+        case "edgehide":
+            let frame = state.drag.pagerFrame
+            let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)
+            await glide(start, edge)
+            for _ in 0..<12 { send(.leftMouseDragged, edge); try? await Task.sleep(for: .milliseconds(100)) }
+            print("before hide: page=\(state.currentPage) pages=\(state.grid.pages.count) dragging=\(state.drag.active)")
+            fflush(stdout)
+            overlay.hide()
+            return
         default:
             end = rootPoint(to, dx: -layout.cell.width * 0.4)
             await glide(start, end)

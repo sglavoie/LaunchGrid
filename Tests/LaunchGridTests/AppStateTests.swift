@@ -3,9 +3,37 @@ import Testing
 @testable import LaunchGrid
 @testable import LaunchGridCore
 
+/// A fresh temporary folder for each test, removed when the test ends. Suites using
+/// `makeState` or `TempDir.current` carry the `.tempDir` trait.
+struct TempDir: TestTrait, SuiteTrait, TestScoping {
+    @TaskLocal static var current: URL?
+
+    var isRecursive: Bool { true }
+
+    func scopeProvider(for test: Test, testCase: Test.Case?) -> TempDir? {
+        testCase == nil ? nil : self
+    }
+
+    func provideScope(for test: Test, testCase: Test.Case?, performing function: @Sendable () async throws -> Void) async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try await TempDir.$current.withValue(dir) { try await function() }
+    }
+
+    /// The current test's folder; a test without the trait would leave its folder behind.
+    static var url: URL {
+        guard let current else { preconditionFailure("add the .tempDir trait to this suite") }
+        return current
+    }
+}
+
+extension Trait where Self == TempDir {
+    static var tempDir: TempDir { TempDir() }
+}
+
 @MainActor
 func makeState(_ names: [String] = []) -> AppState {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+    let dir = TempDir.url
     let state = AppState(prefs: Preferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
     let apps = names.map { GridItem.app(AppRef(bundleID: "com.test.\($0)", path: "/Applications/\($0).app", name: $0)) }
     state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: apps)]))
@@ -16,7 +44,7 @@ func installed(_ name: String) -> InstalledApp {
     InstalledApp(bundleID: "com.test.\(name)", path: "/Applications/\(name).app", name: name)
 }
 
-@MainActor @Suite struct UndoTests {
+@MainActor @Suite(.tempDir) struct UndoTests {
     @Test func rememberingAMovedAppIsNotAnUndoStep() throws {
         let state = makeState(["A", "B"])
         let a = try #require(state.grid.allApps.first)
@@ -45,7 +73,7 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
-@MainActor @Suite struct CatalogTests {
+@MainActor @Suite(.tempDir) struct CatalogTests {
     @Test func launchGridLeavesItsOwnGridAndCatalog() {
         let state = makeState(["A", "LaunchGrid"])
         state.ownBundleID = "com.test.LaunchGrid"
@@ -55,7 +83,7 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
-@MainActor @Suite struct DragTests {
+@MainActor @Suite(.tempDir) struct DragTests {
     @Test func escapeEndsTheDragForTheRestOfTheGesture() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500) // 100 × 100 cells
@@ -76,9 +104,9 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
-@MainActor @Suite struct LoadProblemTests {
+@MainActor @Suite(.tempDir) struct LoadProblemTests {
     func load(_ contents: String) throws -> AppState {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let dir = TempDir.url
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("grid.json")
         try Data(contents.utf8).write(to: url)
@@ -99,7 +127,7 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
-@MainActor @Suite struct SelectionTests {
+@MainActor @Suite(.tempDir) struct SelectionTests {
     func ids(_ state: AppState) -> [String: UUID] {
         Dictionary(uniqueKeysWithValues: state.grid.allApps.map { ($0.name, $0.id) })
     }
@@ -139,20 +167,21 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
-@MainActor @Suite struct ToastTests {
+@MainActor @Suite(.tempDir) struct ToastTests {
     @Test func aToastWhileHiddenWaitsForTheNextShow() async throws {
         let state = makeState(["A"])
+        state.toastDuration = .milliseconds(100)
         state.showToast("Loaded layout")
-        try await Task.sleep(for: .seconds(3))
+        try await Task.sleep(for: .milliseconds(300))
         #expect(state.toast == "Loaded layout", "nobody has seen it yet")
         state.didShow()
         #expect(state.toast == "Loaded layout")
-        try await Task.sleep(for: .seconds(3))
+        try await Task.sleep(for: .milliseconds(300))
         #expect(state.toast == nil, "dismissed once seen")
     }
 }
 
-@MainActor @Suite struct SearchCountTests {
+@MainActor @Suite(.tempDir) struct SearchCountTests {
     @Test func searchResultsShowOnePageButCountEveryMatch() {
         let names = (1...50).map { "App \($0)" }
         let state = makeState([])
@@ -196,9 +225,9 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
-@MainActor @Suite struct ChooseAppsTests {
+@MainActor @Suite(.tempDir) struct ChooseAppsTests {
     @Test func firstRunChoiceIsRememberedByTheBuild() {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let dir = TempDir.url
         let state = AppState(prefs: Preferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
         state.catalogScanned(["A", "B", "C"].map(installed))
         #expect(state.includedKeys.count == 3)

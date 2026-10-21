@@ -19,6 +19,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var rescanDebounce: Task<Void, Never>?
     private var periodicRescan: Timer?
     private var windows: [String: NSWindow] = [:]
+    /// Layout files opened before the first scan finished (e.g. the double-click that launched us).
+    private var pendingOpen: URL?
+    private var catalogReady = false
+
+    /// Other running copies of LaunchGrid (same bundle ID), leaving out scratch runs.
+    static var otherInstances: [NSRunningApplication] {
+        guard let id = Bundle.main.bundleIdentifier else { return [] }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated && !isScratch($0) }
+    }
+
+    private static func isScratch(_ app: NSRunningApplication) -> Bool {
+        let path = scratchMarker(for: app.processIdentifier).path
+        guard let made = (try? FileManager.default.attributesOfItem(atPath: path))?[.creationDate] as? Date
+        else { return false }
+        // A marker older than the process was left by a crashed run whose pid got reused.
+        return app.launchDate.map { made >= $0.addingTimeInterval(-5) } ?? true
+    }
+
+    /// A scratch run leaves a marker named after its pid so other copies can tell it apart.
+    static func scratchMarker(for pid: pid_t) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("LaunchGrid-scratch-\(pid)")
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let storeURL = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"]
@@ -40,38 +63,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             DispatchQueue.main.async { self.warnHotkeyTaken() }
         }
 
-        DistributedNotificationCenter.default().addObserver(forName: Self.showNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.overlay.show() }
+        // The hand-over from a second launch is for the installed copy, not a scratch one.
+        if !Preferences.isScratch {
+            DistributedNotificationCenter.default().addObserver(forName: Self.showNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.overlay.show() }
+            }
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.state.rescan() }
+        }
+        // A scan folder on an external volume only exists (and can only be watched) while it's mounted.
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.startWatching(onlyIfChanged: true)
+                    self?.state.rescan()
+                }
+            }
+        }
+        // A scratch copy hands the shortcut over while another LaunchGrid runs, and takes it back after.
+        if Preferences.isScratch {
+            for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+                NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                    guard app?.bundleIdentifier == Bundle.main.bundleIdentifier else { return }
+                    MainActor.assumeIsolated { _ = self?.applyHotkey() }
+                }
+            }
         }
 
         IconProvider.shared.prewarm(state.grid.allApps.map(\.path))
         state.rescan { [weak self] in
             guard let self else { return }
+            self.catalogReady = true
             if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
                 DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
                 return
+            }
+            if let url = self.pendingOpen {
+                // Loading needs the catalog, so a file that launched us waits for the first scan.
+                self.pendingOpen = nil
+                self.openLayout(url)
             }
             if !self.state.hasGridFile { self.showFirstRun() }
             if CommandLine.arguments.contains("--show") { self.overlay.show() }
         }
         startWatching()
-        // Slow fallback in case FSEvents misses something (e.g. network volumes).
+        // Slow fallback in case FSEvents misses something (e.g. network volumes), and a chance
+        // to start watching scan folders that were created since.
         periodicRescan = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.state.rescan() }
+            MainActor.assumeIsolated {
+                self?.startWatching(onlyIfChanged: true)
+                self?.state.rescan()
+            }
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        overlay.toggle()
+        overlay?.toggle()
         return false
     }
 
-    /// A layout file opened from Finder.
+    /// A layout file opened from Finder. Arrives before applicationDidFinishLaunching when the
+    /// double-click is what launched us.
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
+        guard catalogReady else {
+            pendingOpen = url
+            return
+        }
+        openLayout(url)
+    }
+
+    private func openLayout(_ url: URL) {
         overlay.hide(deactivate: false)
         NSApp.activate()
         if !state.grid.allApps.isEmpty {
@@ -86,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        state?.saveNow()
+        state?.saveNow(reportingFailure: false)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -96,6 +160,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Registers the global shortcut; false when another app already holds it.
     @discardableResult
     private func applyHotkey() -> Bool {
+        // Carbon lets a second process register the same combo, so a scratch copy would fight
+        // the installed one for it. Leave it to the installed copy while that one runs.
+        if Preferences.isScratch && !Self.otherInstances.isEmpty {
+            HotkeyService.shared.unregister()
+            state.hotkeyProblem = "This is a scratch copy: the shortcut stays with the LaunchGrid that's already running."
+            return true
+        }
         guard prefs.hotkeyEnabled else {
             HotkeyService.shared.unregister()
             state.hotkeyProblem = nil
@@ -206,8 +277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return menu
     }
 
-    private func startWatching() {
-        watcher = FolderWatcher(paths: prefs.scanRoots.map(\.path)) { [weak self] in
+    /// Watches the scan folders that exist now; `onlyIfChanged` keeps the current watcher when
+    /// that set is the same.
+    private func startWatching(onlyIfChanged: Bool = false) {
+        let roots = prefs.scanRoots.map(\.path).filter { FileManager.default.fileExists(atPath: $0) }
+        if onlyIfChanged, let watcher, watcher.paths == roots { return }
+        watcher = FolderWatcher(paths: roots) { [weak self] in
             // An install produces bursts of events; scan once things settle.
             self?.rescanDebounce?.cancel()
             self?.rescanDebounce = Task { [weak self] in
