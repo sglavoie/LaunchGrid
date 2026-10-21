@@ -54,6 +54,9 @@ final class AppState {
     // MARK: Hooks wired by the app delegate
 
     @ObservationIgnored var onHide: () -> Void = {}
+    /// Hides without handing focus back, so the app being launched can take it.
+    @ObservationIgnored var onHideForLaunch: () -> Void = {}
+    @ObservationIgnored var onError: (_ title: String, _ detail: String) -> Void = { _, _ in }
     @ObservationIgnored var onOpenSettings: () -> Void = {}
     @ObservationIgnored var onAddMissing: () -> Void = {}
 
@@ -252,13 +255,18 @@ final class AppState {
     // MARK: Actions
 
     func launch(_ app: AppRef) {
+        // Get out of the way at once, as Launchpad does; a slow app can take seconds.
+        if prefs.hideAfterLaunch { onHideForLaunch() }
         Task {
             do {
                 let path = try await Launcher.launch(app)
                 if path != app.path { rememberPath(path, of: app.id) }
-                if prefs.hideAfterLaunch { onHide() }
             } catch {
-                showToast("Could not open \(app.title)")
+                if isShown {
+                    showToast("Could not open \(app.title): \(error.localizedDescription)")
+                } else {
+                    onError("Could not open \(app.title)", error.localizedDescription)
+                }
             }
         }
     }

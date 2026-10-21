@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         state = AppState(prefs: prefs, store: GridStore(url: storeURL))
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
+        state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
+        state.onError = { [weak self] title, detail in self?.showError(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
 

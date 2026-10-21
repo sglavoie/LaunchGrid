@@ -7,7 +7,9 @@ import LaunchGridCore
 // MARK: - Launching
 
 enum Launcher {
-    struct NotFound: Error {}
+    struct NotFound: LocalizedError {
+        var errorDescription: String? { "The app is no longer on this Mac." }
+    }
 
     /// Opens the app at its stored path, falling back to its bundle ID.
     /// Returns the path that was actually launched.
@@ -15,17 +17,21 @@ enum Launcher {
     static func launch(_ app: AppRef) async throws -> String {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+        var failure: Error = NotFound()
         if FileManager.default.fileExists(atPath: app.path) {
-            let url = URL(fileURLWithPath: app.path)
-            if (try? await NSWorkspace.shared.openApplication(at: url, configuration: config)) != nil {
+            do {
+                _ = try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: config)
                 return app.path
+            } catch {
+                failure = error
             }
         }
-        if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+        // Retry elsewhere only if Launch Services knows another copy.
+        if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id), url.path != app.path {
             _ = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
             return url.path
         }
-        throw NotFound()
+        throw failure
     }
 }
 
