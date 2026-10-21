@@ -232,27 +232,49 @@ enum KeyCombo {
     }
 
     /// Known system shortcuts. No public API lists them, so this is a static best effort.
+    /// Entries with a symbolic hotkey ID are skipped when the user has turned that shortcut off
+    /// or moved it to another key in System Settings.
     static func conflict(keyCode: UInt32, modifiers: UInt32) -> String? {
         let cmd = UInt32(cmdKey), opt = UInt32(optionKey), ctrl = UInt32(controlKey), shift = UInt32(shiftKey)
-        let known: [(Int, UInt32, String)] = [
-            (kVK_Space, cmd, "Spotlight"),
-            (kVK_Space, cmd | opt, "Finder search window"),
-            (kVK_Space, ctrl, "Select previous input source"),
-            (kVK_Space, ctrl | opt, "Select next input source"),
-            (kVK_Space, ctrl | cmd, "Character Viewer"),
-            (kVK_Tab, cmd, "App Switcher"),
-            (kVK_ANSI_3, cmd | shift, "Screenshot"),
-            (kVK_ANSI_4, cmd | shift, "Screenshot selection"),
-            (kVK_ANSI_5, cmd | shift, "Screenshot toolbar"),
-            (kVK_ANSI_Q, cmd | ctrl, "Lock Screen"),
-            (kVK_UpArrow, ctrl, "Mission Control"),
-            (kVK_DownArrow, ctrl, "Application windows"),
-            (kVK_F3, 0, "Mission Control"),
-            (kVK_F11, 0, "Show Desktop"),
-            (kVK_ANSI_Q, cmd, "Quit (in every app)"),
-            (kVK_ANSI_W, cmd, "Close Window (in every app)"),
+        let known: [(Int, UInt32, String, Int?)] = [
+            (kVK_Space, cmd, "Spotlight", 64),
+            (kVK_Space, cmd | opt, "Finder search window", 65),
+            (kVK_Space, ctrl, "Select previous input source", 60),
+            (kVK_Space, ctrl | opt, "Select next input source", 61),
+            (kVK_Space, ctrl | cmd, "Character Viewer", nil),
+            (kVK_Tab, cmd, "App Switcher", nil),
+            (kVK_ANSI_3, cmd | shift, "Screenshot", 28),
+            (kVK_ANSI_4, cmd | shift, "Screenshot selection", 30),
+            (kVK_ANSI_5, cmd | shift, "Screenshot toolbar", 184),
+            (kVK_ANSI_Q, cmd | ctrl, "Lock Screen", nil),
+            (kVK_UpArrow, ctrl, "Mission Control", 32),
+            (kVK_DownArrow, ctrl, "Application windows", 33),
+            (kVK_F3, 0, "Mission Control", nil),
+            (kVK_F11, 0, "Show Desktop", 36),
+            (kVK_ANSI_Q, cmd, "Quit (in every app)", nil),
+            (kVK_ANSI_W, cmd, "Close Window (in every app)", nil),
         ]
-        return known.first { $0.0 == Int(keyCode) && $0.1 == modifiers }?.2
+        guard let match = known.first(where: { $0.0 == Int(keyCode) && $0.1 == modifiers }) else { return nil }
+        if let id = match.3, !isSystemShortcutActive(id: id, keyCode: keyCode, modifiers: modifiers) { return nil }
+        return match.2
+    }
+
+    /// Whether macOS still binds symbolic hotkey `id` to this combo. A missing entry means the
+    /// default binding, which is on.
+    private static func isSystemShortcutActive(id: Int, keyCode: UInt32, modifiers: UInt32) -> Bool {
+        guard let all = UserDefaults(suiteName: "com.apple.symbolichotkeys")?
+                .dictionary(forKey: "AppleSymbolicHotKeys"),
+              let entry = all[String(id)] as? [String: Any] else { return true }
+        if let enabled = entry["enabled"] as? Bool, !enabled { return false }
+        // parameters are [character, key code, NSEvent modifier flags].
+        guard let params = (entry["value"] as? [String: Any])?["parameters"] as? [Int], params.count == 3 else { return true }
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        let stored = NSEvent.ModifierFlags(rawValue: UInt(params[2])).intersection([.command, .option, .control, .shift])
+        return params[1] == Int(keyCode) && stored == flags
     }
 }
 

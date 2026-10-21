@@ -278,6 +278,14 @@ struct LibrarySettings: View {
                     Button("Regenerate Icons") { state.regenerateIcons() }
                 }
             }
+            Section("Rebuild") {
+                HStack {
+                    Button("Rebuild by Category…") { confirmRebuild = .byCategory }
+                    Button("Rebuild Alphabetically…") { confirmRebuild = .alphabetical }
+                }
+                Text("Lays out every installed app from scratch, the same as the choices on the welcome screen.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Extra folders to scan") {
                 ForEach(prefs.extraFolders, id: \.self) { path in
                     HStack {
@@ -311,17 +319,11 @@ struct LibrarySettings: View {
                     Button("Import from Launchpad") { actions.importLaunchpad() }
                         .disabled(LaunchpadImporter.launchpadDatabaseURL == nil)
                 }
-                Text("Loading or importing replaces the current layout; ⌘Z in the grid undoes it.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Rebuild") {
-                HStack {
-                    Button("Rebuild by Category…") { confirmRebuild = .byCategory }
-                    Button("Rebuild Alphabetically…") { confirmRebuild = .alphabetical }
-                }
                 Button("Show Data Folder in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([state.store.url])
                 }
+                Text("Loading or importing replaces the current layout; ⌘Z in the grid undoes it.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
