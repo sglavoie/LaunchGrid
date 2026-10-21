@@ -455,7 +455,8 @@ func tempDir(_ prefix: String) -> URL {
         #expect(titles(r.grid.pages[0]) == ["Stuff", "Mail"])
         #expect(r.grid.pages[0].items[0].folder?.apps.map(\.name) == ["Notes"])
         #expect(titles(r.grid.pages[1]) == ["Safari"])
-        #expect(r.skipped == ["Gone", "Mail again"], "not installed, then a second entry for one app")
+        #expect(r.skipped == ["Gone"])
+        #expect(r.duplicates == ["Mail again"], "a second entry for one app")
         #expect(r.imported == 3)
     }
 
@@ -548,7 +549,8 @@ func tempDir(_ prefix: String) -> URL {
         let r = try LaunchpadImporter.importDatabase(at: url, rows: 5, columns: 7) { _ in nil }
         #expect(r.grid.allApps.map(\.path) == [xcode, beta])
         #expect(r.imported == 2)
-        #expect(r.skipped == ["Xcode again"])
+        #expect(r.skipped.isEmpty)
+        #expect(r.duplicates == ["Xcode again"])
     }
 
     @Test func pageTitlesComeFromGroups() throws {

@@ -230,6 +230,13 @@ extension Grid {
         setExcluded(app, excluded, copies: CopyIndex(among))
     }
 
+    /// Clears `include`'s exclusions and records `exclude`'s, indexing `among` once.
+    public mutating func setExcluded(include: [InstalledApp], exclude: [InstalledApp], among: [InstalledApp]) {
+        let copies = CopyIndex(among)
+        for app in include { setExcluded(app, false, copies: copies) }
+        for app in exclude { setExcluded(app, true, copies: copies) }
+    }
+
     /// `setExcluded(_:_:among:)` with the copies indexed once, for callers setting many apps.
     mutating func setExcluded(_ app: InstalledApp, _ excluded: Bool, copies index: CopyIndex) {
         let copies = index.copies(of: app)

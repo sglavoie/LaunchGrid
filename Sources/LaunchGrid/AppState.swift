@@ -421,8 +421,7 @@ final class AppState {
         let among = selectableApps
         guard hasGridFile else {
             var g = grid
-            for app in include { g.setExcluded(app, false, among: among) }
-            for app in exclude { g.setExcluded(app, true, among: among) }
+            g.setExcluded(include: include, exclude: exclude, among: among)
             grid = g
             return
         }

@@ -477,6 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid))
                 var message = "Imported \(result.imported) apps from \(source)"
                 if !result.skipped.isEmpty { message += "; skipped \(result.skipped.count) not installed" }
+                if !result.duplicates.isEmpty { message += "; skipped \(result.duplicates.count) listed twice" }
                 state.showToast(message)
                 closeFirstRunIfDone()
             }

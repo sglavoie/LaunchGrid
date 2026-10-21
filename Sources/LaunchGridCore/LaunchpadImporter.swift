@@ -7,8 +7,10 @@ public enum LaunchpadImporter {
     public struct Result: Sendable {
         public var grid: Grid
         public var imported: Int
-        /// Titles of apps left out: not installed, or a second entry for an app already imported.
+        /// Titles of apps left out because they aren't installed.
         public var skipped: [String]
+        /// Titles of second entries for an app already imported.
+        public var duplicates: [String] = []
     }
 
     public enum ImportError: Error, LocalizedError {
@@ -113,7 +115,7 @@ public enum LaunchpadImporter {
         rows: Int, columns: Int, resolve: (String) -> String?
     ) -> Result {
         let children = Dictionary(grouping: items, by: \.parent).mapValues { $0.sorted { $0.ordering < $1.ordering } }
-        var skipped: [String] = []
+        var skipped: [String] = [], duplicates: [String] = []
         var imported = 0
         var seen = Set<String>()
 
@@ -149,7 +151,7 @@ public enum LaunchpadImporter {
             }
             // By path: copies sharing a bundle ID (Xcode and Xcode-beta) are separate apps.
             guard seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted else {
-                skipped.append(title)
+                duplicates.append(title)
                 return nil
             }
             imported += 1
@@ -198,7 +200,7 @@ public enum LaunchpadImporter {
             grid.pages = pageRows.map { Page(title: groupTitles[$0.id], items: pageItems($0.id)) }.filter { !$0.items.isEmpty }
         }
         grid.normalize()
-        return Result(grid: grid, imported: imported, skipped: skipped)
+        return Result(grid: grid, imported: imported, skipped: skipped, duplicates: duplicates)
     }
 
     /// Copies a database and its write-ahead log as a consistent pair. A log that grew
