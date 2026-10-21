@@ -15,11 +15,14 @@ public enum Reconciler {
     ///   - autoAdd: append installed apps that are neither on the grid nor in `removedBundleIDs`.
     ///   - pruneMissing: drop apps that are no longer installed. Callers disable this when the
     ///     scan looks unreliable (e.g. it found nothing at all).
+    ///   - isReachable: whether the scan could have seen the app at this path. Apps on an
+    ///     unmounted volume or under a missing scan folder are kept, not pruned.
     public static func reconcile(
         _ grid: inout Grid,
         installed: [InstalledApp],
         autoAdd: Bool,
-        pruneMissing: Bool = true
+        pruneMissing: Bool = true,
+        isReachable: (String) -> Bool = { _ in true }
     ) -> ReconcileReport {
         var report = ReconcileReport()
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
@@ -39,7 +42,7 @@ public enum Reconciler {
                 report.moved.append(match.name)
                 ref.path = match.path
                 ref.name = match.name
-            } else if prune {
+            } else if prune && isReachable(ref.path) {
                 report.removed.append(ref.title)
                 return nil
             }

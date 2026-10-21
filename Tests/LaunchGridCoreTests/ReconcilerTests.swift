@@ -36,6 +36,15 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.count == 1)
     }
 
+    @Test func unreachableAppsAreKept() {
+        let ext = AppRef(bundleID: "com.test.ext", path: "/Volumes/Drive/Ext.app")
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A")), .app(ext), .app(app("Gone"))])])
+        let report = Reconciler.reconcile(&g, installed: [installed("A")], autoAdd: true,
+                                          isReachable: { !$0.hasPrefix("/Volumes/Drive/") })
+        #expect(report.removed == ["Gone"])
+        #expect(titles(g.pages[0]) == ["A", "Ext"])
+    }
+
     @Test func movedAppKeepsItsSlot() {
         var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A")), .app(app("B"))])])
         let report = Reconciler.reconcile(&g, installed: [installed("A"), installed("B", path: "/Users/x/Applications/B.app")],
@@ -156,6 +165,26 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(titles(r.grid.pages[1]) == ["Safari"])
         #expect(r.skipped == ["Gone"])
         #expect(r.imported == 3)
+    }
+
+    @Test func readsChangesStillInTheWriteAheadLog() throws {
+        let url = try makeFixture()
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) } }
+        // Keep a writer open with checkpointing off, as a running Dock or AppGrid would.
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let sql = """
+        PRAGMA journal_mode=WAL;
+        PRAGMA wal_autocheckpoint=0;
+        INSERT INTO items VALUES (108,'',0,4,20,1);
+        INSERT INTO apps VALUES (108,'Maps','com.apple.Maps',NULL,NULL,0,NULL);
+        """
+        #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+        #expect(FileManager.default.fileExists(atPath: url.path + "-wal"))
+
+        let r = try LaunchpadImporter.importDatabase(at: url, rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(titles(r.grid.pages[1]) == ["Safari", "Maps"])
     }
 
     @Test func rejectsNonLaunchpadFiles() throws {
