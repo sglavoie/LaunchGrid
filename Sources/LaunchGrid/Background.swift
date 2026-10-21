@@ -30,10 +30,8 @@ struct BackgroundView: View {
             case .solid:
                 Color(nsColor: prefs.solidColor)
             }
-            if prefs.background == .solid {
-                // For solid colours the slider reads as transparency.
-                Color.black.opacity(0)
-            } else {
+            // For solid colours the slider reads as transparency instead (below).
+            if prefs.background != .solid {
                 Color.black.opacity(prefs.backgroundOpacity)
             }
         }
@@ -63,7 +61,8 @@ struct VisualEffect: NSViewRepresentable {
     }
 }
 
-/// An image scaled to fill, blurred once and cached.
+/// An image scaled to fill, blurred once and cached. Falls back to the blurred desktop
+/// while loading, or when the file can't be decoded (e.g. a dynamic or aerial wallpaper).
 struct BlurredImage: View {
     let url: URL?
     let radius: Double
@@ -78,7 +77,7 @@ struct BlurredImage: View {
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
             } else {
-                Color.black
+                VisualEffect(material: .fullScreenUI)
             }
         }
         .task(id: "\(url?.path ?? "")|\(radius)") {
