@@ -325,10 +325,15 @@ final class AppState {
     }
 
     /// "Regenerate Icons": renders every icon again.
-    func regenerateIcons() {
+    /// Re-renders every icon; `completion` runs once they are all back in the cache.
+    func regenerateIcons(completion: (@MainActor () -> Void)? = nil) {
         IconProvider.shared.clear()
-        IconProvider.shared.prewarm(grid.allApps.map(\.path))
         iconGeneration += 1
+        let paths = grid.allApps.map(\.path)
+        Task {
+            await IconProvider.shared.renderAll(paths)
+            completion?()
+        }
     }
 
     /// Whether a scan could have seen an app at `path`. Absence says nothing about apps on
