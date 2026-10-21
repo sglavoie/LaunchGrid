@@ -8,7 +8,7 @@ A free, Launchpad-style app grid for macOS 14+, rebuilt from the observed behavi
 scripts/bundle.sh            # release build → build/LaunchGrid.app (ad-hoc signed, hardened runtime)
 open build/LaunchGrid.app
 cp -R build/LaunchGrid.app /Applications/   # needed for "Open at login"
-swift test                   # core unit tests
+swift test                   # core and app-state tests
 ```
 
 Set `SIGN_IDENTITY="Developer ID Application: …"` before `scripts/bundle.sh` to sign for notarisation. The app is deliberately **not sandboxed**, so it can scan any folder, use FSEvents and read the old Launchpad/AppGrid databases directly.
@@ -42,25 +42,25 @@ On first launch, a welcome window offers these ways to set up the grid:
 - **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons, auto-add new apps, hide behaviour.
 - **Appearance:** Full Screen, Full Screen Behind Dock, or a resizable Window (with frames saved per display). Backgrounds: blurred desktop, wallpaper, Liquid Glass, solid colour or custom image. Icon size and labels.
 - **Layout:** grid rows × columns, with re-flow that keeps page boundaries; folder placement when sorting.
-- **Library:** add missing apps (also ones from anywhere via Browse), extra scan folders, save/load `.appgrid` files, import from AppGrid or Launchpad, rebuild, regenerate icons.
+- **Library:** add missing apps (also ones from anywhere via Browse), extra scan folders, save/load `.appgrid` files (double-clicking one in Finder loads it too), import from AppGrid or Launchpad, rebuild, regenerate icons.
 
 ## Where things live
 
-- Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change. An unreadable file is moved aside, never overwritten.
+- Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change. An unreadable file (or one from a newer version) is moved aside, never overwritten, and the welcome window says where it went.
 - Settings: `defaults read com.sglavoie.launchgrid`.
 - Removed apps are remembered in the grid's `removedBundleIDs`, so scans don't re-add them; *Add Missing Apps…* brings them back.
 
 ## How it's built
 
-Two targets:
+Two targets, each with a test target (`LaunchGridCoreTests`, `LaunchGridTests`):
 
 - **`LaunchGridCore`**: pure, unit-tested logic.
   - `Model`: value-type `Grid`, which makes undo a snapshot.
   - `GridOps`: insert with overflow spill, move, group, reflow, sort.
-  - `Reconciler`: add new apps, drop deleted ones, follow moved ones, keep the removed list. It never prunes on an empty scan.
+  - `Reconciler`: add new apps, drop deleted ones, follow moved ones, keep the removed list. It never prunes on an empty scan, nor apps on an unmounted volume or under a missing scan folder.
   - `AppScanner`: depth-limited, symlink-cycle-safe, skips bundle contents.
   - `Search`, `GridStore`.
-  - `LaunchpadImporter`: read-only SQLite; it handles Apple's multi-root DB, AppGrid's `custom_path` and `manual_app_*` IDs, and nested folder pages.
+  - `LaunchpadImporter`: reads a copy of the database and its write-ahead log; it handles Apple's multi-root DB, AppGrid's `custom_path` and `manual_app_*` IDs, and nested folder pages.
 - **`LaunchGrid`**: the AppKit/SwiftUI app.
   - `OverlayController`: a non-activating `NSPanel`, so it takes keyboard focus without fighting cooperative activation. It shows on the screen under the pointer and handles key and scroll input.
   - `Interaction`: one root `DragGesture` with arithmetic hit-testing, dwell timers for merge, reorder and edge-flip, and a live gap.

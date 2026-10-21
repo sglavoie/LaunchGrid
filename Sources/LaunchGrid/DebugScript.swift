@@ -43,7 +43,7 @@ enum DebugScript {
                         try? await Task.sleep(for: .milliseconds(120))
                     }
                 case "state":
-                    print("state: page=\(state.currentPage) query='\(state.query)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") shown=\(state.isShown) editing=\(state.editing)")
+                    print("state: page=\(state.currentPage) query='\(state.query)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing)")
                     fflush(stdout)
                 case "press":
                     // Long-press item N on the current page.
