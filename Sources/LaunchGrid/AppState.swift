@@ -24,6 +24,8 @@ final class AppState {
     }
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
+    /// LaunchGrid's own bundle ID: it never belongs on its own grid.
+    @ObservationIgnored var ownBundleID = Bundle.main.bundleIdentifier
     private(set) var hasGridFile: Bool
     /// Set when the saved layout could not be loaded at launch and was moved aside.
     private(set) var loadProblem: (message: String, backup: URL)?
@@ -203,6 +205,7 @@ final class AppState {
 
     /// Takes in a finished scan.
     func catalogScanned(_ apps: [InstalledApp]) {
+        let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         if hasGridFile { reconcile() }
@@ -244,7 +247,8 @@ final class AppState {
         // Apps added from outside the scanned folders stay as long as they exist on disk.
         let keys = Set(installed.map(\.key))
         let extra = grid.allApps
-            .filter { !keys.contains($0.key) && installedByPath[$0.path] == nil && FileManager.default.fileExists(atPath: $0.path) }
+            .filter { !keys.contains($0.key) && installedByPath[$0.path] == nil && !isSelf($0.bundleID)
+                && FileManager.default.fileExists(atPath: $0.path) }
             .compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0.path)) }
         var g = grid
         let missingRoots = prefs.scanRoots.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) }
@@ -259,6 +263,10 @@ final class AppState {
         if !report.added.isEmpty {
             IconProvider.shared.prewarm(g.allApps.map(\.path))
         }
+    }
+
+    private func isSelf(_ bundleID: String?) -> Bool {
+        bundleID != nil && bundleID == ownBundleID
     }
 
     var missingApps: [InstalledApp] { Reconciler.missingApps(in: grid, installed: installed) }

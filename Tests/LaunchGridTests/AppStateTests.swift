@@ -45,6 +45,16 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
+@MainActor @Suite struct CatalogTests {
+    @Test func launchGridLeavesItsOwnGridAndCatalog() {
+        let state = makeState(["A", "LaunchGrid"])
+        state.ownBundleID = "com.test.LaunchGrid"
+        state.catalogScanned(["A", "B", "LaunchGrid"].map(installed))
+        #expect(state.installed.map(\.name) == ["A", "B"])
+        #expect(!state.grid.allApps.map(\.name).contains("LaunchGrid"))
+    }
+}
+
 @MainActor @Suite struct DragTests {
     @Test func escapeEndsTheDragForTheRestOfTheGesture() {
         let state = makeState(["A", "B", "C"])
