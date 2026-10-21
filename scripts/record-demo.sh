@@ -1,0 +1,134 @@
+#!/bin/sh
+# Records the website's media from a scratch LaunchGrid with the apps in scripts/demo/apps.txt:
+#   - the video: scripts/demo/story.txt on the main display, cut from "mark:start" to "mark:end",
+#     to website/public/video/demo.mp4 and demo-poster.webp;
+#   - the Settings tabs: scripts/demo/settings.txt in light and dark, to
+#     website/public/images/settings-<tab>-<light|dark>.webp.
+#
+# Needs ffmpeg and cwebp (brew install ffmpeg webp), and Screen Recording permission (System Settings › Privacy & Security › Screen &
+# System Audio Recording) for the terminal app you run it from. Run it in a terminal window: a tmux
+# server started in the background has no app for macOS to attribute the recording to. Keep the
+# mouse and keyboard still while it runs: a click or a switch to another app hides the grid.
+#
+#   scripts/record-demo.sh               build, then record the video and the Settings tabs
+#   scripts/record-demo.sh --video       only the video (--stills: only the Settings tabs)
+#   scripts/record-demo.sh --no-build    reuse build/LaunchGrid.app
+#
+# BACKGROUND (default wallpaper; material shows open windows through), SCREEN (avfoundation screen
+# index, default 0), FPS (default 60), KEEP=1 to keep the raw capture in build/demo/.
+set -eu
+cd "$(dirname "$0")/.."
+
+BUILD=1 VIDEO=1 STILLS=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-build) BUILD=0 ;;
+        --video) STILLS=0 ;;
+        --stills) VIDEO=0 ;;
+        *) echo "usage: $0 [--video | --stills] [--no-build]" >&2; exit 2 ;;
+    esac
+done
+BACKGROUND="${BACKGROUND:-wallpaper}"
+SCREEN="${SCREEN:-0}"
+FPS="${FPS:-60}"
+WORK="$PWD/build/demo"
+DOMAIN=com.sglavoie.launchgrid.scratch
+APP=build/LaunchGrid.app
+
+command -v ffmpeg >/dev/null || { echo "ffmpeg is needed: brew install ffmpeg" >&2; exit 1; }
+command -v cwebp >/dev/null || { echo "cwebp is needed: brew install webp" >&2; exit 1; }
+rm -rf "$WORK"
+mkdir -p "$WORK" website/public/video website/public/images
+if ! screencapture -x "$WORK/check.png" 2>/dev/null; then
+    echo "Can't capture the screen. Allow your terminal app in System Settings › Privacy & Security ›" >&2
+    echo "Screen & System Audio Recording, restart it, and run this in one of its windows (not a detached tmux)." >&2
+    exit 1
+fi
+[ "$BUILD" = 1 ] && scripts/bundle.sh release
+
+# The scratch settings domain is shared with `just scratch`: set the demo's, and put those back after.
+HAD_DEFAULTS=0
+defaults export "$DOMAIN" "$WORK/scratch-defaults.plist" 2>/dev/null && HAD_DEFAULTS=1
+FFMPEG=
+cleanup() {
+    [ -n "$FFMPEG" ] && kill -INT "$FFMPEG" 2>/dev/null
+    defaults delete "$DOMAIN" >/dev/null 2>&1 || true
+    [ "$HAD_DEFAULTS" = 1 ] && defaults import "$DOMAIN" "$WORK/scratch-defaults.plist"
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+defaults delete "$DOMAIN" >/dev/null 2>&1 || true
+defaults write "$DOMAIN" windowMode -string fullScreen
+defaults write "$DOMAIN" background -string "$BACKGROUND"
+defaults write "$DOMAIN" showLabels -bool true
+defaults write "$DOMAIN" iconScale -float 1
+
+# A script file's steps, without comments and blank lines, joined with ";".
+steps() { grep -v '^[[:space:]]*#' "$1" | grep . | paste -sd';' -; }
+APPS=$(grep -v '^[[:space:]]*#' scripts/demo/apps.txt | grep . | paste -sd, -)
+
+# Runs the steps against a fresh layout of the demo apps, logging to $WORK/<log>.log, and takes
+# the window screenshots that "shoot" steps ask for.
+run_app() {
+    log="$WORK/$1.log"
+    rm -rf "$WORK/data"
+    mkdir -p "$WORK/data"
+    LAUNCHGRID_DATA_DIR="$WORK/data" LAUNCHGRID_DEBUG_DIR="$WORK" \
+        LAUNCHGRID_DEBUG_SCRIPT="only:$APPS;size:5x7;build:alpha;$2;quit" \
+        "$APP/Contents/MacOS/LaunchGrid" 2>&1 | while IFS= read -r line; do
+            printf '%s\n' "$line" >>"$log"
+            case "$line" in
+                "shoot: "*)
+                    # "shoot: <window number> <name>"
+                    id=$(echo "$line" | cut -d' ' -f2)
+                    name=$(echo "$line" | cut -d' ' -f3)
+                    screencapture -x -o -l"$id" "$WORK/$name.tmp.png" && mv "$WORK/$name.tmp.png" "$WORK/$name.png"
+                    ;;
+            esac
+        done
+    grep '^only:' "$log" || true
+}
+
+if [ "$STILLS" = 1 ]; then
+    echo "Settings: keep the mouse and keyboard still until LaunchGrid quits."
+    for appearance in light dark; do
+        run_app "settings-$appearance" "$(steps scripts/demo/settings.txt | sed "s/{appearance}/$appearance/g")"
+    done
+    for png in "$WORK"/settings-*.png; do
+        cwebp -quiet -q 85 "$png" -o "website/public/images/$(basename "$png" .png).webp"
+    done
+    ls -lh website/public/images/settings-*.webp
+fi
+
+if [ "$VIDEO" = 1 ]; then
+    # Wall-clock timestamps on the frames, so the app's marks say where to cut.
+    ffmpeg -nostdin -hide_banner -loglevel error -f avfoundation -capture_cursor 0 -framerate "$FPS" \
+        -use_wallclock_as_timestamps 1 -i "Capture screen $SCREEN" \
+        -c:v hevc_videotoolbox -b:v 80M -copyts -f matroska "$WORK/raw.mkv" &
+    FFMPEG=$!
+    sleep 2
+    kill -0 "$FFMPEG" 2>/dev/null || { FFMPEG=; echo "The screen capture didn't start." >&2; exit 1; }
+    echo "Video: keep the mouse and keyboard still until LaunchGrid quits."
+    run_app video "$(steps scripts/demo/story.txt);hide;wait:1"
+    kill -INT "$FFMPEG"
+    wait "$FFMPEG" || true
+    FFMPEG=
+
+    START=$(sed -n 's/^mark: start //p' "$WORK/video.log")
+    END=$(sed -n 's/^mark: end //p' "$WORK/video.log")
+    [ -n "$START" ] && [ -n "$END" ] || { echo "No mark:start/mark:end in $WORK/video.log" >&2; exit 1; }
+    FIRST=$(ffprobe -v error -show_entries format=start_time -of csv=p=0 "$WORK/raw.mkv")
+    FROM=$(echo "$START - $FIRST" | bc)
+    TO=$(echo "$END - $FIRST" | bc)
+    echo "Cutting $FROM s to $TO s of the capture"
+
+    # 1920×1080 whatever the display's shape, so the page's dimensions hold.
+    FRAME="trim=start=$FROM:end=$TO,setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080"
+    ffmpeg -nostdin -hide_banner -loglevel error -y -i "$WORK/raw.mkv" -vf "$FRAME,format=yuv420p" -an \
+        -c:v libx264 -preset slow -crf 22 -r "$FPS" -movflags +faststart website/public/video/demo.mp4
+    ffmpeg -nostdin -hide_banner -loglevel error -y -i website/public/video/demo.mp4 -frames:v 1 "$WORK/poster.png"
+    cwebp -quiet -q 82 "$WORK/poster.png" -o website/public/video/demo-poster.webp
+    [ "${KEEP:-0}" = 1 ] || rm -f "$WORK/raw.mkv"
+    ls -lh website/public/video/demo.mp4 website/public/video/demo-poster.webp
+fi

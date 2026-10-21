@@ -8,13 +8,14 @@ struct SettingsView: View {
     let actions: LibraryActions
 
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintbrush") }
-            LayoutSettings().tabItem { Label("Layout", systemImage: "square.grid.3x3") }
-            LibrarySettings(actions: actions).tabItem { Label("Library", systemImage: "books.vertical") }
+        @Bindable var state = state
+        TabView(selection: $state.settingsTab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag("General")
+            AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintbrush") }.tag("Appearance")
+            LayoutSettings().tabItem { Label("Layout", systemImage: "square.grid.3x3") }.tag("Layout")
+            LibrarySettings(actions: actions).tabItem { Label("Library", systemImage: "books.vertical") }.tag("Library")
         }
-        .frame(width: 580, height: 600)
+        .frame(width: 580, height: state.settingsHeight)
     }
 }
 

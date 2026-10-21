@@ -1,0 +1,28 @@
+# The Settings screenshots on the website, as LAUNCHGRID_DEBUG_SCRIPT steps; record-demo.sh runs
+# this once per appearance, replacing {appearance} with light and dark.
+# "shoot" writes build/demo/<name>.png; each height fits that tab without scrolling.
+
+appearance:{appearance}
+hotkeyclear
+settings
+wait:1
+
+tab:General
+settingsheight:620
+wait:0.6
+shoot:LaunchGrid Settings,settings-general-{appearance}
+
+tab:Appearance
+settingsheight:600
+wait:0.6
+shoot:LaunchGrid Settings,settings-appearance-{appearance}
+
+tab:Layout
+settingsheight:600
+wait:0.6
+shoot:LaunchGrid Settings,settings-layout-{appearance}
+
+tab:Library
+settingsheight:780
+wait:0.6
+shoot:LaunchGrid Settings,settings-library-{appearance}

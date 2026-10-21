@@ -80,6 +80,10 @@ final class AppState {
     var isShown = false
     /// Why the global shortcut could not be registered, shown in Settings.
     var hotkeyProblem: String?
+    /// The Settings window's tab, by its label.
+    var settingsTab = "General"
+    /// The Settings window's height; the debug script makes it taller to capture a whole tab.
+    var settingsHeight: CGFloat = 600
     let drag = DragController()
 
     // MARK: Hooks wired by the app delegate

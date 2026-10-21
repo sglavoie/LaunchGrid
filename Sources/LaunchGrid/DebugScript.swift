@@ -15,6 +15,22 @@ enum DebugScript {
                 let arg = parts.count > 1 ? parts[1] : ""
                 switch parts[0] {
                 case "build": state.build(style: arg == "alpha" ? .alphabetical : .byCategory)
+                case "only":
+                    // Before "build": exclude every app whose name or bundle ID isn't listed, e.g. "only:Maps,com.apple.Notes".
+                    let keep = Set(arg.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+                    let apps = state.selectableApps
+                    let kept = apps.filter { keep.contains($0.name) || keep.contains($0.bundleID ?? "") }
+                    state.chooseApps(include: kept, exclude: apps.filter { !kept.contains($0) })
+                    print("only: kept \(kept.count) of \(apps.count), missing \(keep.subtracting(kept.flatMap { [$0.name, $0.bundleID ?? ""] }).sorted())")
+                    fflush(stdout)
+                case "size":
+                    // Rows x columns, e.g. "size:5x7".
+                    let n = arg.split(separator: "x").compactMap { Int($0) }
+                    if n.count == 2 { state.resize(rows: n[0], columns: n[1]) }
+                case "mark":
+                    // Prints the wall-clock time, so a screen recording can be cut at this step.
+                    print("mark: \(arg) \(String(format: "%.3f", Date().timeIntervalSince1970))")
+                    fflush(stdout)
                 case "show": overlay.show()
                 case "hide": overlay.hide()
                 case "page": state.goToPage(Int(arg) ?? 0)
@@ -29,6 +45,27 @@ enum DebugScript {
                 case "focus": state.focusIndex = Int(arg) ?? 0
                 case "rename": if let item = state.currentItems.first { state.beginRename(item.id) }
                 case "settings": delegate.showSettings()
+                case "tab": state.settingsTab = arg
+                case "settingsheight": state.settingsHeight = CGFloat(Double(arg) ?? 600)
+                case "hotkeyclear":
+                    // Hides why the shortcut isn't registered, e.g. a scratch copy beside the installed one.
+                    state.hotkeyProblem = nil
+                case "appearance": NSApp.appearance = arg.isEmpty ? nil : NSAppearance(named: arg == "dark" ? .darkAqua : .aqua)
+                case "shoot":
+                    // Asks whoever reads stdout to screenshot the window titled like the first part, as
+                    // `screencapture -l` does with permission we lack, and waits for the file:
+                    // "shoot:LaunchGrid Settings,general" prints "shoot: <window number> general".
+                    let n = arg.split(separator: ",", maxSplits: 1).map(String.init)
+                    guard n.count == 2, let window = NSApp.windows.first(where: { $0.isVisible && $0.title == n[0] }) else { break }
+                    let path = URL(fileURLWithPath: dir).appendingPathComponent("\(n[1]).png").path
+                    try? FileManager.default.removeItem(atPath: path)
+                    print("shoot: \(window.windowNumber) \(n[1])")
+                    fflush(stdout)
+                    var waited = 0
+                    while !FileManager.default.fileExists(atPath: path) && waited < 100 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        waited += 1
+                    }
                 case "missing": delegate.showAddMissing()
                 case "choose": delegate.showChooseApps()
                 case "welcome": delegate.showFirstRun()

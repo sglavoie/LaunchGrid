@@ -1,0 +1,44 @@
+# What the website video shows, as LAUNCHGRID_DEBUG_SCRIPT steps (see Sources/LaunchGrid/DebugScript.swift).
+# One or more steps per line, separated by ";". Lines starting with # are ignored. Every step is
+# followed by a 0.4 s pause, and "keys" types 0.12 s apart.
+# The video runs from "mark:start" to "mark:end" and loops, so it ends where it started.
+# Key codes: 123 ← 124 → 125 ↓ 126 ↑ 36 Return 48 Tab 51 Delete 53 Esc.
+# Indices count from the page's first item, in the alphabetical layout of scripts/demo/apps.txt.
+
+show
+focus:0
+wait:1
+mark:start
+wait:0.6
+
+# Move around with the arrow keys.
+keys:124,124,125
+wait:0.4
+
+# Search by initials, then by prefix; Esc clears it.
+keys:v,s,c
+wait:1.2
+keys:51,51,51,c,a,l
+wait:1.2
+keys:53
+
+# Next page and back.
+keys:cmd+124
+wait:1
+keys:cmd+123
+wait:0.4
+
+# Edit mode: select Discord, FaceTime and Messages, and group them into a folder, which opens.
+keys:cmd+e
+select:8,9,22
+wait:0.6
+keys:cmd+g
+wait:1.4
+keys:53,53
+wait:0.8
+
+# Undo the folder, so the video ends where it began.
+keys:cmd+z
+focus:0
+wait:1
+mark:end

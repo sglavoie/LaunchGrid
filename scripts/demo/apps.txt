@@ -1,0 +1,54 @@
+# Apps on the grid in the website video, by name or bundle ID, one per line.
+# The recording Mac only shows the ones it has installed; record-demo.sh lists any missing.
+App Store
+Books
+Calculator
+Calendar
+Chess
+Clock
+Contacts
+Dictionary
+Discord
+Figma
+Find My
+Firefox
+FaceTime
+Freeform
+GarageBand
+Ghostty
+GIMP
+Google Chrome
+Home
+Journal
+Mail
+Maps
+Messages
+Music
+News
+Notes
+Obsidian
+Passwords
+Phone
+Photo Booth
+Photos
+Podcasts
+Preview
+Reminders
+Safari
+Screenshot
+Shortcuts
+Slack
+Steam
+Stocks
+System Settings
+Terminal
+TextEdit
+Tips
+TV
+Visual Studio Code
+VLC
+Voice Memos
+Weather
+WhatsApp
+Xcode
+Zoom

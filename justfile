@@ -71,6 +71,10 @@ website:
 website-deploy:
     cd website && npx -y wrangler@4 deploy
 
+# Record the website's video and Settings screenshots (run in a terminal window with Screen Recording)
+demo-video *args:
+    scripts/record-demo.sh {{args}}
+
 # Remove build products
 clean:
     rm -rf .build build
