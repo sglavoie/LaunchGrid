@@ -242,7 +242,7 @@ struct PageView: View {
     /// Display entries: items, plus a placeholder for the drop gap on the current page.
     private var entries: [(id: UUID, item: GridItem?)] {
         var list: [(id: UUID, item: GridItem?)] = state.remainingItems(page: page).map { ($0.id, $0) }
-        if state.drag.active, page == state.currentPage, state.openFolder == nil, state.drag.mergeTarget == nil,
+        if state.drag.active, page == state.currentPage, state.openFolder == nil,
            let gap = state.drag.gap {
             list.insert((Self.gapID, nil), at: min(gap, list.count))
         }
