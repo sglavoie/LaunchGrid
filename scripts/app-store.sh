@@ -63,6 +63,12 @@ codesign --verify --strict --verbose=2 build/LaunchGrid.app
 
 # Work on a copy: other recipes rebuild build/LaunchGrid.app.
 ditto build/LaunchGrid.app "$OUT_DIR/LaunchGrid.app"
+# The App Store refuses a package with any quarantined file in it.
+if xattr -r "$OUT_DIR/LaunchGrid.app" | grep -q com.apple.quarantine; then
+    xattr -r "$OUT_DIR/LaunchGrid.app" | grep com.apple.quarantine >&2
+    echo "These files are quarantined; the App Store would refuse the package." >&2
+    exit 1
+fi
 productbuild --component "$OUT_DIR/LaunchGrid.app" /Applications --sign "$INSTALLER_IDENTITY" "$OUT_DIR/LaunchGrid.pkg"
 pkgutil --check-signature "$OUT_DIR/LaunchGrid.pkg"
 git rev-parse HEAD > "$OUT_DIR/COMMIT"

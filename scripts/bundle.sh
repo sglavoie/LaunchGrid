@@ -93,7 +93,9 @@ if [ "${APP_STORE:-0}" = 1 ]; then
         -c "Add :DTXcode string $(echo "$XCODE_VERSION.0.0" | awk -F. '{ printf "%d%d%d", $1, $2, $3 }')" \
         -c "Add :DTXcodeBuild string $(xcodebuild -version | sed -n 's/^Build version //p')" \
         -c "Add :BuildMachineOSBuild string $(sw_vers -buildVersion)" "$PLIST"
+    # A downloaded profile is quarantined, which the App Store refuses; copying keeps that, even with -X.
     cp "$PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+    xattr -d com.apple.quarantine "$APP/Contents/embedded.provisionprofile" 2>/dev/null || true
 fi
 
 # Ad-hoc signature with the hardened runtime; use a Developer ID identity to notarise
