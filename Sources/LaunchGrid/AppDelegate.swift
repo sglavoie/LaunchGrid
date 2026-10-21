@@ -446,24 +446,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func importDatabase(_ url: URL, from source: String) {
-        do {
-            let result = try LaunchpadImporter.importDatabase(at: url, rows: state.grid.rows, columns: state.grid.columns) { id in
-                NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
+        let rows = state.grid.rows, columns = state.grid.columns
+        Task {
+            // Reading the database and asking Launch Services about every app can take a while.
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns) { id in
+                        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
+                    }
+                }
+            }.value
+            switch outcome {
+            case .failure(let error):
+                showError("Could not import from \(source)", error.localizedDescription)
+            case .success(let result):
+                guard result.imported > 0 else {
+                    showError("Nothing to import", "No apps in the \(source) layout could be found on this Mac.")
+                    return
+                }
+                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid))
+                var message = "Imported \(result.imported) apps from \(source)"
+                if !result.skipped.isEmpty { message += "; skipped \(result.skipped.count) not installed" }
+                state.showToast(message)
+                closeFirstRunIfDone()
             }
-            guard result.imported > 0 else {
-                showError("Nothing to import", "No apps in the \(source) layout could be found on this Mac.")
-                return
-            }
-            // Apps excluded earlier stay out unless the imported layout has them.
-            var grid = result.grid
-            grid.removedBundleIDs = state.grid.removedBundleIDs.subtracting(grid.appKeys.union(grid.allApps.map(\.path)))
-            state.replaceGrid(grid)
-            var message = "Imported \(result.imported) apps from \(source)"
-            if !result.skipped.isEmpty { message += "; skipped \(result.skipped.count) not installed" }
-            state.showToast(message)
-            closeFirstRunIfDone()
-        } catch {
-            showError("Could not import from \(source)", error.localizedDescription)
         }
     }
 

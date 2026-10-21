@@ -97,11 +97,23 @@ final class IconProvider: @unchecked Sendable {
     func prewarm(_ paths: [String]) {
         let missing = paths.filter { cached($0) == nil }
         guard !missing.isEmpty else { return }
-        queue.async { self.renderAll(missing) }
+        queue.async { self.renderBlocking(missing) }
     }
 
-    /// Renders icons for the given paths and returns once they're all cached.
-    func renderAll(_ paths: [String]) {
+    /// Renders icons for the given paths and returns once they're all cached. The rendering
+    /// and its waits stay on the icon queue, off Swift's cooperative threads.
+    func renderAll(_ paths: [String]) async {
+        guard !paths.isEmpty else { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            queue.async {
+                self.renderBlocking(paths)
+                cont.resume()
+            }
+        }
+    }
+
+    /// Only on `queue`: blocks until every path is rendered.
+    private func renderBlocking(_ paths: [String]) {
         DispatchQueue.concurrentPerform(iterations: paths.count) { i in
             _ = self.render(paths[i])
         }

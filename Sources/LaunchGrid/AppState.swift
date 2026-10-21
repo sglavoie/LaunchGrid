@@ -27,6 +27,10 @@ final class AppState {
     @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [AppRef])?
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
+    /// Apps on the grid from outside the scan folders, read off the main thread with each
+    /// scan. `outsideChecked` holds every path looked at, found or not.
+    @ObservationIgnored private var outsideApps: [String: InstalledApp] = [:]
+    @ObservationIgnored private var outsideChecked: Set<String> = []
     /// LaunchGrid's own bundle ID: it never belongs on its own grid.
     @ObservationIgnored var ownBundleID = Bundle.main.bundleIdentifier
     private(set) var hasGridFile: Bool
@@ -82,6 +86,8 @@ final class AppState {
     @ObservationIgnored private var rescanQueued = false
     /// Completions waiting for the queued scan: the one under way may predate what they need.
     @ObservationIgnored private var queuedCompletions: [@MainActor () -> Void] = []
+    /// The scan itself; tests swap in a fake.
+    @ObservationIgnored var scanner: @Sendable ([URL]) -> [InstalledApp] = { AppScanner.scan(roots: $0) }
     /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
     @ObservationIgnored private var savesBlocked = false
 
@@ -254,12 +260,19 @@ final class AppState {
         }
         scanning = true
         let roots = prefs.scanRoots
+        let scanner = scanner
+        // Apps from elsewhere are checked in the same pass, so reconciling needs no disk access.
+        let candidates = outsideCandidates()
         Task {
             let started = Date()
-            let apps = await Task.detached(priority: .utility) { AppScanner.scan(roots: roots) }.value
+            let (apps, outside) = await Task.detached(priority: .utility) {
+                let apps = scanner(roots)
+                let scanned = Set(apps.map(\.path))
+                return (apps, Self.readOutsideApps(candidates.filter { !scanned.contains($0) }))
+            }.value
             NSLog("LaunchGrid: scanned \(apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
             self.scanning = false
-            self.catalogScanned(apps)
+            self.catalogScanned(apps, outside: outside)
             completion?()
             if self.rescanQueued {
                 self.rescanQueued = false
@@ -270,26 +283,43 @@ final class AppState {
         }
     }
 
-    /// Takes in a finished scan.
-    func catalogScanned(_ apps: [InstalledApp]) {
+    /// Takes in a finished scan. `outside` holds what was read of the grid's apps outside the
+    /// scan folders; any not covered are read when reconciling.
+    func catalogScanned(_ apps: [InstalledApp], outside: (apps: [String: InstalledApp], checked: Set<String>) = ([:], [])) {
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        outsideApps = outside.apps
+        outsideChecked = outside.checked
         if hasGridFile { reconcile() }
         refreshUpdatedIcons()
+    }
+
+    /// Paths of grid apps, and of recently pruned ones (which can still return to their slot),
+    /// that could be from outside the scan folders.
+    private func outsideCandidates() -> [String] {
+        let recent = grid.recentlyPruned.filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
+        var seen = Set<String>()
+        return (grid.allApps + recent.map(\.app))
+            .filter { !isSelf($0.bundleID) && seen.insert($0.path).inserted }
+            .map(\.path)
+    }
+
+    /// Reads the apps at `paths`; those missing or unreadable are left out of `apps`.
+    nonisolated static func readOutsideApps(_ paths: [String]) -> (apps: [String: InstalledApp], checked: Set<String>) {
+        let apps = paths.filter { FileManager.default.fileExists(atPath: $0) }
+            .compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0)) }
+        return (Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }), Set(paths))
     }
 
     /// Drops icons of apps updated in place since they were rendered, then reloads them.
     private func refreshUpdatedIcons() {
         let paths = grid.allApps.map(\.path)
         Task {
-            // Re-render before bumping the generation, so views reload the new icons, not a miss.
-            let stale = await Task.detached(priority: .utility) {
-                let stale = IconProvider.shared.dropStale(paths)
-                IconProvider.shared.renderAll(stale)
-                return stale
-            }.value
+            let stale = await Task.detached(priority: .utility) { IconProvider.shared.dropStale(paths) }.value
             guard !stale.isEmpty else { return }
+            // Re-render before bumping the generation, so views reload the new icons, not a miss.
+            await IconProvider.shared.renderAll(stale)
             self.iconGeneration += 1
         }
     }
@@ -316,16 +346,18 @@ final class AppState {
     func reconcile() {
         guard !installed.isEmpty else { return }
         // Apps added from outside the scanned folders stay as long as they exist on disk,
-        // and recently pruned ones there can still return to their slot.
-        var seenPaths = Set<String>()
-        let recent = grid.recentlyPruned.filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
-        let extra = (grid.allApps + recent.map(\.app))
-            .filter { installedByPath[$0.path] == nil && !isSelf($0.bundleID)
-                && seenPaths.insert($0.path).inserted
-                && FileManager.default.fileExists(atPath: $0.path) }
-            .compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0.path)) }
+        // and recently pruned ones there can still return to their slot. The scan read them;
+        // only ones that reached the grid since are read here.
+        let candidates = outsideCandidates().filter { installedByPath[$0] == nil }
+        let unchecked = candidates.filter { !outsideChecked.contains($0) }
+        if !unchecked.isEmpty {
+            let read = Self.readOutsideApps(unchecked)
+            outsideApps.merge(read.apps) { _, new in new }
+            outsideChecked.formUnion(read.checked)
+        }
+        let extra = candidates.compactMap { outsideApps[$0] }
         var g = grid
-        let missingRoots = prefs.scanRoots.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) }
+        let missingRoots = missingRoots
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
                                           isReachable: { self.isReachable($0, missingRoots: missingRoots) })
         guard g != grid else { return }
