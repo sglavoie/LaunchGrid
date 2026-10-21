@@ -18,6 +18,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var screen: NSScreen?
     private var scrollAccumulator: CGFloat = 0
     private var lastWheelFlip = Date.distantPast
+    /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
+    private var visibilityGeneration = 0
 
     var isVisible: Bool { panel?.isVisible == true && state.isShown }
     var window: NSWindow? { panel }
@@ -44,6 +46,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let panel = makePanelIfNeeded()
         placePanel()
         state.focusIndex = nil
+        visibilityGeneration += 1
+        // A fade-out still running would otherwise carry on to 0 after this; replace it.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            panel.animator().alphaValue = 1
+        }
         panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
         state.didShow()
@@ -53,12 +61,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let panel, panel.isVisible else { return }
         state.isShown = false
         state.saveNow()
+        visibilityGeneration += 1
+        let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.12
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, !self.state.isShown else { return }
+                guard let self, self.visibilityGeneration == generation, !self.state.isShown else { return }
                 panel.orderOut(nil)
                 self.state.didHide()
                 // Hand focus back to the previous app unless another of our windows is up.
@@ -91,6 +101,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         p.becomesKeyOnlyIfNeeded = false
         p.hidesOnDeactivate = false
         p.isOpaque = false
+        // The SwiftUI content is always dark; menus and visual-effect views follow the window.
+        p.appearance = NSAppearance(named: .darkAqua)
         p.backgroundColor = .clear
         p.hasShadow = mode == .window
         p.isReleasedWhenClosed = false
