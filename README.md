@@ -2,6 +2,8 @@
 
 A free, Launchpad-style app grid for macOS 14+, rebuilt from the observed behaviour of AppGrid. Every former "Pro" feature is included; there are no purchases, licence checks, network calls or announcements.
 
+About 99% of LaunchGrid (code, tests, documentation and website) was written by AI, Claude by Anthropic, directed and tested by Sébastien Lavoie. The app itself contains no AI features and makes no network connections.
+
 ## Build and run
 
 ```sh
@@ -14,6 +16,8 @@ swift test                   # core and app-state tests
 With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just test`, `just ci` and `just clean`.
 
 CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26.
+
+The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home, support and privacy policy) is static HTML in `website/public`, served by a Cloudflare Worker: `just website` previews it, `just website-deploy` publishes it. `docs/app-store-submission.md` tracks what the Mac App Store still needs.
 
 Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.appgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 

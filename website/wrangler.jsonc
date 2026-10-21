@@ -1,0 +1,14 @@
+// The website at launchgrid.sglavoie.com: static files only, served from ./public with
+// public/_headers. Deploy with `just website-deploy`.
+{
+  "name": "launchgrid-website",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "routes": [{ "pattern": "launchgrid.sglavoie.com", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false
+}
