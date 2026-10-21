@@ -13,11 +13,13 @@ public enum LaunchpadImporter {
     public enum ImportError: Error, LocalizedError {
         case cannotOpen(String)
         case notALaunchpadDatabase
+        case readFailed(String)
 
         public var errorDescription: String? {
             switch self {
             case .cannotOpen(let why): "Could not open the database: \(why)"
             case .notALaunchpadDatabase: "This file is not a Launchpad or AppGrid database."
+            case .readFailed(let why): "Could not read the database: \(why)"
             }
         }
     }
@@ -118,8 +120,18 @@ public enum LaunchpadImporter {
         var imported = 0
         var seen = Set<String>()
 
+        /// `visited` guards against parent_id cycles in a damaged database.
+        func countApps(under id: Int, visited: inout Set<Int>) -> Int {
+            guard visited.insert(id).inserted else { return 0 }
+            var n = 0
+            for child in children[id] ?? [] {
+                n += child.type == ItemType.app.rawValue ? 1 : countApps(under: child.id, visited: &visited)
+            }
+            return n
+        }
         func countApps(under id: Int) -> Int {
-            (children[id] ?? []).reduce(0) { $0 + ($1.type == ItemType.app.rawValue ? 1 : countApps(under: $1.id)) }
+            var visited = Set<Int>()
+            return countApps(under: id, visited: &visited)
         }
 
         func makeApp(_ id: Int) -> AppRef? {
@@ -142,14 +154,17 @@ public enum LaunchpadImporter {
         }
 
         /// Apps inside a folder: directly or through the folder's own pages.
-        func folderApps(_ id: Int) -> [AppRef] {
-            (children[id] ?? []).flatMap { child -> [AppRef] in
+        func folderApps(_ id: Int, visited: inout Set<Int>) -> [AppRef] {
+            guard visited.insert(id).inserted else { return [] }
+            var out: [AppRef] = []
+            for child in children[id] ?? [] {
                 switch ItemType(rawValue: child.type) {
-                case .app: makeApp(child.id).map { [$0] } ?? []
-                case .page: folderApps(child.id)
-                default: []
+                case .app: out += makeApp(child.id).map { [$0] } ?? []
+                case .page: out += folderApps(child.id, visited: &visited)
+                default: break
                 }
             }
+            return out
         }
 
         func pageItems(_ id: Int) -> [GridItem] {
@@ -158,7 +173,8 @@ public enum LaunchpadImporter {
                 case .app:
                     return makeApp(child.id).map(GridItem.app)
                 case .folder:
-                    let contents = folderApps(child.id)
+                    var visited = Set<Int>()
+                    let contents = folderApps(child.id, visited: &visited)
                     guard !contents.isEmpty else { return nil }
                     return .folder(Folder(name: groupTitles[child.id] ?? "Folder", apps: contents))
                 default:
@@ -184,13 +200,20 @@ public enum LaunchpadImporter {
 
     // MARK: SQLite helpers
 
-    private static func query(_ db: OpaquePointer, _ sql: String, row: (OpaquePointer) throws -> Void) throws {
+    /// Runs `sql`, calling `row` per result. Throws if stepping stops on an error, so a
+    /// damaged database can't pass for a complete but smaller one.
+    static func query(_ db: OpaquePointer, _ sql: String, row: (OpaquePointer) throws -> Void) throws {
         var st: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK, let st else {
             throw ImportError.cannotOpen(String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(st) }
-        while sqlite3_step(st) == SQLITE_ROW { try row(st) }
+        var rc = sqlite3_step(st)
+        while rc == SQLITE_ROW {
+            try row(st)
+            rc = sqlite3_step(st)
+        }
+        guard rc == SQLITE_DONE else { throw ImportError.readFailed(String(cString: sqlite3_errmsg(db))) }
     }
 
     private static func text(_ st: OpaquePointer, _ i: Int32) -> String? {

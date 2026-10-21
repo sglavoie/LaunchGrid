@@ -10,12 +10,17 @@ public struct Grid: Codable, Equatable, Sendable {
     public var pages: [Page]
     /// Apps the user removed; the reconciler never re-adds these automatically.
     public var removedBundleIDs: Set<String> = []
+    /// Apps the reconciler pruned lately, so one that comes back (an updater deletes, then
+    /// re-copies the bundle) returns to its old slot instead of the end of the grid.
+    public var recentlyPruned: [PrunedApp] = []
 
-    public init(rows: Int = 5, columns: Int = 7, pages: [Page] = [Page()], removedBundleIDs: Set<String> = []) {
+    public init(rows: Int = 5, columns: Int = 7, pages: [Page] = [Page()], removedBundleIDs: Set<String> = [],
+                recentlyPruned: [PrunedApp] = []) {
         self.rows = max(1, rows)
         self.columns = max(1, columns)
         self.pages = pages.isEmpty ? [Page()] : pages
         self.removedBundleIDs = removedBundleIDs
+        self.recentlyPruned = recentlyPruned
     }
 
     public var capacity: Int { rows * columns }
@@ -126,6 +131,34 @@ public struct AppRef: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// Where a pruned app used to be. Indices are those before pruning; restoring in the order
+/// the apps were pruned puts neighbours back side by side.
+public struct PrunedApp: Codable, Equatable, Sendable {
+    public var app: AppRef
+    public var prunedAt: Date
+    public var pageID: UUID
+    public var index: Int
+    /// Set when the app was inside a folder, which is recreated if pruning emptied it.
+    public var folderID: UUID?
+    public var folderName: String?
+    public var folderIndex: Int?
+    /// The prune itself emptied the folder; otherwise a vanished folder was the user's doing.
+    public var folderEmptied: Bool?
+
+    public init(app: AppRef, prunedAt: Date, pageID: UUID, index: Int,
+                folderID: UUID? = nil, folderName: String? = nil, folderIndex: Int? = nil,
+                folderEmptied: Bool? = nil) {
+        self.app = app
+        self.prunedAt = prunedAt
+        self.pageID = pageID
+        self.index = index
+        self.folderID = folderID
+        self.folderName = folderName
+        self.folderIndex = folderIndex
+        self.folderEmptied = folderEmptied
+    }
+}
+
 public struct Folder: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
@@ -163,7 +196,7 @@ public struct InstalledApp: Equatable, Hashable, Sendable {
 // Lenient decoding: missing optional keys fall back to defaults so hand-edited
 // or older files still load.
 extension Grid {
-    private enum CodingKeys: String, CodingKey { case version, rows, columns, pages, removedBundleIDs }
+    private enum CodingKeys: String, CodingKey { case version, rows, columns, pages, removedBundleIDs, recentlyPruned }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -171,7 +204,9 @@ extension Grid {
             rows: try c.decodeIfPresent(Int.self, forKey: .rows) ?? 5,
             columns: try c.decodeIfPresent(Int.self, forKey: .columns) ?? 7,
             pages: try c.decodeIfPresent([Page].self, forKey: .pages) ?? [],
-            removedBundleIDs: try c.decodeIfPresent(Set<String>.self, forKey: .removedBundleIDs) ?? []
+            removedBundleIDs: try c.decodeIfPresent(Set<String>.self, forKey: .removedBundleIDs) ?? [],
+            // Disposable: an unreadable list is dropped rather than failing the whole file.
+            recentlyPruned: (try? c.decodeIfPresent([PrunedApp].self, forKey: .recentlyPruned)) ?? []
         )
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
     }

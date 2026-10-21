@@ -1,7 +1,8 @@
 import Foundation
 
 public enum Search {
-    /// Match score for `name` against `query`: prefix > word start > substring > subsequence.
+    /// Match score for `name` against `query`: prefix > word start > initials > substring >
+    /// subsequence, whatever the name's length. Tiers don't overlap; length ranks within one.
     /// Returns nil when there is no match.
     public static func score(_ name: String, query: String) -> Int? {
         let q = normalize(query)
@@ -11,7 +12,7 @@ public enum Search {
         if n.hasPrefix(q) { return 900 - min(n.count, 99) }
         let words = n.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
-        if acronym(of: name).hasPrefix(q) { return 650 }
+        if acronym(of: name).hasPrefix(q) { return 600 }
         if n.contains(q) { return 500 - min(n.count, 99) }
         if q.count >= 3, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
         return nil

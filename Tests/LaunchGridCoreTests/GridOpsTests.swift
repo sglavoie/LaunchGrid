@@ -73,6 +73,50 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(titles(g.pages[0]) == ["F", "B"])
     }
 
+    @Test func groupWithAnchorInsideAFolder() {
+        var g = grid([["A", "B", "C", "D"]], columns: 4)
+        let fid = g.group([g.pages[0].items[0].id, g.pages[0].items[1].id], name: "F")!
+        let b = g.folder(fid)!.apps[1].id
+        let d = g.pages[0].items[2].id
+        let new = g.group([d, b], name: "G", anchor: b)
+        #expect(titles(g.pages[0]) == ["G", "F", "C"], "the new folder takes the anchor's folder slot")
+        #expect(g.folder(fid)?.apps.map(\.name) == ["A"])
+        #expect(g.folder(new!)?.apps.map(\.name) == ["B", "D"])
+    }
+
+    @Test func groupWithChosenItemsBeforeTheAnchor() {
+        var g = grid([["A", "B", "C", "D"]], columns: 4)
+        let ids = g.pages[0].items.map(\.id)
+        let fid = g.group([ids[0], ids[1], ids[3]], name: "F", anchor: ids[3])
+        #expect(titles(g.pages[0]) == ["C", "F"])
+        #expect(g.folder(fid!)?.apps.map(\.name) == ["A", "B", "D"])
+    }
+
+    @Test func reorderWithinAFolder() {
+        var g = grid([["A", "B", "C"]])
+        let fid = g.group(g.pages[0].items.map(\.id), name: "F")!
+        let a = g.folder(fid)!.apps[0].id
+        g.addToFolder([a], folder: fid, at: 2)
+        #expect(g.folder(fid)?.apps.map(\.name) == ["B", "C", "A"])
+        g.addToFolder([a], folder: fid, at: 0)
+        #expect(g.folder(fid)?.apps.map(\.name) == ["A", "B", "C"])
+    }
+
+    @Test func addToFolderWithAnAppIDLeavesTheContainingFolderAlone() {
+        var g = grid([["A", "B", "C"]])
+        let fid = g.group([g.pages[0].items[0].id, g.pages[0].items[1].id], name: "F")!
+        let a = g.folder(fid)!.apps[0].id
+        g.addToFolder([g.pages[0].items[1].id], folder: a)
+        #expect(g.folder(fid)?.apps.map(\.name) == ["A", "B"])
+        #expect(titles(g.pages[0]) == ["F", "C"])
+    }
+
+    @Test func insertOnANegativePageUsesTheFirst() {
+        var g = grid([["A"]])
+        g.insert([.app(app("X"))], page: -1, at: 0)
+        #expect(g.pages.map(titles) == [["X", "A"]])
+    }
+
     @Test func removeRemembersKeys() {
         var g = grid([["A", "B"]])
         g.remove([g.pages[0].items[0].id])
@@ -122,6 +166,12 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(titles) == [["A", "B", "C"]])
     }
 
+    @Test func deletingTheFirstPageMovesItsItemsToTheStartOfTheNext() {
+        var g = grid([["A", "B"], ["C", "D"]])
+        g.deletePage(0)
+        #expect(g.pages.map(titles) == [["A", "B", "C"], ["D"]])
+    }
+
     @Test func ungroupInPlace() {
         var g = grid([["A", "B", "C"]])
         let fid = g.group([g.pages[0].items[1].id, g.pages[0].items[2].id], name: "F")!
@@ -150,6 +200,25 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try store.load() == g)
     }
 
+    @Test func rejectsCorruptJSON() {
+        #expect(throws: GridFileError.self) { try GridStore.decode(Data("{\"rows\": 5, \"pages\": [".utf8)) }
+        #expect(throws: GridFileError.self) { try GridStore.decode(Data(#"{"pages": [{"items": [{"type": "nope"}]}]}"#.utf8)) }
+    }
+
+    @Test func rejectsOutOfRangeSize() {
+        let data = Data(#"{"version": 1, "rows": 51, "columns": 7, "pages": []}"#.utf8)
+        #expect(throws: GridFileError.self) { try GridStore.decode(data) }
+    }
+
+    @Test func recentlyPrunedRoundTripsAndOldFilesStillLoad() throws {
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))])])
+        g.recentlyPruned = [PrunedApp(app: app("B"), prunedAt: Date(timeIntervalSinceReferenceDate: 1000),
+                                      pageID: g.pages[0].id, index: 1, folderID: UUID(), folderName: "F", folderIndex: 0)]
+        #expect(try GridStore.decode(GridStore.encode(g)) == g)
+        let old = Data(#"{"version": 1, "rows": 1, "columns": 2, "pages": [], "removedBundleIDs": []}"#.utf8)
+        #expect(try GridStore.decode(old).recentlyPruned.isEmpty)
+    }
+
     @Test func rejectsNewerVersion() {
         let data = #"{"version": 99, "rows": 5, "columns": 7, "pages": [], "removedBundleIDs": []}"#.data(using: .utf8)!
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }
@@ -172,6 +241,20 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.results(in: apps, query: "gb").map(\.name) == ["GarageBand"])
         #expect(Search.results(in: apps, query: "grbd").map(\.name) == ["GarageBand"])
         #expect(Search.results(in: apps, query: "zzz").isEmpty)
+    }
+
+    @Test func wordStartBeatsInitialsForLongNames() {
+        let long = app("Some Very Long Application Name That Goes On And On And On Pro")
+        let initials = app("Photo Raw Organizer")
+        #expect(Search.results(in: [initials, long], query: "pro").map(\.name) == [long.name, initials.name])
+        for n in [1, 20, 50, 51, 99, 150] {
+            let name = String(repeating: "x", count: n)
+            let word = Search.score(name + " Pro", query: "pro")!
+            #expect(Search.score("pro" + name, query: "pro")! > word)
+            #expect(word > Search.score("Photo Raw Organizer", query: "pro")!)
+            #expect(Search.score("Photo Raw Organizer", query: "pro")! > Search.score("x" + name + "pro", query: "pro")!)
+            #expect(Search.score("x" + name + "pro", query: "pro")! > Search.score("p" + name + "ro", query: "pro")!)
+        }
     }
 
     @Test func diacriticInsensitiveAndRenames() {

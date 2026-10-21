@@ -244,10 +244,13 @@ final class AppState {
     /// Merges the catalog into the grid. Not an undo step: it mirrors the disk.
     func reconcile() {
         guard !installed.isEmpty else { return }
-        // Apps added from outside the scanned folders stay as long as they exist on disk.
-        let keys = Set(installed.map(\.key))
-        let extra = grid.allApps
-            .filter { !keys.contains($0.key) && installedByPath[$0.path] == nil && !isSelf($0.bundleID)
+        // Apps added from outside the scanned folders stay as long as they exist on disk,
+        // and recently pruned ones there can still return to their slot.
+        var seenPaths = Set<String>()
+        let recent = grid.recentlyPruned.filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
+        let extra = (grid.allApps + recent.map(\.app))
+            .filter { installedByPath[$0.path] == nil && !isSelf($0.bundleID)
+                && seenPaths.insert($0.path).inserted
                 && FileManager.default.fileExists(atPath: $0.path) }
             .compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0.path)) }
         var g = grid
@@ -256,11 +259,11 @@ final class AppState {
                                           isReachable: { self.isReachable($0, missingRoots: missingRoots) })
         guard g != grid else { return }
         if !report.isEmpty {
-            NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved)")
+            NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
         }
         grid = g
         afterChange()
-        if !report.added.isEmpty {
+        if !report.added.isEmpty || !report.restored.isEmpty {
             IconProvider.shared.prewarm(g.allApps.map(\.path))
         }
     }

@@ -123,6 +123,7 @@ extension Grid {
     /// Inserts items on a page, pushing overflow to later pages.
     public mutating func insert(_ items: [GridItem], page: Int, at index: Int) {
         guard !items.isEmpty else { return }
+        let page = max(0, page)
         while page >= pages.count { pages.append(Page()) }
         let i = min(max(0, index), pages[page].items.count)
         pages[page].items.insert(contentsOf: items, at: i)
@@ -189,9 +190,11 @@ extension Grid {
     public mutating func addToFolder(_ ids: [UUID], folder folderID: UUID, at index: Int? = nil) {
         let moving = ids.filter { $0 != folderID }
         let apps = detach(moving).flatMap(\.apps)
-        guard let loc = locate(folderID), case .folder(var f) = pages[loc.page].items[loc.index] else {
-            // Folder vanished; put the apps back somewhere visible.
+        guard let loc = locate(folderID), loc.folderIndex == nil,
+              case .folder(var f) = pages[loc.page].items[loc.index] else {
+            // Folder vanished (or the ID isn't a folder); put the apps back somewhere visible.
             appendToFirstFree(apps.map(GridItem.app))
+            normalize()
             return
         }
         let i = min(max(0, index ?? f.apps.count), f.apps.count)
@@ -240,7 +243,8 @@ extension Grid {
         return at
     }
 
-    /// Deletes a page; its items move to the end of the previous page (or the next one).
+    /// Deletes a page; its items move to the end of the previous page (or, for the first
+    /// page, to the start of the next one).
     public mutating func deletePage(_ index: Int) {
         guard pages.indices.contains(index) else { return }
         let items = pages.remove(at: index).items
@@ -250,7 +254,11 @@ extension Grid {
             return
         }
         let target = max(0, index - 1)
-        pages[target].items.append(contentsOf: items)
+        if index == 0 {
+            pages[0].items.insert(contentsOf: items, at: 0)
+        } else {
+            pages[target].items.append(contentsOf: items)
+        }
         spill(from: target)
     }
 
