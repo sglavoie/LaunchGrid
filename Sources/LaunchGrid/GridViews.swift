@@ -218,16 +218,21 @@ struct PageTitle: View {
 
 struct Pager: View {
     @Environment(AppState.self) private var state
+    /// The page shown before the last change, kept until its slide has finished.
+    @State private var settledPage: Int?
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let count = state.grid.pages.count + (state.showsVirtualPage ? 1 : 0)
+            // Only pages near the current one are rendered, plus, while a jump (⌘5, a page
+            // dot) slides, every page it passes over, so it never slides across blank pages.
+            let from = settledPage ?? state.currentPage
+            let drawn = (min(from, state.currentPage) - 1)...(max(from, state.currentPage) + 1)
             HStack(spacing: 0) {
                 ForEach(0..<count, id: \.self) { p in
                     Group {
-                        // Only pages near the current one are rendered.
-                        if abs(p - state.currentPage) <= 1 {
+                        if drawn.contains(p) {
                             PageView(page: p, size: geo.size)
                         } else {
                             Color.clear
@@ -243,6 +248,13 @@ struct Pager: View {
             }
         }
         .clipped()
+        .task(id: state.currentPage) {
+            if settledPage == nil { settledPage = state.currentPage; return }
+            // Longer than the page spring takes to come to rest.
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            settledPage = state.currentPage
+        }
     }
 }
 
