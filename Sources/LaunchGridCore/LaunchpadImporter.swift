@@ -63,14 +63,25 @@ public enum LaunchpadImporter {
         columns: Int,
         resolve: (String) -> String?
     ) throws -> Result {
-        // Copy first so a live database (and its WAL) is never touched.
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("launchgrid-import-\(UUID().uuidString).db")
-        try FileManager.default.copyItem(at: url, to: tmp)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        // Copy first so a live database is never touched. Its write-ahead log comes along:
+        // recent changes may live only there. The shared-memory index is left behind and
+        // rebuilt from the log, which needs a writable connection to the copy.
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("launchgrid-import-\(UUID().uuidString).db")
+        try fm.copyItem(at: url, to: tmp)
+        let wal = URL(fileURLWithPath: url.path + "-wal")
+        if fm.fileExists(atPath: wal.path) {
+            try fm.copyItem(at: wal, to: URL(fileURLWithPath: tmp.path + "-wal"))
+        }
+        defer {
+            for suffix in ["", "-wal", "-shm"] { try? fm.removeItem(atPath: tmp.path + suffix) }
+        }
 
         var db: OpaquePointer?
-        guard sqlite3_open_v2(tmp.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
-            throw ImportError.cannotOpen(String(cString: sqlite3_errmsg(db)))
+        guard sqlite3_open_v2(tmp.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let db else {
+            let why = String(cString: sqlite3_errmsg(db))
+            sqlite3_close(db)
+            throw ImportError.cannotOpen(why)
         }
         defer { sqlite3_close(db) }
 
