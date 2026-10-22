@@ -1,0 +1,43 @@
+# The Mac App Store screenshots, as LAUNCHGRID_DEBUG_SCRIPT steps; record-demo.sh --app-store runs
+# this in Window mode. "windowsize" sizes the grid's window in points, and "shootframe" captures it
+# inset by 36 points, past its rounded corners and close button: 1440×900 points, which is
+# 2880×1800 pixels on a Retina display, the App Store's 16:10. "shoot" captures a window as is;
+# record-demo.sh lays the Settings one over a dimmed 01-grid.
+# Indices count from the page's first item, in the alphabetical layout of scripts/demo/apps.txt.
+
+show
+windowsize:1512,972
+wait:1.5
+shootframe:01-grid,36
+
+# Search: "pho" finds Phone, Photo Booth and Photos.
+keys:p,h,o
+wait:1
+shootframe:02-search,36
+keys:53
+
+# Discord, FaceTime and Messages grouped into a folder, which opens.
+keys:cmd+e
+select:8,9,22
+wait:0.6
+keys:cmd+g
+wait:1.4
+shootframe:03-folder,36
+keys:53,53
+keys:cmd+z
+wait:0.6
+
+# Edit mode, with three apps selected.
+keys:cmd+e
+select:2,3,4
+wait:0.8
+shootframe:04-edit,36
+keys:53
+
+appearance:dark
+hotkeyclear
+settings
+tab:Appearance
+settingsheight:600
+wait:1
+shoot:LaunchGrid Settings,05-settings

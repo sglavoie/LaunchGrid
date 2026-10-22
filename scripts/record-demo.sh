@@ -3,7 +3,9 @@
 #   - the video: scripts/demo/story.txt on the main display, cut from "mark:start" to "mark:end",
 #     to website/public/video/demo.mp4 and demo-poster.webp;
 #   - the Settings tabs: scripts/demo/settings.txt in light and dark, to
-#     website/public/images/settings-<tab>-<light|dark>.webp.
+#     website/public/images/settings-<tab>-<light|dark>.webp;
+#   - with --app-store only, the Mac App Store screenshots: scripts/demo/app-store.txt in Window
+#     mode over a system wallpaper, to docs/app-store/screenshots/*.jpg at 2880×1800.
 #
 # Needs ffmpeg and cwebp (brew install ffmpeg webp), and Screen Recording permission (System Settings › Privacy & Security › Screen &
 # System Audio Recording) for the terminal app you run it from. Run it in a terminal window: a tmux
@@ -12,6 +14,7 @@
 #
 #   scripts/record-demo.sh               build, then record the video and the Settings tabs
 #   scripts/record-demo.sh --video       only the video (--stills: only the Settings tabs)
+#   scripts/record-demo.sh --app-store   only the App Store screenshots
 #   scripts/record-demo.sh --no-build    reuse build/LaunchGrid.app
 #
 # BACKGROUND (default wallpaper; material shows open windows through), SCREEN (avfoundation screen
@@ -19,13 +22,14 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-BUILD=1 VIDEO=1 STILLS=1
+BUILD=1 VIDEO=1 STILLS=1 STORE=0
 for arg in "$@"; do
     case "$arg" in
         --no-build) BUILD=0 ;;
         --video) STILLS=0 ;;
         --stills) VIDEO=0 ;;
-        *) echo "usage: $0 [--video | --stills] [--no-build]" >&2; exit 2 ;;
+        --app-store) VIDEO=0 STILLS=0 STORE=1 ;;
+        *) echo "usage: $0 [--video | --stills | --app-store] [--no-build]" >&2; exit 2 ;;
     esac
 done
 BACKGROUND="${BACKGROUND:-wallpaper}"
@@ -38,7 +42,7 @@ APP=build/LaunchGrid.app
 command -v ffmpeg >/dev/null || { echo "ffmpeg is needed: brew install ffmpeg" >&2; exit 1; }
 command -v cwebp >/dev/null || { echo "cwebp is needed: brew install webp" >&2; exit 1; }
 rm -rf "$WORK"
-mkdir -p "$WORK" website/public/video website/public/images
+mkdir -p "$WORK" website/public/video website/public/images docs/app-store/screenshots
 if ! screencapture -x "$WORK/check.png" 2>/dev/null; then
     echo "Can't capture the screen. Allow your terminal app in System Settings › Privacy & Security ›" >&2
     echo "Screen & System Audio Recording, restart it, and run this in one of its windows (not a detached tmux)." >&2
@@ -85,6 +89,12 @@ run_app() {
                     name=$(echo "$line" | cut -d' ' -f3)
                     screencapture -x -o -l"$id" "$WORK/$name.tmp.png" && mv "$WORK/$name.tmp.png" "$WORK/$name.png"
                     ;;
+                "shootrect: "*)
+                    # "shootrect: <x,y,w,h> <name>"
+                    rect=$(echo "$line" | cut -d' ' -f2)
+                    name=$(echo "$line" | cut -d' ' -f3)
+                    screencapture -x -R"$rect" "$WORK/$name.tmp.png" && mv "$WORK/$name.tmp.png" "$WORK/$name.png"
+                    ;;
             esac
         done
     grep '^only:' "$log" || true
@@ -99,6 +109,25 @@ if [ "$STILLS" = 1 ]; then
         cwebp -quiet -q 85 "$png" -o "website/public/images/$(basename "$png" .png).webp"
     done
     ls -lh website/public/images/settings-*.webp
+fi
+
+if [ "$STORE" = 1 ]; then
+    defaults write "$DOMAIN" windowMode -string window
+    defaults write "$DOMAIN" background -string image
+    defaults write "$DOMAIN" customImagePath -string "/System/Library/Desktop Pictures/iMac Blue.heic"
+    echo "App Store: keep the mouse and keyboard still until LaunchGrid quits."
+    run_app app-store "$(steps scripts/demo/app-store.txt)"
+    # JPEG without alpha, at the App Store's 2880×1800 whatever the display's scale.
+    FIT="scale=2880:1800:force_original_aspect_ratio=increase:flags=lanczos,crop=2880:1800"
+    for name in 01-grid 02-search 03-folder 04-edit; do
+        ffmpeg -nostdin -hide_banner -loglevel error -y -i "$WORK/$name.png" -vf "$FIT,format=yuvj444p" \
+            -q:v 2 -frames:v 1 "docs/app-store/screenshots/$name.jpg"
+    done
+    # Settings, over the grid blurred and dimmed.
+    ffmpeg -nostdin -hide_banner -loglevel error -y -i "$WORK/01-grid.png" -i "$WORK/05-settings.png" -filter_complex \
+        "[0]$FIT,gblur=sigma=24,eq=brightness=-0.18[bg];[bg][1]overlay=(W-w)/2:(H-h)/2,format=yuvj444p" \
+        -q:v 2 -frames:v 1 docs/app-store/screenshots/05-settings.jpg
+    sips -g pixelWidth -g pixelHeight docs/app-store/screenshots/*.jpg | paste - - - | awk '{ print $1, $3 "×" $5 }'
 fi
 
 if [ "$VIDEO" = 1 ]; then

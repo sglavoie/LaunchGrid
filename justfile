@@ -93,6 +93,10 @@ website-deploy:
 demo-video *args:
     scripts/record-demo.sh {{args}}
 
+# Record the Mac App Store screenshots into docs/app-store/screenshots (in a terminal window with Screen Recording)
+app-store-screenshots *args:
+    scripts/record-demo.sh --app-store {{args}}
+
 # Remove build products
 clean:
     rm -rf .build build

@@ -67,6 +67,28 @@ enum DebugScript {
                         try? await Task.sleep(for: .milliseconds(100))
                         waited += 1
                     }
+                case "windowsize":
+                    // Window mode: resizes the grid's window to "w,h" points, centred on its screen.
+                    let n = arg.split(separator: ",").compactMap { Double($0) }
+                    guard n.count == 2, let window = overlay.window, let v = window.screen?.visibleFrame else { break }
+                    window.setFrame(NSRect(x: v.midX - n[0] / 2, y: v.midY - n[1] / 2, width: n[0], height: n[1]), display: true)
+                case "shootframe":
+                    // Like shoot, for the grid's window inset by N points (past its rounded corners and
+                    // close button): "shootframe:grid,36" prints "shootrect: x,y,w,h grid", in points
+                    // from the main screen's top left as `screencapture -R` takes them.
+                    let n = arg.split(separator: ",", maxSplits: 1).map(String.init)
+                    guard n.count == 2, let inset = Double(n[1]), let window = overlay.window,
+                          let top = NSScreen.screens.first?.frame.maxY else { break }
+                    let r = window.frame.insetBy(dx: inset, dy: inset)
+                    let path = URL(fileURLWithPath: dir).appendingPathComponent("\(n[0]).png").path
+                    try? FileManager.default.removeItem(atPath: path)
+                    print("shootrect: \(Int(r.minX)),\(Int(top - r.maxY)),\(Int(r.width)),\(Int(r.height)) \(n[0])")
+                    fflush(stdout)
+                    var waited = 0
+                    while !FileManager.default.fileExists(atPath: path) && waited < 100 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        waited += 1
+                    }
                 case "missing": delegate.showAddMissing()
                 case "choose": delegate.showChooseApps()
                 case "welcome": delegate.showFirstRun()

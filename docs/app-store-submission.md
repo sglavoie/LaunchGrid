@@ -97,14 +97,61 @@ The icon cache no longer reads other apps' modification dates, for which no appr
 | Category | Utilities (matches `LSApplicationCategoryType`); Productivity as secondary |
 | Name and subtitle | 30 characters each. For example, "LaunchGrid" and "Full-screen app grid and search" |
 | Keywords | 100 characters, no trademarks: app launcher, grid, folders, apps, shortcut, keyboard, organize… |
-| Screenshots | 1 to 10, 16:10, at 1280×800, 1440×900, 2560×1600 or 2880×1800; showing the app in use (2.3.3), not the welcome window alone |
+| Screenshots | 1 to 10, 16:10, at 1280×800, 1440×900, 2560×1600 or 2880×1800; showing the app in use (2.3.3), not the welcome window alone. `just app-store-screenshots` records five at 2880×1800 into `docs/app-store/screenshots` (`scripts/demo/app-store.txt`): the grid, search, a folder, edit mode and Settings, in Window mode over a system wallpaper |
 | App Privacy | Data Not Collected |
 | Age rating | Answer the questionnaire; every answer is "none", which gives the lowest rating |
 | EU trader status | Required to be available in the EU under the Digital Services Act. A trader has the address, phone and email given to Apple shown on the product page in the EU. A free hobby app may qualify as non-trader; leaving out the EU is the other option |
 | Review contact | Name, email and a phone number in international format; not shown publicly |
 | Review notes | LaunchGrid lives in the menu bar (`LSUIElement`). ⌥Space shows the grid; right-click the menu-bar icon for Settings. The welcome window appears on first launch. For the entitlement: "LaunchGrid is an app launcher. It reads ~/Applications (read-only, through com.apple.security.temporary-exception.files.home-relative-path.read-only) because macOS and browsers install apps there, such as Chrome and Safari web apps, and a launcher that left them out would be incomplete. It only lists the app bundles there and reads their names, icons and Info.plist; it writes nothing." |
 | Copyright | 2026 Sébastien Lavoie |
+| App Sandbox information | On the version page, under App Review Information, click + and add `com.apple.security.temporary-exception.files.home-relative-path.read-only` (the only temporary exception; the other entitlements need no reason) with: "LaunchGrid is an app launcher: it shows the apps installed on the Mac in a grid. macOS, browsers and installers put apps in ~/Applications as well as /Applications (for example Chrome and Safari web apps, and apps installed for one user only), so the launcher reads that folder, read-only, to list them. It only lists the app bundles there and reads their names, icons and Info.plist files; it writes nothing and reads nothing else in the home folder." |
 | AI disclosure | Not required by the guidelines for AI-written code; they cover AI only where an app shares personal data with a third-party AI (5.1.2(i)), which LaunchGrid doesn't. To match the website, end the description with: "About 99% of LaunchGrid was written with AI (Claude, by Anthropic). The app contains no AI features and makes no network connections." Keep it out of the name, subtitle and keywords (2.3.7) |
+
+### Promotional text and description
+
+Plain text: App Store Connect shows no Markdown, so the headings are capitals and the lists use "•". Promotional text (145 of 170 characters) can change at any time without a new review; the description (1822 of 4,000) changes only with a new version. Both keep "Launchpad" to a plain factual mention (2.3.7), leave out AppGrid, and end the description with the AI disclosure above.
+
+Promotional text:
+
+```text
+Every app on your Mac, one keystroke away. Press ⌥Space, type a few letters and go. Pages, folders and fast search: free, with no data collected.
+```
+
+Description:
+
+```text
+LaunchGrid puts every app on your Mac in a full-screen grid, one keystroke away. Press ⌥Space, find what you need and get back to work.
+
+FIND APPS FAST
+• Just start typing. Results rank names that start with what you typed first, then word starts, initials ("vsc" finds Visual Studio Code), any match and near misses.
+• Press Return to open the first result, or move around with the arrow keys.
+• Swipe, scroll or press ⌘1 to ⌘9 to switch pages.
+
+ORGANISE IT YOUR WAY
+• Hold an app over another to make a folder, or select several and press ⌘G.
+• Rename apps and folders, move apps between pages, and remove the ones you don't use.
+• Sort everything alphabetically, or lay out every app by category in one step.
+• Undo and redo up to 50 changes, including rebuilds.
+• Works with the keyboard throughout: Esc steps back, Return opens or renames.
+
+MAKE IT YOURS
+• Full Screen, Full Screen Behind Dock, or a resizable window.
+• Backgrounds: blurred desktop, your wallpaper, Liquid Glass (macOS 26), a solid colour or a picture of your own.
+• Choose the number of rows and columns, the icon size and whether names show.
+• Set your own shortcut, open LaunchGrid at login, and keep it in the Dock, the menu bar or both.
+
+STAYS UP TO DATE
+• Apps you install appear on the grid by themselves, and apps you delete leave it.
+• Choose which apps to include; the ones you exclude stay off the grid.
+• Save your layout to a file and load it on another Mac, or bring over your old Launchpad layout if your Mac still has one.
+
+PRIVATE BY DESIGN
+LaunchGrid is free: no purchases, accounts, ads or tracking. It collects no data, and your layout and settings stay on your Mac.
+
+Requires macOS 14 or later.
+
+About 99% of LaunchGrid was written with AI (Claude, by Anthropic). The app contains no AI features and makes no network connections.
+```
 
 ## Sources
 
