@@ -592,7 +592,8 @@ final class AppState {
     }
 
     var orderedSelection: [UUID] {
-        grid.pages.flatMap { $0.items.flatMap { [$0.id] + $0.apps.map(\.id) } }.filter { selection.contains($0) }
+        // A folder's own apps follow it, so ones selected inside an open folder count too.
+        grid.pages.flatMap { $0.items.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) } }.filter { selection.contains($0) }
     }
 
     func remove(_ ids: [UUID]) {

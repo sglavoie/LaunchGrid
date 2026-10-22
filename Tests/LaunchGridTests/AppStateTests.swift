@@ -179,6 +179,22 @@ func installed(_ name: String) -> InstalledApp {
         state.extendSelection(to: id["C"]!)
         #expect(selected(state) == ["C"])
     }
+
+    @Test func selectedAppsAreListedOnce() {
+        let state = makeState(["A", "B", "C"])
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["C"]!)
+        #expect(state.orderedSelection == [id["A"]!, id["C"]!])
+        #expect(state.targets(for: id["A"]!).count == 2, "the drag badge counts these")
+    }
+
+    @Test func groupingNeedsTwoItems() {
+        let state = makeState(["A", "B"])
+        state.toggleSelection(ids(state)["A"]!)
+        state.groupSelection()
+        #expect(state.grid.pages[0].items.allSatisfy { $0.folder == nil })
+    }
 }
 
 @MainActor @Suite(.tempDir) struct ToastTests {
