@@ -36,7 +36,7 @@ $SUDO ditto build/LaunchGrid.app "$STAGE"
 $SUDO rm -rf "$DEST"
 $SUDO mv "$STAGE" "$DEST"
 
-# Point Finder's .appgrid handler at the installed copy rather than the build folder.
+# Point Finder's .launchgrid handler at the installed copy rather than the build folder.
 "$LSREGISTER" -u build/LaunchGrid.app >/dev/null 2>&1 || true
 "$LSREGISTER" -f "$DEST"
 echo "Installed $DEST"

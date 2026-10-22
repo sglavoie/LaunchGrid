@@ -43,7 +43,7 @@ The App Store build is signed with the sandbox, `files.user-selected.read-write`
 | Launchpad and AppGrid imports | Their databases are still found (existence checks work outside the sandbox; the Launchpad folder drops the container's suffix that `confstr` adds). Importing opens a panel on the database's folder; one click on Allow grants it, the database and its write-ahead log |
 | Layout and settings | In `~/Library/Containers/com.sglavoie.launchgrid`, apart from the downloadable build's |
 | Debug scripts (`DebugScript.swift`) | Compiled out (`-DAPP_STORE`), with their synthetic events |
-| Launching, Show in Finder, `.appgrid` files from Finder, Carbon hotkey, `SMAppService` | Work unchanged. Open at Login is off until the person turns it on, which satisfies 2.4.5(iii) |
+| Launching, Show in Finder, `.launchgrid` files from Finder, Carbon hotkey, `SMAppService` | Work unchanged. Open at Login is off until the person turns it on, which satisfies 2.4.5(iii) |
 
 Checked: a sandboxed build (`SANDBOX=1 scripts/bundle.sh`) finds the same 128 apps as the unsandboxed one, including the five in `~/Applications`. **Still to test by hand with `just sandbox`** (quit the installed copy first): add an extra folder and a custom picture, relaunch and check they still work; add an app from `~/Downloads` with Browse and relaunch; import from AppGrid and from Launchpad (on a Mac that still has one) through the Allow panel; save and load a grid file; Open at Login.
 

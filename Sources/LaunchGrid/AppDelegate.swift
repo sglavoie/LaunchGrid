@@ -525,7 +525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.launchGridLayout]
-        panel.nameFieldStringValue = "LaunchGrid Layout.appgrid"
+        panel.nameFieldStringValue = "LaunchGrid Layout.launchgrid"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try GridStore.encode(state.grid).write(to: url, options: .atomic)

@@ -28,7 +28,7 @@ run config="release": (bundle config)
 scratch config="debug": (bundle config)
     #!/bin/sh
     DIR="$(mktemp -d)"
-    # Launching registers the build copy with Launch Services; hand .appgrid files back to
+    # Launching registers the build copy with Launch Services; hand .launchgrid files back to
     # the installed copy afterwards, and drop the throwaway layout.
     cleanup() { "{{lsregister}}" -u "{{app}}" >/dev/null 2>&1; rm -rf "$DIR"; }
     trap cleanup EXIT

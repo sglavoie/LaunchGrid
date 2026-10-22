@@ -72,7 +72,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <key>UTTypeDescription</key><string>LaunchGrid Layout</string>
             <key>UTTypeConformsTo</key><array><string>public.json</string></array>
             <key>UTTypeTagSpecification</key>
-            <dict><key>public.filename-extension</key><array><string>appgrid</string></array></dict>
+            <!-- .appgrid is what earlier builds saved; still opened, never written. -->
+            <dict><key>public.filename-extension</key><array><string>launchgrid</string><string>appgrid</string></array></dict>
         </dict>
     </array>
 </dict>
