@@ -288,7 +288,7 @@ extension Grid {
                 return
             }
             if entry.folderEmptied == true {
-                place(.folder(Folder(id: folderID, name: entry.folderName ?? "Folder", apps: [entry.app])), entry)
+                place(.folder(Folder(id: folderID, name: entry.folderName ?? String(localized: "Folder"), apps: [entry.app])), entry)
             } else {
                 place(.app(entry.app), entry) // the user ungrouped or emptied it meanwhile
             }

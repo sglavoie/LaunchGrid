@@ -28,8 +28,7 @@ MainActor.assumeIsolated {
     }
 
     if Preferences.isScratch {
-        let marker = AppDelegate.scratchMarker(for: ProcessInfo.processInfo.processIdentifier)
-        FileManager.default.createFile(atPath: marker.path, contents: nil)
+        AppDelegate.writeScratchMarker()
         atexit { try? FileManager.default.removeItem(at: AppDelegate.scratchMarker(for: getpid())) }
     }
     // Ctrl-C or kill (scripts/install.sh quits the installed copy that way) would skip

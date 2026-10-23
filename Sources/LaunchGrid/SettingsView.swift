@@ -25,7 +25,8 @@ struct LibraryActions: @unchecked Sendable {
     var importAppGrid: () -> Void
     var importLaunchpad: () -> Void
     var loadFile: () -> Void
-    var saveFile: () -> Void
+    /// Where the layout was saved; nil when cancelled or failed (already reported).
+    var saveFile: () -> URL?
     var addMissing: () -> Void
     var chooseApps: () -> Void
     /// Applies the shortcut in the preferences. A recorded one that macOS refuses is replaced
@@ -225,18 +226,22 @@ struct AppearanceSettings: View {
                 }
                 if prefs.background == .wallpaper || prefs.background == .image {
                     // Whole steps: each radius is blurred and cached separately.
-                    Slider(value: $prefs.blurRadius, in: 0...60, step: 1) { Text("Blur") }
+                    ValueSlider(title: "Blur", value: $prefs.blurRadius, range: 0...60, step: 1,
+                                valueText: String(localized: "\(Int(prefs.blurRadius)) pt"))
                 }
-                Slider(value: $prefs.backgroundOpacity, in: 0...0.9) {
-                    Text(prefs.background == .solid ? "Transparency" : "Dimming")
-                }
+                ValueSlider(title: prefs.background == .solid ? "Transparency" : "Dimming",
+                            value: $prefs.backgroundOpacity, range: 0...0.9, valueText: percent(prefs.backgroundOpacity))
             }
             Section("Icons") {
-                Slider(value: $prefs.iconScale, in: 0.6...1.4) { Text("Icon size") }
+                ValueSlider(title: "Icon size", value: $prefs.iconScale, range: 0.6...1.4, valueText: percent(prefs.iconScale))
                 Toggle("Show app names", isOn: $prefs.showLabels)
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func percent(_ value: Double) -> String {
+        value.formatted(.percent.precision(.fractionLength(0)))
     }
 
     private func chooseImage() {
@@ -247,6 +252,32 @@ struct AppearanceSettings: View {
             if let old = state.prefs.customImagePath { FileAccess.forget(old) }
             FileAccess.remember(url)
             state.prefs.customImagePath = url.path
+        }
+    }
+}
+
+/// A slider with its value beside it, which VoiceOver reads too.
+struct ValueSlider: View {
+    let title: LocalizedStringKey
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double?
+    let valueText: String
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Group {
+                    if let step { Slider(value: $value, in: range, step: step) } else { Slider(value: $value, in: range) }
+                }
+                .accessibilityLabel(Text(title))
+                .accessibilityValue(valueText)
+                Text(valueText)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 44, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
         }
     }
 }
@@ -263,8 +294,10 @@ struct LayoutSettings: View {
         let after = grid.pageCountAfterResize(rows: rows, columns: columns)
         Form {
             Section("Grid size") {
-                Stepper("Rows: \(rows)", value: $rows, in: 2...12)
-                Stepper("Columns: \(columns)", value: $columns, in: 3...16)
+                // Widened to take in the grid's own size, which a loaded file can set anywhere in
+                // 1...50: a step from outside the usual range would snap it into that range.
+                Stepper("Rows: \(rows)", value: $rows, in: min(2, grid.rows)...max(12, grid.rows))
+                Stepper("Columns: \(columns)", value: $columns, in: min(3, grid.columns)...max(16, grid.columns))
                 if rows != grid.rows || columns != grid.columns {
                     Group {
                         if after != grid.pages.count { Text("Items re-flow to fill each page in order: \(grid.pages.count) → \(after) pages.") }
@@ -317,6 +350,8 @@ struct LibrarySettings: View {
     @State private var confirmRebuild: BuildStyle?
     /// Feedback for Rescan Now and Regenerate Icons.
     @State private var libraryStatus: String?
+    /// The grid file last saved from here, to confirm it and show it in Finder.
+    @State private var savedFile: URL?
 
     var body: some View {
         @Bindable var prefs = state.prefs
@@ -324,7 +359,7 @@ struct LibrarySettings: View {
             Section("Apps") {
                 LabeledContent("On the grid") { Text("\(state.grid.allApps.count) apps, \(state.grid.pages.count) pages") }
                 LabeledContent("Installed") { Text("\(state.installed.count) apps found") }
-                LabeledContent("Excluded") { Text("\(state.grid.removedBundleIDs.count) apps") }
+                LabeledContent("Excluded") { Text("\(state.excludedApps.count) apps") }
                 HStack {
                     Button("Choose Apps…") { actions.chooseApps() }
                     Button("Add Missing Apps…") { actions.addMissing() }
@@ -385,8 +420,18 @@ struct LibrarySettings: View {
             }
             Section("Grid file") {
                 HStack {
-                    Button("Save Grid File…") { actions.saveFile() }
+                    Button("Save Grid File…") { if let url = actions.saveFile() { savedFile = url } }
                     Button("Load Grid File…") { actions.loadFile() }
+                }
+                if let savedFile {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            .accessibilityHidden(true)
+                        Text("Saved \(savedFile.lastPathComponent)").lineLimit(1).truncationMode(.middle)
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([savedFile]) }
+                            .buttonStyle(.link)
+                    }
+                    .font(.caption)
                 }
                 HStack {
                     Button("Import from AppGrid") { actions.importAppGrid() }
@@ -456,7 +501,12 @@ struct AddMissingAppsView: View {
             }
             .frame(minHeight: 280)
             .overlay {
-                if missing.isEmpty { Text("Every installed app is on the grid.").foregroundStyle(.secondary) }
+                Group {
+                    if state.installed.isEmpty { Text("Looking for installed apps…") }
+                    else if all.isEmpty { Text("Every installed app is on the grid.") }
+                    else if missing.isEmpty { Text("No missing apps match “\(filter)”.") }
+                }
+                .foregroundStyle(.secondary)
             }
             HStack {
                 Button("Select All") { chosen.formUnion(missing.map(\.path)) }.disabled(missing.isEmpty)
@@ -529,7 +579,11 @@ struct ChooseAppsView: View {
             }
             .frame(minHeight: 280)
             .overlay {
-                if all.isEmpty { Text("Looking for installed apps…").foregroundStyle(.secondary) }
+                Group {
+                    if all.isEmpty { Text("Looking for installed apps…") }
+                    else if shown.isEmpty { Text("No apps match “\(filter)”.") }
+                }
+                .foregroundStyle(.secondary)
             }
             HStack {
                 Button("Include All") { for app in shown { changes[app.path] = true } }.disabled(shown.isEmpty)
@@ -626,7 +680,7 @@ struct FirstRunView: View {
     }
 
     /// - Parameter requiresScan: unavailable until the first scan has found the installed apps.
-    private func option(_ title: String, _ detail: String, _ icon: String, requiresScan: Bool = false,
+    private func option(_ title: LocalizedStringKey, _ detail: LocalizedStringKey, _ icon: String, requiresScan: Bool = false,
                         action: @escaping () -> Void) -> some View {
         Button {
             action()

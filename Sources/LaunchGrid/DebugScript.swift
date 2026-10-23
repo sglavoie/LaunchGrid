@@ -94,6 +94,49 @@ enum DebugScript {
                         try? await Task.sleep(for: .milliseconds(100))
                         waited += 1
                     }
+                case "open":
+                    // As if Finder opened the file. Async, so the script goes on while an alert is up.
+                    let url = URL(fileURLWithPath: arg)
+                    DispatchQueue.main.async { delegate.application(NSApp, open: [url]) }
+                case "alert":
+                    // Prints the texts of the modal window up (an alert), then presses the button titled `arg`, if any.
+                    guard let window = NSApp.modalWindow, let view = window.contentView else {
+                        print("alert: none")
+                        fflush(stdout)
+                        break
+                    }
+                    @MainActor func all(_ v: NSView) -> [NSView] { [v] + v.subviews.flatMap(all) }
+                    let views = all(view)
+                    let texts = views.compactMap { ($0 as? NSTextField)?.stringValue }.filter { !$0.isEmpty }
+                    let buttons = views.compactMap { $0 as? NSButton }
+                    print("alert: \(texts) buttons=\(buttons.map(\.title).filter { !$0.isEmpty })")
+                    fflush(stdout)
+                    if !arg.isEmpty { buttons.first { $0.title == arg }?.performClick(nil) }
+                case "wkeys":
+                    // Types `text` into the window titled `title`: "wkeys:title,text"; "\r" is Return.
+                    let n = arg.split(separator: ",", maxSplits: 1).map(String.init)
+                    guard n.count == 2, let window = NSApp.windows.first(where: { $0.isVisible && $0.title == n[0] }) else { break }
+                    for ch in n[1].replacingOccurrences(of: "\\r", with: "\r") {
+                        let s = String(ch)
+                        let code: UInt16 = s == "\r" ? UInt16(kVK_Return) : 0
+                        for type in [NSEvent.EventType.keyDown, .keyUp] {
+                            if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: window.windowNumber, context: nil, characters: s,
+                                                        charactersIgnoringModifiers: s, isARepeat: false, keyCode: code) {
+                                NSApp.postEvent(e, atStart: false)
+                            }
+                        }
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                case "menusave":
+                    // The menu bar's Save Grid File…, async so the script goes on while the panel is up.
+                    DispatchQueue.main.async { delegate.saveGridFileFromMenu() }
+                case "toast":
+                    print("toast: \(state.toast ?? "-")")
+                    fflush(stdout)
+                case "problem":
+                    print("problem: \(state.hotkeyProblem ?? "-")")
+                    fflush(stdout)
                 case "missing": delegate.showAddMissing()
                 case "choose": delegate.showChooseApps()
                 case "welcome": delegate.showFirstRun()

@@ -8,9 +8,9 @@ enum WindowMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .fullScreen: "Full Screen"
-        case .behindDock: "Full Screen Behind Dock"
-        case .window: "Window"
+        case .fullScreen: String(localized: "Full Screen")
+        case .behindDock: String(localized: "Full Screen Behind Dock")
+        case .window: String(localized: "Window")
         }
     }
 }
@@ -20,11 +20,11 @@ enum BackgroundStyle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .material: "Blurred Desktop"
-        case .wallpaper: "Wallpaper"
-        case .glass: "Liquid Glass"
-        case .solid: "Solid Colour"
-        case .image: "Custom Image"
+        case .material: String(localized: "Blurred Desktop")
+        case .wallpaper: String(localized: "Wallpaper")
+        case .glass: String(localized: "Liquid Glass")
+        case .solid: String(localized: "Solid Colour")
+        case .image: String(localized: "Custom Image")
         }
     }
 }
@@ -34,8 +34,8 @@ enum MenuBarIconStyle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .monochrome: "Monochrome"
-        case .colour: "Colour"
+        case .monochrome: String(localized: "Monochrome")
+        case .colour: String(localized: "Colour")
         }
     }
 }

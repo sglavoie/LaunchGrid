@@ -293,6 +293,17 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.removedBundleIDs == ["com.test.B"])
     }
 
+    @Test func theExcludedCountIsOfInstalledAppsOffTheGrid() {
+        let state = makeState(["A"])
+        state.catalogScanned(["A", "B", "C"].map(installed))
+        state.chooseApps(include: [], exclude: [installed("B")])
+        var g = state.grid
+        // An exclusion outliving its app, and a path entry beside its bundle ID, aren't apps to count.
+        g.removedBundleIDs.formUnion(["com.test.Deleted", "/Applications/B.app"])
+        state.apply { $0 = g }
+        #expect(state.excludedApps.map(\.name) == ["B"])
+    }
+
     @Test func changingTheChoiceLaterIsOneUndoStep() {
         let state = makeState(["A", "B"])
         state.catalogScanned(["A", "B", "C"].map(installed))
@@ -662,6 +673,13 @@ func installed(_ name: String) -> InstalledApp {
 @Suite struct ShortcutConflictTests {
     let cmd = UInt32(cmdKey), opt = UInt32(optionKey), shift = UInt32(shiftKey), ctrl = UInt32(controlKey)
 
+    @Test func keypadKeysAreNamedApartFromTheMainKeys() {
+        #expect(KeyCombo.keyName(kVK_ANSI_Keypad1) == "Keypad 1")
+        #expect(KeyCombo.keyName(kVK_ANSI_KeypadEnter) == "Keypad ⌤")
+        #expect(KeyCombo.describe(keyCode: UInt32(kVK_ANSI_Keypad5), modifiers: opt) == "⌥Keypad 5")
+        #expect(KeyCombo.keyName(kVK_F5) == "F5")
+    }
+
     @Test func commonEditingCommandsAreFlagged() {
         #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_C), modifiers: cmd) == "Copy (in most apps)")
         #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_V), modifiers: cmd) != nil)
@@ -710,5 +728,22 @@ func installed(_ name: String) -> InstalledApp {
         #expect(AppDelegate.registerHotkey(prefs: state.prefs, state: state, fallback: nil,
                                            register: { _, _ in true }, activeCombo: nil))
         #expect(state.hotkeyProblem == nil)
+    }
+}
+
+@Suite struct ScratchMarkerTests {
+    @Test func aMarkerBelongsToTheProcessStartItRecords() {
+        let start = 1_800_000_000.123456
+        let marker = AppDelegate.scratchMarkerContents(startedAt: start)
+        #expect(AppDelegate.isScratchMarker(marker, startedAt: start))
+        #expect(!AppDelegate.isScratchMarker(marker, startedAt: start + 60), "a reused pid's later process")
+        #expect(AppDelegate.isScratchMarker("", startedAt: start), "a run that couldn't tell its start")
+        #expect(AppDelegate.isScratchMarker(marker, startedAt: nil))
+    }
+
+    @Test func theKernelGivesThisProcessAStableStartTime() throws {
+        let start = try #require(AppDelegate.processStart(getpid()))
+        #expect(abs(start - Date().timeIntervalSince1970) < 24 * 3600)
+        #expect(AppDelegate.processStart(getpid()) == start)
     }
 }

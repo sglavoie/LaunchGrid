@@ -16,6 +16,8 @@ let package = Package(
         .executableTarget(
             name: "LaunchGrid",
             dependencies: ["LaunchGridCore"],
+            // Compiled into the app bundle by scripts/bundle.sh.
+            exclude: ["Localizable.xcstrings"],
             linkerSettings: [.linkedFramework("Carbon")]
         ),
         .testTarget(

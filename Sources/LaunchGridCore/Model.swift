@@ -259,7 +259,7 @@ extension Folder {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
-            name: try c.decodeIfPresent(String.self, forKey: .name) ?? "Folder",
+            name: try c.decodeIfPresent(String.self, forKey: .name) ?? String(localized: "Folder"),
             apps: try c.decodeIfPresent([AppRef].self, forKey: .apps) ?? []
         )
     }

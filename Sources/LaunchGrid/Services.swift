@@ -9,12 +9,12 @@ import LaunchGridCore
 
 enum Launcher {
     struct NotFound: LocalizedError {
-        var errorDescription: String? { "The app is no longer on this Mac." }
+        var errorDescription: String? { String(localized: "The app is no longer on this Mac.") }
     }
 
     struct VolumeNotMounted: LocalizedError {
         var volume: String
-        var errorDescription: String? { "It's on “\(volume)”, which isn't connected." }
+        var errorDescription: String? { String(localized: "It's on “\(volume)”, which isn't connected.") }
     }
 
     /// Opens the app at its stored path, falling back to its bundle ID when it's gone from
@@ -292,8 +292,18 @@ enum KeyCombo {
         kVK_F19: "F19", kVK_F20: "F20",
     ]
 
+    /// Keypad keys, which would otherwise read the same as the main keys they copy.
+    static let keypadKeys: [Int: String] = [
+        kVK_ANSI_Keypad0: "0", kVK_ANSI_Keypad1: "1", kVK_ANSI_Keypad2: "2", kVK_ANSI_Keypad3: "3",
+        kVK_ANSI_Keypad4: "4", kVK_ANSI_Keypad5: "5", kVK_ANSI_Keypad6: "6", kVK_ANSI_Keypad7: "7",
+        kVK_ANSI_Keypad8: "8", kVK_ANSI_Keypad9: "9", kVK_ANSI_KeypadDecimal: ".", kVK_ANSI_KeypadPlus: "+",
+        kVK_ANSI_KeypadMinus: "-", kVK_ANSI_KeypadMultiply: "*", kVK_ANSI_KeypadDivide: "/",
+        kVK_ANSI_KeypadEquals: "=", kVK_ANSI_KeypadClear: "⌧", kVK_ANSI_KeypadEnter: "⌤",
+    ]
+
     static func keyName(_ code: Int) -> String {
         if let f = functionKeys[code] { return f }
+        if let k = keypadKeys[code] { return String(localized: "Keypad \(k)") }
         switch code {
         case kVK_Space: return "Space"
         case kVK_Return: return "↩"

@@ -37,12 +37,15 @@ if [ ! -f "$ICNS" ] || [ -n "$(find scripts/make-icon.swift -newer "$ICNS")" ]; 
 fi
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
 cp scripts/PrivacyInfo.xcprivacy "$APP/Contents/Resources/PrivacyInfo.xcprivacy"
+# The String Catalog, as the en.lproj tables String(localized:) and SwiftUI read (plurals, for now).
+xcrun xcstringstool compile Sources/LaunchGrid/Localizable.xcstrings --output-directory "$APP/Contents/Resources"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleName</key><string>LaunchGrid</string>
     <key>CFBundleDisplayName</key><string>LaunchGrid</string>
     <key>CFBundleIdentifier</key><string>com.sglavoie.launchgrid</string>

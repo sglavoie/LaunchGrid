@@ -6,8 +6,8 @@ public enum GridFileError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unsupportedVersion(let v): "This grid file was made by a newer version (format \(v))."
-        case .invalid(let why): "The grid file is not valid: \(why)"
+        case .unsupportedVersion(let v): String(localized: "This grid file was made by a newer version (format \(v)).")
+        case .invalid(let why): String(localized: "The grid file is not valid: \(why)")
         }
     }
 }

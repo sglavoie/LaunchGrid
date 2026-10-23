@@ -20,6 +20,15 @@ public struct TextLine: Equatable, Sendable {
         caret = min(head.count, text.count)
     }
 
+    /// `s` as one line, for pasting: each run of whitespace and line breaks (`\r\n`, tabs
+    /// included) becomes one space, other control characters go, and the ends are trimmed.
+    public static func singleLine(_ s: String) -> String {
+        s.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .map { $0.filter { !$0.unicodeScalars.contains { $0.properties.generalCategory == .control } } }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     // MARK: Moving
 
     public mutating func moveLeft() { caret = max(0, caret - 1) }

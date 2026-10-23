@@ -444,6 +444,13 @@ final class AppState {
 
     var missingApps: [InstalledApp] { Reconciler.missingApps(in: grid, installed: installed) }
 
+    /// Installed apps kept off the grid by an exclusion. Not the size of `removedBundleIDs`,
+    /// which also remembers apps deleted since, and may hold a bundle ID and a path for one app.
+    var excludedApps: [InstalledApp] {
+        let onGrid = Set(grid.allApps.map(\.path))
+        return installed.filter { grid.isExcluded($0) && !onGrid.contains($0.path) }
+    }
+
     func addApps(_ apps: [InstalledApp]) {
         let installed = self.installed
         apply { Reconciler.add(apps, to: &$0, installed: installed) }

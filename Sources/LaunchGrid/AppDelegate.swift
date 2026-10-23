@@ -31,16 +31,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private static func isScratch(_ app: NSRunningApplication) -> Bool {
-        let path = scratchMarker(for: app.processIdentifier).path
-        guard let made = (try? FileManager.default.attributesOfItem(atPath: path))?[.creationDate] as? Date
+        guard let marker = try? String(contentsOf: scratchMarker(for: app.processIdentifier), encoding: .utf8)
         else { return false }
-        // A marker older than the process was left by a crashed run whose pid got reused.
-        return app.launchDate.map { made >= $0.addingTimeInterval(-5) } ?? true
+        // A marker naming another start was left by a crashed run whose pid got reused.
+        return isScratchMarker(marker, startedAt: processStart(app.processIdentifier))
     }
 
-    /// A scratch run leaves a marker named after its pid so other copies can tell it apart.
+    /// A scratch run leaves a marker named after its pid so other copies can tell it apart. It
+    /// holds the run's start time, which tells it from a stale one without reading the file's
+    /// dates (a required-reason API).
     static func scratchMarker(for pid: pid_t) -> URL {
         URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("LaunchGrid-scratch-\(pid)")
+    }
+
+    static func writeScratchMarker() {
+        let pid = getpid()
+        FileManager.default.createFile(atPath: scratchMarker(for: pid).path,
+                                       contents: Data(scratchMarkerContents(startedAt: processStart(pid)).utf8))
+    }
+
+    /// When the process with `pid` started, from the kernel. Not `NSRunningApplication.launchDate`,
+    /// which is nil for a binary run directly, as a scratch run is.
+    nonisolated static func processStart(_ pid: pid_t) -> Double? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let t = info.kp_proc.p_un.__p_starttime
+        return Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000
+    }
+
+    nonisolated static func scratchMarkerContents(startedAt start: Double?) -> String {
+        start.map { String($0) } ?? ""
+    }
+
+    /// Whether `marker` was left by the process that started at `start`; one without a time to
+    /// compare counts.
+    nonisolated static func isScratchMarker(_ marker: String, startedAt start: Double?) -> Bool {
+        guard let start, let written = Double(marker.trimmingCharacters(in: .whitespacesAndNewlines)) else { return true }
+        return abs(written - start) < 0.001
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -157,6 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func openLayout(_ url: URL) {
         overlay.hide(deactivate: false)
         NSApp.activate()
+        // Read first: a file that can't be loaded shouldn't ask to replace anything.
+        guard let layout = readLayout(at: url) else { return }
         if !state.grid.allApps.isEmpty {
             let alert = NSAlert()
             alert.messageText = String(localized: "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?")
@@ -165,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             alert.addButton(withTitle: String(localized: "Cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
-        loadLayout(at: url)
+        load(layout, from: url)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -319,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle: String(localized: "Choose Apps…"), action: #selector(showChooseApps), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Sort Everything"), action: #selector(sortEverything), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFile), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile), keyEquivalent: "").target = self
         let importMenu = NSMenu()
         let appGrid = importMenu.addItem(withTitle: String(localized: "From AppGrid"), action: #selector(importAppGrid), keyEquivalent: "")
@@ -525,7 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate()
         let panel = NSOpenPanel()
         panel.message = String(localized: "To import your \(source) layout, allow LaunchGrid to read this folder.")
-        panel.prompt = "Allow"
+        panel.prompt = String(localized: "Allow")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.directoryURL = url.deletingLastPathComponent()
@@ -566,17 +597,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    @objc func saveGridFile() {
+    /// From the menu bar there's nothing in view to confirm the save in; the grid says so next time it opens.
+    @objc func saveGridFileFromMenu() {
+        if let url = saveGridFile() { state.showToast(String(localized: "Saved \(url.lastPathComponent)")) }
+    }
+
+    /// Saves the layout to a file the person picks; returns where, or nil if cancelled or failed.
+    @discardableResult
+    func saveGridFile() -> URL? {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.launchGridLayout]
         panel.nameFieldStringValue = "LaunchGrid Layout.launchgrid"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
             try GridStore.encode(state.grid).write(to: url, options: .atomic)
+            return url
         } catch {
             showError(String(localized: "Could not save the grid file"), error.localizedDescription)
+            return nil
         }
     }
 
@@ -590,22 +630,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.allowedContentTypes = [.launchGridLayout, .json]
             + ["agrid", "db", "sqlite", "sqlite3"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        loadLayout(at: url)
+        guard panel.runModal() == .OK, let url = panel.url, let layout = readLayout(at: url) else { return }
+        load(layout, from: url)
     }
 
-    private func loadLayout(at url: URL) {
+    /// What a file opened as a layout holds.
+    private enum OpenedLayout {
+        case grid(Grid)
+        /// A Launchpad or AppGrid database (or an `.agrid` file), for the importer.
+        case database
+    }
+
+    /// Reads and checks a layout file; nil, after saying why, when it can't be loaded.
+    private func readLayout(at url: URL) -> OpenedLayout? {
         do {
             let data = try Data(contentsOf: url)
-            if data.prefix(16) == Data("SQLite format 3\0".utf8) {
-                importDatabase(url, from: url.lastPathComponent)
-                return
-            }
-            state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: try GridStore.decode(data)))
-            state.showToast(String(localized: "Loaded \(url.lastPathComponent)"))
-            closeFirstRunIfDone()
+            if data.prefix(16) == Data("SQLite format 3\0".utf8) { return .database }
+            return .grid(try GridStore.decode(data))
         } catch {
             showError(String(localized: "Could not load the grid file"), error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func load(_ layout: OpenedLayout, from url: URL) {
+        switch layout {
+        case .database:
+            importDatabase(url, from: url.lastPathComponent)
+        case .grid(let grid):
+            state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid))
+            state.showToast(String(localized: "Loaded \(url.lastPathComponent)"))
+            closeFirstRunIfDone()
         }
     }
 

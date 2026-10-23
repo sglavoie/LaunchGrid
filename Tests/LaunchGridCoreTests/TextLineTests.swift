@@ -72,4 +72,12 @@ import Testing
         #expect(after("café|") { $0.deleteBackward() } == "caf|")
         #expect(after("a👍🏽|b") { $0.moveLeft() } == "a|👍🏽b")
     }
+
+    @Test func pastedTextBecomesOneLine() {
+        #expect(TextLine.singleLine("Final\r\nCut\tPro\n") == "Final Cut Pro")
+        #expect(TextLine.singleLine("  Safari  ") == "Safari")
+        #expect(TextLine.singleLine("a\u{7}b \u{1B}") == "ab")
+        #expect(TextLine.singleLine("\n\r\n\t") == "")
+        #expect(TextLine.singleLine("café 👍🏽") == "café 👍🏽")
+    }
 }

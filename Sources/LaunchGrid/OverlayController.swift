@@ -369,7 +369,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "q": NSApp.terminate(nil)
             case "v":
                 if let s = NSPasteboard.general.string(forType: .string) {
-                    insertIntoSearch(s.replacingOccurrences(of: "\n", with: " "))
+                    insertIntoSearch(TextLine.singleLine(s))
                 }
             case "1", "2", "3", "4", "5", "6", "7", "8", "9":
                 state.query = ""

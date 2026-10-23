@@ -54,9 +54,8 @@ Checked: a sandboxed build (`SANDBOX=1 scripts/bundle.sh`) finds the same 128 ap
 | API category | Where | Reason |
 | --- | --- | --- |
 | User defaults | `Preferences.swift`, `FileAccess` | `CA92.1` (the app's own defaults) |
-| File timestamps | `AppDelegate.isScratch` (`creationDate` of a marker in the app's temp folder) | `C617.1` (files in the app's container) |
 
-The icon cache no longer reads other apps' modification dates, for which no approved reason fits: it spots an app updated in place by its Info.plist versions and icon name. System boot time was only read by the debug scripts, which the App Store build leaves out.
+No file timestamps are read. A scratch run's marker (`AppDelegate.isScratch`) holds the run's start time, from `sysctl`, so a stale one is told apart without the marker's creation date. The icon cache no longer reads other apps' modification dates, for which no approved reason fits: it spots an app updated in place by its Info.plist versions and icon name. System boot time was only read by the debug scripts, which the App Store build leaves out.
 
 ### 3. Packaging and signing
 

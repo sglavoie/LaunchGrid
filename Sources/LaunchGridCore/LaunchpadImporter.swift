@@ -20,9 +20,9 @@ public enum LaunchpadImporter {
 
         public var errorDescription: String? {
             switch self {
-            case .cannotOpen(let why): "Could not open the database: \(why)"
-            case .notALaunchpadDatabase: "This file is not a Launchpad or AppGrid database."
-            case .readFailed(let why): "Could not read the database: \(why)"
+            case .cannotOpen(let why): String(localized: "Could not open the database: \(why)")
+            case .notALaunchpadDatabase: String(localized: "This file is not a Launchpad or AppGrid database.")
+            case .readFailed(let why): String(localized: "Could not read the database: \(why)")
             }
         }
     }
@@ -183,7 +183,7 @@ public enum LaunchpadImporter {
                     var visited = Set<Int>()
                     let contents = folderApps(child.id, visited: &visited)
                     guard !contents.isEmpty else { return nil }
-                    return .folder(Folder(name: groupTitles[child.id] ?? "Folder", apps: contents))
+                    return .folder(Folder(name: groupTitles[child.id] ?? String(localized: "Folder"), apps: contents))
                 default:
                     return nil
                 }
