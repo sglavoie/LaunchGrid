@@ -34,6 +34,16 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(titles(g.pages[0]) == ["B", "C", "A"])
     }
 
+    @Test func movingAFoldersLastAppOutOfAFullPageSpillsNothing() {
+        let x = app("X")
+        var g = Grid(rows: 1, columns: 4, pages: [
+            Page(items: [.app(app("A")), .folder(Folder(name: "F", apps: [x])), .app(app("B")), .app(app("C"))]),
+            Page(items: [.app(app("D"))]),
+        ])
+        g.move([x.id], toPage: 0, at: 0)
+        #expect(g.pages.map(titles) == [["X", "A", "B", "C"], ["D"]])
+    }
+
     @Test func moveAcrossPagesAndMultiSelect() {
         var g = grid([["A", "B", "C"], ["D"]])
         let ids = [g.pages[0].items[0].id, g.pages[0].items[2].id]
@@ -328,6 +338,14 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(decoded.allApps.map(\.name) == ["B", "C"], "an ID now means one item")
     }
 
+    @Test func repeatedPageIDsGetFreshOnes() throws {
+        let id = UUID()
+        let g = Grid(rows: 2, columns: 2, pages: [Page(id: id, items: [.app(app("A"))]), Page(id: id, items: [.app(app("B"))])])
+        let decoded = try GridStore.decode(GridStore.encode(g))
+        #expect(decoded.pages[0].id == id)
+        #expect(decoded.pages[1].id != id)
+    }
+
     @Test func rejectsNewerVersion() {
         let data = #"{"version": 99, "rows": 5, "columns": 7, "pages": [], "removedBundleIDs": []}"#.data(using: .utf8)!
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }
@@ -350,6 +368,11 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.results(in: apps, query: "gb").map(\.name) == ["GarageBand"])
         #expect(Search.results(in: apps, query: "grbd").map(\.name) == ["GarageBand"])
         #expect(Search.results(in: apps, query: "zzz").isEmpty)
+        #expect(Search.acronym(of: "PDFExpert") == "pe", "a hump after a run of capitals")
+        #expect(Search.acronym(of: "Visual Studio Code") == "vsc")
+        #expect(Search.acronym(of: "GarageBand") == "gb")
+        #expect(Search.acronym(of: "iMovie") == "im")
+        #expect(Search.acronym(of: "VLC") == "v")
     }
 
     @Test func wordStartBeatsInitialsForLongNames() {

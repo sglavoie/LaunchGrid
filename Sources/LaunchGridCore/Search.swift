@@ -43,17 +43,17 @@ public enum Search {
             .trimmingCharacters(in: .whitespaces)
     }
 
-    /// Initials of words and of camel-case humps: "Visual Studio Code" → "vsc", "GarageBand" → "gb".
+    /// Initials of words and of camel-case humps: "Visual Studio Code" → "vsc", "GarageBand" → "gb",
+    /// and after a run of capitals, "PDFExpert" → "pe".
     static func acronym(of name: String) -> String {
+        let chars = Array(name)
         var out = ""
-        var previous: Character = " "
-        for ch in name {
-            if ch.isLetter || ch.isNumber {
-                if !(previous.isLetter || previous.isNumber) || (ch.isUppercase && previous.isLowercase) {
-                    out.append(ch)
-                }
-            }
-            previous = ch
+        for (i, ch) in chars.enumerated() where ch.isLetter || ch.isNumber {
+            let previous: Character = i > 0 ? chars[i - 1] : " "
+            let next: Character = i + 1 < chars.count ? chars[i + 1] : " "
+            let wordStart = !(previous.isLetter || previous.isNumber)
+            let hump = ch.isUppercase && (previous.isLowercase || (previous.isUppercase && next.isLowercase))
+            if wordStart || hump { out.append(ch) }
         }
         return normalize(out)
     }

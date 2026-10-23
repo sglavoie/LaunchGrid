@@ -136,7 +136,7 @@ public enum LaunchpadImporter {
 
         func makeApp(_ id: Int) -> AppRef? {
             guard let row = apps[id] else { return nil }
-            let title = row.title ?? row.bundleID ?? "App"
+            let title = [row.title, row.bundleID].compactMap { $0 }.first { !$0.isEmpty } ?? "App"
             // AppGrid invents `manual_app_<hash>` IDs for apps it added by path.
             let bundleID = row.bundleID.flatMap { $0.hasPrefix("manual_app_") || $0.isEmpty ? nil : $0 }
             var path: String?
@@ -159,14 +159,15 @@ public enum LaunchpadImporter {
             return ref
         }
 
-        /// Apps inside a folder: directly or through the folder's own pages.
+        /// Apps inside a folder: directly, through the folder's own pages or in folders inside it.
         func folderApps(_ id: Int, visited: inout Set<Int>) -> [AppRef] {
             guard visited.insert(id).inserted else { return [] }
             var out: [AppRef] = []
             for child in children[id] ?? [] {
                 switch ItemType(rawValue: child.type) {
                 case .app: out += makeApp(child.id).map { [$0] } ?? []
-                case .page: out += folderApps(child.id, visited: &visited)
+                // A folder in a folder: the grid has one level, so its apps join this one.
+                case .page, .folder: out += folderApps(child.id, visited: &visited)
                 default: break
                 }
             }

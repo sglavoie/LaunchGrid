@@ -27,14 +27,29 @@ public struct GridStore: Sendable {
 
     public var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
 
+    /// The save before the last one, to fall back on when the last didn't make it to disk
+    /// whole (a power cut right after writing can leave an empty file).
+    public var backupURL: URL { GridStore.followingSymlinks(url).appendingPathExtension("bak") }
+
     public func load() throws -> Grid {
         try GridStore.decode(Data(contentsOf: url))
+    }
+
+    public func loadBackup() throws -> Grid {
+        try GridStore.decode(Data(contentsOf: backupURL))
     }
 
     public func save(_ grid: Grid) throws {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
         let target = GridStore.followingSymlinks(url)
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fm.fileExists(atPath: target.path) {
+            // A clone on APFS, so it costs next to nothing. Best effort: the save matters more.
+            let backup = backupURL
+            try? fm.removeItem(at: backup)
+            try? fm.copyItem(at: target, to: backup)
+        }
         try GridStore.encode(grid).write(to: target, options: .atomic)
     }
 
@@ -76,8 +91,8 @@ public struct GridStore: Sendable {
         return grid
     }
 
-    /// Gives a fresh ID to each item (app or folder, inside folders too) whose ID an earlier
-    /// item already has, so a hand-edited or merged file can't make `locate` and `detach`
+    /// Gives a fresh ID to each page and item (app or folder, inside folders too) whose ID an
+    /// earlier one already has, so a hand-edited or merged file can't make `locate` and `detach`
     /// disagree about which item an ID means.
     static func freshenRepeatedIDs(in grid: inout Grid) {
         var seen = Set<UUID>()
@@ -85,6 +100,7 @@ public struct GridStore: Sendable {
             if !seen.insert(id).inserted { id = UUID() }
         }
         for p in grid.pages.indices {
+            fresh(&grid.pages[p].id)
             for i in grid.pages[p].items.indices {
                 switch grid.pages[p].items[i] {
                 case .app(var a):

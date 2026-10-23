@@ -39,6 +39,8 @@ final class AppState {
     private(set) var hasGridFile: Bool
     /// Set when the saved layout could not be loaded at launch and was moved aside.
     private(set) var loadProblem: (message: String, backup: URL)?
+    /// Set when an unreadable layout was replaced by the previous save, to tell the person once.
+    @ObservationIgnored var recoveryNotice: (message: String, file: URL)?
 
     @ObservationIgnored private var undoStack: [Grid] = []
     @ObservationIgnored private var redoStack: [Grid] = []
@@ -128,17 +130,28 @@ final class AppState {
                 do {
                     try FileManager.default.moveItem(at: store.url, to: backup)
                     NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
-                    let message = newer
-                        ? "Your saved layout was made by a newer version of LaunchGrid. It was kept as \(backup.lastPathComponent)."
-                        : "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent)."
-                    loadProblem = (message, backup)
+                    if !newer, let previous = try? store.loadBackup() {
+                        // The save before last: at most a few changes behind.
+                        NSLog("LaunchGrid: restored the previous save from \(store.backupURL.path)")
+                        loaded = previous
+                        recoveryNotice = (
+                            String(localized: "Your saved layout could not be read, so LaunchGrid restored the save before it. The last few changes may be missing; the unreadable file was kept as \(backup.lastPathComponent)."),
+                            backup)
+                    } else {
+                        let message = newer
+                            ? String(localized: "Your saved layout was made by a newer version of LaunchGrid. It was kept as \(backup.lastPathComponent).")
+                            : String(localized: "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent).")
+                        loadProblem = (message, backup)
+                    }
                 } catch let moveError {
                     // It stays where it is, the only copy: don't save over it until it's gone.
                     NSLog("LaunchGrid: could not load grid (\(error)) nor move it aside (\(moveError)); not saving over it")
                     savesBlocked = true
-                    let why = newer ? "was made by a newer version of LaunchGrid" : "could not be read"
-                    loadProblem = ("Your saved layout \(why) and couldn't be set aside, so LaunchGrid won't save over it. "
-                        + "Move \(store.url.lastPathComponent) elsewhere and your changes will be saved.", store.url)
+                    let name = store.url.lastPathComponent
+                    let message = newer
+                        ? String(localized: "Your saved layout was made by a newer version of LaunchGrid and couldn't be set aside, so LaunchGrid won't save over it. Move \(name) elsewhere and your changes will be saved.")
+                        : String(localized: "Your saved layout could not be read and couldn't be set aside, so LaunchGrid won't save over it. Move \(name) elsewhere and your changes will be saved.")
+                    loadProblem = (message, store.url)
                 }
             }
         }
@@ -235,20 +248,24 @@ final class AppState {
 
     /// Set once a failed save was reported, so a failing disk doesn't alert on every change.
     @ObservationIgnored private var saveFailureReported = false
+    /// Why the last `saveNow` failed.
+    @ObservationIgnored private(set) var lastSaveError: Error?
 
-    func saveNow(reportingFailure: Bool = true) {
+    /// Saves the grid now; false when that failed.
+    @discardableResult
+    func saveNow(reportingFailure: Bool = true) -> Bool {
+        lastSaveError = nil
         saveTask?.cancel()
         // Before the first layout, exclusions chosen in the welcome window are still worth keeping,
         // and so is emptying them: the file on disk would otherwise keep the last one.
-        guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return }
+        guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return true }
         if savesBlocked {
             guard !store.exists else {
                 NSLog("LaunchGrid: not saving over the layout that couldn't be read")
                 if reportingFailure {
-                    reportSaveFailure("LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. "
-                        + "Move that file elsewhere and your changes will be saved.")
+                    reportSaveFailure(String(localized: "LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. Move that file elsewhere and your changes will be saved."))
                 }
-                return
+                return true // on purpose, and already said
             }
             savesBlocked = false // moved out of the way since
         }
@@ -258,10 +275,14 @@ final class AppState {
             saveFailureReported = false
             // Before the first layout nothing is on the grid yet, so nothing is unused either.
             if hasGridFile { onAppPathsInUse(appPathsInUse) }
+            return true
         } catch {
             NSLog("LaunchGrid: save failed: \(error)")
-            guard reportingFailure else { return }
-            reportSaveFailure("Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
+            lastSaveError = error
+            if reportingFailure {
+                reportSaveFailure(String(localized: "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)"))
+            }
+            return false
         }
     }
 
@@ -276,10 +297,10 @@ final class AppState {
 
     private func reportSaveFailure(_ detail: String) {
         // An alert would open behind the full-screen overlay and block it.
-        if isShown { showToast("Could not save your layout"); return }
+        if isShown { showToast(String(localized: "Could not save your layout")); return }
         guard !saveFailureReported else { return }
         saveFailureReported = true
-        onError("Could not save your layout", detail)
+        onError(String(localized: "Could not save your layout"), detail)
     }
 
     // MARK: Catalog
@@ -426,7 +447,7 @@ final class AppState {
     func addApps(_ apps: [InstalledApp]) {
         let installed = self.installed
         apply { Reconciler.add(apps, to: &$0, installed: installed) }
-        showToast(apps.count == 1 ? "Added \(apps[0].name)" : "Added \(apps.count) apps")
+        showToast(apps.count == 1 ? String(localized: "Added \(apps[0].name)") : String(localized: "Added \(apps.count) apps"))
     }
 
     func installedApp(for ref: AppRef) -> InstalledApp? {
@@ -481,8 +502,12 @@ final class AppState {
         }
         apply { Reconciler.choose(include: include, exclude: exclude, in: &$0, installed: among) }
         IconProvider.shared.prewarm(include.map(\.path))
-        let parts = [include.isEmpty ? nil : "\(include.count) included", exclude.isEmpty ? nil : "\(exclude.count) excluded"]
-        showToast(parts.compactMap { $0 }.joined(separator: ", ") + " — ⌘Z to undo")
+        let toast = switch (include.isEmpty, exclude.isEmpty) {
+        case (false, true): String(localized: "\(include.count) included — ⌘Z to undo")
+        case (true, false): String(localized: "\(exclude.count) excluded — ⌘Z to undo")
+        default: String(localized: "\(include.count) included, \(exclude.count) excluded — ⌘Z to undo")
+        }
+        showToast(toast)
     }
 
     // MARK: Derived
@@ -526,9 +551,9 @@ final class AppState {
                 // Cancelled by the person, e.g. at Gatekeeper's prompt: they know.
                 if Launcher.isUserCancel(error) { return }
                 if isShown {
-                    showToast("Could not open \(app.title): \(error.localizedDescription)")
+                    showToast(String(localized: "Could not open \(app.title): \(error.localizedDescription)"))
                 } else {
-                    onError("Could not open \(app.title)", error.localizedDescription)
+                    onError(String(localized: "Could not open \(app.title)"), error.localizedDescription)
                 }
             }
         }
@@ -604,6 +629,11 @@ final class AppState {
             let pages = FolderLayout.pageCount(apps: f.apps.count, grid: grid)
             let p = max(0, min(folderPage + delta, pages - 1))
             withAnimationIfShown { folderPage = p }
+            // Keep keyboard focus on the page being shown, in the same slot where there is one.
+            let perPage = FolderLayout.perPage(grid)
+            if let i = focusIndex, i / perPage != p {
+                focusIndex = min(p * perPage + i % perPage, f.apps.count - 1)
+            }
         } else {
             goToPage(currentPage + delta)
         }
@@ -646,7 +676,7 @@ final class AppState {
         let installed = self.installed
         apply { g in g.removingEmptiedPages { $0.remove(ids, installed: installed) } }
         selection.subtract(ids)
-        showToast(count == 1 ? "Removed — ⌘Z to undo" : "Removed \(count) items — ⌘Z to undo")
+        showToast(count == 1 ? String(localized: "Removed — ⌘Z to undo") : String(localized: "Removed \(count) items — ⌘Z to undo"))
     }
 
     func moveToPage(_ ids: [UUID], page: Int) {
@@ -690,17 +720,17 @@ final class AppState {
         apply { $0.sortEverything(folders: prefs.folderPlacement) }
         goToPage(0)
         // Re-flowing makes page titles meaningless, so they go; say so.
-        if hadTitles { showToast("Sorted; page titles were cleared — ⌘Z to undo") }
+        if hadTitles { showToast(String(localized: "Sorted; page titles were cleared — ⌘Z to undo")) }
     }
 
     func beginRename(_ id: UUID) {
         guard let item = grid.item(id) else { return }
-        textEdit = TextEditRequest(target: .item(id), title: item.folder == nil ? "Rename App" : "Rename Folder", text: item.title)
+        textEdit = TextEditRequest(target: .item(id), title: item.folder == nil ? String(localized: "Rename App") : String(localized: "Rename Folder"), text: item.title)
     }
 
     func beginPageTitleEdit(_ page: Int) {
         guard grid.pages.indices.contains(page) else { return }
-        textEdit = TextEditRequest(target: .pageTitle(page), title: "Page Title", text: grid.pages[page].title ?? "")
+        textEdit = TextEditRequest(target: .pageTitle(page), title: String(localized: "Page Title"), text: grid.pages[page].title ?? "")
     }
 
     func commitTextEdit(_ text: String) {

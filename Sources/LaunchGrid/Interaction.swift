@@ -406,7 +406,7 @@ extension AppState {
             switch targetItem {
             case .folder(let f):
                 apply { g in g.removingEmptiedPages { $0.addToFolder(ids, folder: f.id) } }
-                showToast("Added to \(f.name)")
+                showToast(String(localized: "Added to \(f.name)"))
             case .app(let a):
                 let apps = [a] + ids.compactMap { grid.item($0)?.app }
                 let name = GridBuilder.folderName(for: apps.map { installedApp(for: $0) })

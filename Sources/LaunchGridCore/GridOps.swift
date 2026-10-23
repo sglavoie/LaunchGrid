@@ -123,18 +123,25 @@ extension Grid {
     /// Inserts items on a page, pushing overflow to later pages.
     public mutating func insert(_ items: [GridItem], page: Int, at index: Int) {
         guard !items.isEmpty else { return }
+        spill(from: place(items, page: page, at: index))
+    }
+
+    /// Inserts items on a page without spilling; returns the page.
+    private mutating func place(_ items: [GridItem], page: Int, at index: Int) -> Int {
         let page = max(0, page)
         while page >= pages.count { pages.append(Page()) }
         let i = min(max(0, index), pages[page].items.count)
         pages[page].items.insert(contentsOf: items, at: i)
-        spill(from: page)
+        return page
     }
 
     /// Moves items to `index` on `page`. The index is relative to the page *after* the moved
-    /// items have been taken out, which is what a live-reordering drag displays.
+    /// items have been taken out, which is what a live-reordering drag displays (a folder the
+    /// move empties still counts, as it's still on screen).
     public mutating func move(_ ids: [UUID], toPage page: Int, at index: Int) {
         let items = detach(ids)
-        insert(items, page: page, at: index)
+        if !items.isEmpty { _ = place(items, page: page, at: index) }
+        // Drops the folders the move emptied before spilling, so they don't push items over.
         normalize()
     }
 

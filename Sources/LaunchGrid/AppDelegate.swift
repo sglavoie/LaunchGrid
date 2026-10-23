@@ -52,8 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
         if Sandbox.isActive { state.onAppPathsInUse = { FileAccess.forgetApps(notIn: $0) } }
         FileAccess.onBookmarkFailure = { [weak self] url in
-            self?.showError("LaunchGrid can't keep access to “\(url.lastPathComponent)”",
-                            "It can be used until LaunchGrid quits. After that, choose it again.")
+            self?.showError(String(localized: "LaunchGrid can't keep access to “\(url.lastPathComponent)”"),
+                            String(localized: "It can be used until LaunchGrid quits. After that, choose it again."))
         }
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
@@ -69,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !applyHotkey() {
             // After launch finishes, so the alert doesn't hold up the first scan.
             DispatchQueue.main.async { self.warnHotkeyFailed() }
+        }
+        if let notice = state.recoveryNotice {
+            state.recoveryNotice = nil
+            DispatchQueue.main.async { self.showRecoveryNotice(notice.message, file: notice.file) }
         }
 
         // The hand-over from a second launch is for the installed copy, not a scratch one.
@@ -155,13 +159,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate()
         if !state.grid.allApps.isEmpty {
             let alert = NSAlert()
-            alert.messageText = "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?"
-            alert.informativeText = "Your current pages and folders will be replaced. ⌘Z in the grid undoes it."
-            alert.addButton(withTitle: "Replace")
-            alert.addButton(withTitle: "Cancel")
+            alert.messageText = String(localized: "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?")
+            alert.informativeText = String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")
+            alert.addButton(withTitle: String(localized: "Replace"))
+            alert.addButton(withTitle: String(localized: "Cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         loadLayout(at: url)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // The last changes would be lost on the way out: say so, so they can be kept open.
+        guard let state, !state.saveNow(reportingFailure: false) else { return .terminateNow }
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Your latest layout changes couldn't be saved")
+        alert.informativeText = String(localized: "If you quit now, they'll be lost. Keep LaunchGrid open to try again once the problem is fixed, or save the layout elsewhere from Settings › Library.\n\n\(state.lastSaveError?.localizedDescription ?? "")")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: String(localized: "Don't Quit"))
+        alert.addButton(withTitle: String(localized: "Quit Anyway"))
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -172,14 +190,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Integration
 
-    /// Registers the global shortcut; false when macOS refused it.
+    /// Registers the global shortcut; false when macOS refused it. With a `fallback`, a refused
+    /// shortcut is put back to that one in the preferences, so the next launch doesn't start
+    /// without a working shortcut.
     @discardableResult
-    private func applyHotkey() -> Bool {
+    private func applyHotkey(fallback: (keyCode: UInt32, modifiers: UInt32)? = nil) -> Bool {
         // Carbon lets a second process register the same combo, so a scratch copy would fight
         // the installed one for it. Leave it to the installed copy while that one runs.
         if Preferences.isScratch && !Self.otherInstances.isEmpty {
             HotkeyService.shared.unregister()
-            state.hotkeyProblem = "This is a scratch copy: the shortcut stays with the LaunchGrid that's already running."
+            state.hotkeyProblem = String(localized: "This is a scratch copy: the shortcut stays with the LaunchGrid that's already running.")
             return true
         }
         guard prefs.hotkeyEnabled else {
@@ -187,13 +207,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             state.hotkeyProblem = nil
             return true
         }
-        let ok = HotkeyService.shared.register(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+        return Self.registerHotkey(prefs: prefs, state: state, fallback: fallback,
+                                   register: { HotkeyService.shared.register(keyCode: $0, modifiers: $1) },
+                                   activeCombo: HotkeyService.shared.activeCombo)
+    }
+
+    /// The registering half of `applyHotkey`, with the hotkey service passed in for tests.
+    static func registerHotkey(prefs: Preferences, state: AppState, fallback: (keyCode: UInt32, modifiers: UInt32)?,
+                               register: (UInt32, UInt32) -> Bool,
+                               activeCombo: @autoclosure () -> (keyCode: UInt32, modifiers: UInt32)?) -> Bool {
+        let ok = register(prefs.hotkeyKeyCode, prefs.hotkeyModifiers)
         if ok {
             state.hotkeyProblem = nil
+        } else if let fallback, (fallback.keyCode, fallback.modifiers) != (prefs.hotkeyKeyCode, prefs.hotkeyModifiers),
+                  register(fallback.keyCode, fallback.modifiers) {
+            let refused = KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+            let kept = KeyCombo.describe(keyCode: fallback.keyCode, modifiers: fallback.modifiers)
+            prefs.hotkeyKeyCode = fallback.keyCode
+            prefs.hotkeyModifiers = fallback.modifiers
+            state.hotkeyProblem = String(localized: "\(refused) couldn't be registered (macOS or another app may reserve it), so LaunchGrid kept \(kept). Pick another one.")
         } else {
             // A failed change keeps the previous shortcut registered.
-            let previous = HotkeyService.shared.activeCombo.map { " \(KeyCombo.describe(keyCode: $0.keyCode, modifiers: $0.modifiers)) still opens it." } ?? ""
-            state.hotkeyProblem = "This shortcut couldn't be registered (macOS or another app may reserve it), so it won't open LaunchGrid.\(previous) Pick another one."
+            if let active = activeCombo() {
+                let previous = KeyCombo.describe(keyCode: active.keyCode, modifiers: active.modifiers)
+                state.hotkeyProblem = String(localized: "This shortcut couldn't be registered (macOS or another app may reserve it), so it won't open LaunchGrid. \(previous) still opens it. Pick another one.")
+            } else {
+                state.hotkeyProblem = String(localized: "This shortcut couldn't be registered (macOS or another app may reserve it), so it won't open LaunchGrid. Pick another one.")
+            }
         }
         return ok
     }
@@ -201,11 +241,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func warnHotkeyFailed() {
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = "LaunchGrid's shortcut couldn't be registered"
-        alert.informativeText = "\(KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) couldn't be registered as a global shortcut; "
-            + "it may be reserved by macOS or another app. Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut."
-        alert.addButton(withTitle: "Choose Shortcut…")
-        alert.addButton(withTitle: "Not Now")
+        alert.messageText = String(localized: "LaunchGrid's shortcut couldn't be registered")
+        alert.informativeText = String(localized: "\(KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) couldn't be registered as a global shortcut; it may be reserved by macOS or another app. Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut.")
+        alert.addButton(withTitle: String(localized: "Choose Shortcut…"))
+        alert.addButton(withTitle: String(localized: "Not Now"))
         if alert.runModal() == .alertFirstButtonReturn { showSettings() }
     }
 
@@ -273,31 +312,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Show LaunchGrid", action: #selector(showOverlay), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Show LaunchGrid"), action: #selector(showOverlay), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
-        menu.addItem(withTitle: "Add Missing Apps…", action: #selector(showAddMissing), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Choose Apps…", action: #selector(showChooseApps), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Sort Everything", action: #selector(sortEverything), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Settings…"), action: #selector(showSettings), keyEquivalent: ",").target = self
+        menu.addItem(withTitle: String(localized: "Add Missing Apps…"), action: #selector(showAddMissing), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Choose Apps…"), action: #selector(showChooseApps), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Sort Everything"), action: #selector(sortEverything), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Save Grid File…", action: #selector(saveGridFile), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Load Grid File…", action: #selector(loadGridFile), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFile), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile), keyEquivalent: "").target = self
         let importMenu = NSMenu()
-        let appGrid = importMenu.addItem(withTitle: "From AppGrid", action: #selector(importAppGrid), keyEquivalent: "")
+        let appGrid = importMenu.addItem(withTitle: String(localized: "From AppGrid"), action: #selector(importAppGrid), keyEquivalent: "")
         appGrid.target = self
         appGrid.isEnabled = LaunchpadImporter.appGridDatabaseURL != nil
-        let launchpad = importMenu.addItem(withTitle: "From Launchpad", action: #selector(importLaunchpad), keyEquivalent: "")
+        let launchpad = importMenu.addItem(withTitle: String(localized: "From Launchpad"), action: #selector(importLaunchpad), keyEquivalent: "")
         launchpad.target = self
         launchpad.isEnabled = LaunchpadImporter.launchpadDatabaseURL != nil
         importMenu.autoenablesItems = false
-        let importItem = menu.addItem(withTitle: "Import", action: nil, keyEquivalent: "")
+        let importItem = menu.addItem(withTitle: String(localized: "Import"), action: nil, keyEquivalent: "")
         menu.setSubmenu(importMenu, for: importItem)
-        menu.addItem(withTitle: "Rebuild from Scratch…", action: #selector(confirmRebuild), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Rebuild from Scratch…"), action: #selector(confirmRebuild), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "LaunchGrid Support", action: #selector(openSupport), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Privacy Policy", action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "LaunchGrid Support"), action: #selector(openSupport), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Privacy Policy"), action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit LaunchGrid", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: String(localized: "Quit LaunchGrid"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         return menu
     }
 
@@ -319,35 +358,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func buildMainMenu() {
         let main = NSMenu()
-        let appItem = main.addItem(withTitle: "LaunchGrid", action: nil, keyEquivalent: "")
+        let appItem = main.addItem(withTitle: String(localized: "LaunchGrid"), action: nil, keyEquivalent: "")
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About LaunchGrid", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: String(localized: "About LaunchGrid"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: String(localized: "Settings…"), action: #selector(showSettings), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "LaunchGrid Support", action: #selector(openSupport), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Privacy Policy", action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: String(localized: "LaunchGrid Support"), action: #selector(openSupport), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: String(localized: "Privacy Policy"), action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide LaunchGrid", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "Quit LaunchGrid", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: String(localized: "Hide LaunchGrid"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: String(localized: "Quit LaunchGrid"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         main.setSubmenu(appMenu, for: appItem)
 
-        let editItem = main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "")
-        let edit = NSMenu(title: "Edit")
-        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        let editItem = main.addItem(withTitle: String(localized: "Edit"), action: nil, keyEquivalent: "")
+        let edit = NSMenu(title: String(localized: "Edit"))
+        edit.addItem(withTitle: String(localized: "Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: String(localized: "Redo"), action: Selector(("redo:")), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
         edit.addItem(.separator())
-        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: String(localized: "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: String(localized: "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: String(localized: "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: String(localized: "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         main.setSubmenu(edit, for: editItem)
 
-        let windowItem = main.addItem(withTitle: "Window", action: nil, keyEquivalent: "")
-        let window = NSMenu(title: "Window")
-        window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        let windowItem = main.addItem(withTitle: String(localized: "Window"), action: nil, keyEquivalent: "")
+        let window = NSMenu(title: String(localized: "Window"))
+        window.addItem(withTitle: String(localized: "Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        window.addItem(withTitle: String(localized: "Minimize"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         main.setSubmenu(window, for: windowItem)
         NSApp.windowsMenu = window
         NSApp.mainMenu = main
@@ -364,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             saveFile: { [weak self] in self?.saveGridFile() },
             addMissing: { [weak self] in self?.showAddMissing() },
             chooseApps: { [weak self] in self?.showChooseApps() },
-            hotkeyChanged: { [weak self] in self?.applyHotkey() },
+            hotkeyChanged: { [weak self] fallback in self?.applyHotkey(fallback: fallback) },
             dockChanged: { [weak self] in
                 self?.applyDockPolicy()
                 NSApp.activate()
@@ -420,20 +459,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func showSettings() {
         let actions = libraryActions
-        present("settings", title: "LaunchGrid Settings") { _ in SettingsView(actions: actions) }
+        present("settings", title: String(localized: "LaunchGrid Settings")) { _ in SettingsView(actions: actions) }
     }
 
     @objc func showAddMissing() {
-        present("addMissing", title: "Add Missing Apps", resizable: true) { close in AddMissingAppsView(close: close) }
+        present("addMissing", title: String(localized: "Add Missing Apps"), resizable: true) { close in AddMissingAppsView(close: close) }
     }
 
     @objc func showChooseApps() {
-        present("chooseApps", title: "Choose Apps", resizable: true) { close in ChooseAppsView(close: close) }
+        present("chooseApps", title: String(localized: "Choose Apps"), resizable: true) { close in ChooseAppsView(close: close) }
     }
 
     func showFirstRun() {
         let actions = libraryActions
-        present("firstRun", title: "Welcome") { close in FirstRunView(actions: actions, close: close) }
+        present("firstRun", title: String(localized: "Welcome")) { close in FirstRunView(actions: actions, close: close) }
     }
 
     /// From the menu bar the grid is hidden, so the change and its undo aren't in view: confirm first.
@@ -441,10 +480,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = "Sort everything alphabetically?"
-        alert.informativeText = "Every page is re-flowed and page titles are cleared. Folders stay intact. ⌘Z in the grid undoes it."
-        alert.addButton(withTitle: "Sort")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(localized: "Sort everything alphabetically?")
+        alert.informativeText = String(localized: "Every page is re-flowed and page titles are cleared. Folders stay intact. ⌘Z in the grid undoes it.")
+        alert.addButton(withTitle: String(localized: "Sort"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         state.sortEverything()
     }
@@ -453,11 +492,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = "Rebuild the grid from scratch?"
-        alert.informativeText = "Folders, page titles and your custom order will be replaced. ⌘Z in the grid undoes it."
-        alert.addButton(withTitle: "By Category")
-        alert.addButton(withTitle: "Alphabetically")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(localized: "Rebuild the grid from scratch?")
+        alert.informativeText = String(localized: "Folders, page titles and your custom order will be replaced. ⌘Z in the grid undoes it.")
+        alert.addButton(withTitle: String(localized: "By Category"))
+        alert.addButton(withTitle: String(localized: "Alphabetically"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         switch alert.runModal() {
         case .alertFirstButtonReturn: state.build(style: .byCategory)
         case .alertSecondButtonReturn: state.build(style: .alphabetical)
@@ -485,14 +524,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSOpenPanel()
-        panel.message = "To import your \(source) layout, allow LaunchGrid to read this folder."
+        panel.message = String(localized: "To import your \(source) layout, allow LaunchGrid to read this folder.")
         panel.prompt = "Allow"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.directoryURL = url.deletingLastPathComponent()
         guard panel.runModal() == .OK else { return false }
         guard FileManager.default.isReadableFile(atPath: url.path) else {
-            showError("Could not import from \(source)", "Choose the folder that holds the \(source) database: \(url.deletingLastPathComponent().path)")
+            showError(String(localized: "Could not import from \(source)"), String(localized: "Choose the folder that holds the \(source) database: \(url.deletingLastPathComponent().path)"))
             return false
         }
         return true
@@ -511,16 +550,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }.value
             switch outcome {
             case .failure(let error):
-                showError("Could not import from \(source)", error.localizedDescription)
+                showError(String(localized: "Could not import from \(source)"), error.localizedDescription)
             case .success(let result):
                 guard result.imported > 0 else {
-                    showError("Nothing to import", "No apps in the \(source) layout could be found on this Mac.")
+                    showError(String(localized: "Nothing to import"), String(localized: "No apps in the \(source) layout could be found on this Mac."))
                     return
                 }
                 state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid))
-                var message = "Imported \(result.imported) apps from \(source)"
-                if !result.skipped.isEmpty { message += "; skipped \(result.skipped.count) not installed" }
-                if !result.duplicates.isEmpty { message += "; skipped \(result.duplicates.count) listed twice" }
+                var message = String(localized: "Imported \(result.imported) apps from \(source)")
+                if !result.skipped.isEmpty { message += String(localized: "; skipped \(result.skipped.count) not installed") }
+                if !result.duplicates.isEmpty { message += String(localized: "; skipped \(result.duplicates.count) listed twice") }
                 state.showToast(message)
                 closeFirstRunIfDone()
             }
@@ -537,7 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             try GridStore.encode(state.grid).write(to: url, options: .atomic)
         } catch {
-            showError("Could not save the grid file", error.localizedDescription)
+            showError(String(localized: "Could not save the grid file"), error.localizedDescription)
         }
     }
 
@@ -563,15 +602,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 return
             }
             state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: try GridStore.decode(data)))
-            state.showToast("Loaded \(url.lastPathComponent)")
+            state.showToast(String(localized: "Loaded \(url.lastPathComponent)"))
             closeFirstRunIfDone()
         } catch {
-            showError("Could not load the grid file", error.localizedDescription)
+            showError(String(localized: "Could not load the grid file"), error.localizedDescription)
         }
     }
 
     private func closeFirstRunIfDone() {
         if state.hasGridFile { windows["firstRun"]?.close() }
+    }
+
+    private func showRecoveryNotice(_ message: String, file: URL) {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Your layout was restored from the previous save")
+        alert.informativeText = message
+        alert.addButton(withTitle: String(localized: "OK"))
+        alert.addButton(withTitle: String(localized: "Show in Finder"))
+        if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([file]) }
     }
 
     private func showError(_ title: String, _ detail: String) {

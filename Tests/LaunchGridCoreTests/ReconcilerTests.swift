@@ -517,6 +517,22 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.imported == 3)
     }
 
+    @Test func foldersInsideFoldersGiveTheirAppsToTheOuterOne() {
+        typealias Row = LaunchpadImporter.Row
+        let items = [
+            Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+            Row(id: 20, type: 2, parent: 10, ordering: 0), Row(id: 30, type: 3, parent: 20, ordering: 0),
+            Row(id: 40, type: 4, parent: 30, ordering: 0), Row(id: 50, type: 2, parent: 30, ordering: 1),
+            Row(id: 60, type: 3, parent: 50, ordering: 0), Row(id: 70, type: 4, parent: 60, ordering: 0),
+        ]
+        let apps = [40: LaunchpadImporter.AppRow(title: "Notes", bundleID: "com.apple.Notes"),
+                    70: LaunchpadImporter.AppRow(title: "", bundleID: "com.apple.Maps")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [20: "Outer"], rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(titles(r.grid.pages[0]) == ["Outer"])
+        #expect(r.grid.pages[0].items[0].folder?.apps.map(\.name) == ["Notes", "com.apple.Maps"], "an empty title isn't a name")
+        #expect(r.imported == 2)
+    }
+
     @Test func readsChangesStillInTheWriteAheadLog() throws {
         let url = try makeFixture()
         defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) } }

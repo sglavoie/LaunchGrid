@@ -13,8 +13,11 @@ public struct TextLine: Equatable, Sendable {
     public var afterCaret: Substring { text.dropFirst(caret) }
 
     public mutating func insert(_ s: String) {
-        text = String(beforeCaret) + s + afterCaret
-        caret += s.count
+        // Counted after joining: a combining accent or the second half of a flag merges with
+        // the character before it.
+        let head = String(beforeCaret) + s
+        text = head + afterCaret
+        caret = min(head.count, text.count)
     }
 
     // MARK: Moving

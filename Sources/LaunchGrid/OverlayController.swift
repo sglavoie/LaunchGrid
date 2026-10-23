@@ -456,6 +456,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let count = focusableCount
         let cols = state.grid.columns
         guard count > 0 else {
+            // Pages are hidden behind search results, even when there are none.
+            guard state.query.isEmpty else { return }
             if code == kVK_LeftArrow { state.flipPage(-1) }
             if code == kVK_RightArrow { state.flipPage(1) }
             return
@@ -523,7 +525,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         default: cols
         }
         // Where the moved items start among the others, so the focused one lands a step on.
-        let at = i - lead + step
+        var at = i - lead + step
+        // ↓ from a row above a short last row goes to the end, as plain ↓ moves focus there.
+        if code == kVK_DownArrow, at > rest, i / cols < (pool.count - 1) / cols { at = rest }
         if let folder {
             guard at >= 0, at <= rest else { return }
             state.apply { $0.addToFolder(ids, folder: folder.id, at: at) }

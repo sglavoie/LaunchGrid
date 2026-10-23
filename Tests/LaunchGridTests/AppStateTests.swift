@@ -140,6 +140,24 @@ func installed(_ name: String) -> InstalledApp {
         let state = try load("not json")
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
     }
+
+    @Test func savesKeepThePreviousOneToRestoreFromWhenTheLastIsUnreadable() throws {
+        let first = makeState(["A"])
+        first.saveNow()
+        let a = try #require(first.grid.allApps.first)
+        first.apply { $0.rename(a.id, to: "Renamed") }
+        first.saveNow()
+        #expect(try first.store.loadBackup().allApps.map(\.title) == ["A"], "the save before last")
+
+        try Data().write(to: first.store.url) // as a power cut right after writing can leave it
+        let state = AppState(prefs: testPreferences(), store: first.store)
+        #expect(state.grid.allApps.map(\.title) == ["A"])
+        #expect(state.hasGridFile)
+        #expect(state.loadProblem == nil)
+        let notice = try #require(state.recoveryNotice)
+        #expect(notice.file.lastPathComponent.hasPrefix("grid.corrupt-"))
+        #expect(FileManager.default.fileExists(atPath: notice.file.path))
+    }
 }
 
 @MainActor @Suite(.tempDir) struct SelectionTests {
@@ -446,6 +464,24 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.folderPage == 0)
         #expect(state.focusIndex == 27)
     }
+
+    @Test func turningAFolderPageKeepsFocusOnTheShownPage() {
+        let state = makeState()
+        let refs = (1...30).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.folder(folder)])])) // 28 per folder page
+        state.openFolder(folder.id)
+        state.focusIndex = 1
+        state.flipPage(1)
+        #expect(state.folderPage == 1)
+        #expect(state.focusIndex == 29, "the same slot on page 2")
+        state.focusIndex = 28
+        state.flipPage(-1)
+        #expect(state.focusIndex == 0)
+        state.focusIndex = 5
+        state.flipPage(1)
+        #expect(state.focusIndex == 29, "clamped to the last app when the slot is empty")
+    }
 }
 
 @MainActor @Suite(.tempDir) struct SaveTests {
@@ -459,7 +495,8 @@ func installed(_ name: String) -> InstalledApp {
         let a = try #require(state.grid.allApps.first)
         state.apply { $0.rename(a.id, to: "Renamed") }
         #expect(try savedTitles(state) == ["A"], "saves are debounced")
-        try await Task.sleep(for: .milliseconds(800))
+        // Half a second after the change; waits longer on a busy machine rather than fail.
+        for _ in 0..<30 where try savedTitles(state) != ["Renamed"] { try await Task.sleep(for: .milliseconds(100)) }
         #expect(try savedTitles(state) == ["Renamed"])
 
         state.apply { $0.rename(a.id, to: "Again") }
@@ -636,5 +673,42 @@ func installed(_ name: String) -> InstalledApp {
         #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_2), modifiers: opt | shift) != nil)
         #expect(KeyCombo.conflict(keyCode: UInt32(kVK_Space), modifiers: opt) == nil, "the default shortcut")
         #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_E), modifiers: opt | ctrl) == nil)
+    }
+}
+
+@MainActor @Suite(.tempDir) struct HotkeyTests {
+    @Test func aRefusedRecordedShortcutGoesBackToThePreviousOne() {
+        let state = makeState()
+        let prefs = state.prefs
+        let previous = (keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+        prefs.hotkeyKeyCode = UInt32(kVK_ANSI_K)
+        prefs.hotkeyModifiers = UInt32(cmdKey)
+        var tried: [UInt32] = []
+        let ok = AppDelegate.registerHotkey(prefs: prefs, state: state, fallback: previous,
+                                            register: { code, _ in tried.append(code); return code != UInt32(kVK_ANSI_K) },
+                                            activeCombo: nil)
+        #expect(!ok)
+        #expect(tried == [UInt32(kVK_ANSI_K), previous.keyCode])
+        #expect(prefs.hotkeyKeyCode == previous.keyCode && prefs.hotkeyModifiers == previous.modifiers, "the saved one works")
+        #expect(state.hotkeyProblem?.contains("kept") == true)
+    }
+
+    @Test func withoutAFallbackTheRefusedShortcutStaysAndIsExplained() {
+        let state = makeState()
+        let prefs = state.prefs
+        let code = prefs.hotkeyKeyCode
+        let ok = AppDelegate.registerHotkey(prefs: prefs, state: state, fallback: nil,
+                                            register: { _, _ in false }, activeCombo: nil)
+        #expect(!ok)
+        #expect(prefs.hotkeyKeyCode == code)
+        #expect(state.hotkeyProblem?.contains("won't open LaunchGrid") == true)
+    }
+
+    @Test func anAcceptedShortcutClearsTheProblem() {
+        let state = makeState()
+        state.hotkeyProblem = "old"
+        #expect(AppDelegate.registerHotkey(prefs: state.prefs, state: state, fallback: nil,
+                                           register: { _, _ in true }, activeCombo: nil))
+        #expect(state.hotkeyProblem == nil)
     }
 }

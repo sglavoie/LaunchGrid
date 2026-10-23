@@ -24,6 +24,21 @@ import Testing
         #expect(after("ab|cd") { $0.insert("XY") } == "abXY|cd")
     }
 
+    @Test func insertingACharacterThatMergesKeepsTheCaretAfterIt() {
+        var l = line("e|x")
+        l.insert("\u{301}")
+        #expect(l.text == "\u{E9}x")
+        #expect(l.caret == 1)
+        l.deleteBackward()
+        #expect(marked(l) == "|x")
+        var flag = line("|")
+        flag.insert("\u{1F1FA}")
+        flag.insert("\u{1F1F8}")
+        #expect(flag.caret == 1)
+        flag.deleteBackward()
+        #expect(flag.text.isEmpty)
+    }
+
     @Test func movesByCharacterAndToEitherEnd() {
         #expect(after("ab|c") { $0.moveLeft() } == "a|bc")
         #expect(after("|abc") { $0.moveLeft() } == "|abc")

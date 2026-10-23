@@ -309,7 +309,7 @@ enum KeyCombo {
         case kVK_End: return "↘"
         case kVK_PageUp: return "⇞"
         case kVK_PageDown: return "⇟"
-        default: return characterName(code) ?? "Key \(code)"
+        default: return characterName(code) ?? String(localized: "Key \(code)")
         }
     }
 
@@ -341,22 +341,22 @@ enum KeyCombo {
     private static var knownShortcuts: [(Int, UInt32, String, Int?)] {
         let cmd = UInt32(cmdKey), opt = UInt32(optionKey), ctrl = UInt32(controlKey), shift = UInt32(shiftKey)
         return [
-            (kVK_Space, cmd, "Spotlight", 64),
-            (kVK_Space, cmd | opt, "Finder search window", 65),
-            (kVK_Space, ctrl, "Select previous input source", 60),
-            (kVK_Space, ctrl | opt, "Select next input source", 61),
-            (kVK_Space, ctrl | cmd, "Character Viewer", nil),
-            (kVK_Tab, cmd, "App Switcher", nil),
-            (kVK_ANSI_3, cmd | shift, "Screenshot", 28),
-            (kVK_ANSI_4, cmd | shift, "Screenshot selection", 30),
-            (kVK_ANSI_5, cmd | shift, "Screenshot toolbar", 184),
-            (kVK_ANSI_Q, cmd | ctrl, "Lock Screen", nil),
-            (kVK_UpArrow, ctrl, "Mission Control", 32),
-            (kVK_DownArrow, ctrl, "Application windows", 33),
-            (kVK_F3, 0, "Mission Control", nil),
-            (kVK_F11, 0, "Show Desktop", 36),
-            (kVK_ANSI_Q, cmd, "Quit (in every app)", nil),
-            (kVK_ANSI_W, cmd, "Close Window (in every app)", nil),
+            (kVK_Space, cmd, String(localized: "Spotlight"), 64),
+            (kVK_Space, cmd | opt, String(localized: "Finder search window"), 65),
+            (kVK_Space, ctrl, String(localized: "Select previous input source"), 60),
+            (kVK_Space, ctrl | opt, String(localized: "Select next input source"), 61),
+            (kVK_Space, ctrl | cmd, String(localized: "Character Viewer"), nil),
+            (kVK_Tab, cmd, String(localized: "App Switcher"), nil),
+            (kVK_ANSI_3, cmd | shift, String(localized: "Screenshot"), 28),
+            (kVK_ANSI_4, cmd | shift, String(localized: "Screenshot selection"), 30),
+            (kVK_ANSI_5, cmd | shift, String(localized: "Screenshot toolbar"), 184),
+            (kVK_ANSI_Q, cmd | ctrl, String(localized: "Lock Screen"), nil),
+            (kVK_UpArrow, ctrl, String(localized: "Mission Control"), 32),
+            (kVK_DownArrow, ctrl, String(localized: "Application windows"), 33),
+            (kVK_F3, 0, String(localized: "Mission Control"), nil),
+            (kVK_F11, 0, String(localized: "Show Desktop"), 36),
+            (kVK_ANSI_Q, cmd, String(localized: "Quit (in every app)"), nil),
+            (kVK_ANSI_W, cmd, String(localized: "Close Window (in every app)"), nil),
         ]
     }
 
@@ -367,21 +367,21 @@ enum KeyCombo {
             return match.2
         }
         // A global shortcut takes the key from every app, so these stop working everywhere.
-        if modifiers == cmd, let command = commonCommands[Int(keyCode)] { return "\(command) (in most apps)" }
+        if modifiers == cmd, let command = commonCommands[Int(keyCode)] { return String(localized: "\(command) (in most apps)") }
         if modifiers == opt || modifiers == opt | shift, printableKeys.contains(Int(keyCode)) {
-            return "typing special characters (⌥ with this key types an accent or symbol)"
+            return String(localized: "typing special characters (⌥ with this key types an accent or symbol)")
         }
         return nil
     }
 
     /// ⌘ shortcuts that nearly every app uses for editing and documents.
     static let commonCommands: [Int: String] = [
-        kVK_ANSI_A: "Select All", kVK_ANSI_C: "Copy", kVK_ANSI_V: "Paste", kVK_ANSI_X: "Cut",
-        kVK_ANSI_Z: "Undo", kVK_ANSI_S: "Save", kVK_ANSI_F: "Find", kVK_ANSI_G: "Find Next",
-        kVK_ANSI_P: "Print", kVK_ANSI_N: "New", kVK_ANSI_T: "New Tab", kVK_ANSI_O: "Open",
-        kVK_ANSI_H: "Hide", kVK_ANSI_M: "Minimize", kVK_ANSI_B: "Bold", kVK_ANSI_I: "Italic",
-        kVK_ANSI_U: "Underline", kVK_ANSI_R: "Reload", kVK_ANSI_L: "Go to Address",
-        kVK_ANSI_Comma: "Settings", kVK_ANSI_Grave: "Cycle Windows",
+        kVK_ANSI_A: String(localized: "Select All"), kVK_ANSI_C: String(localized: "Copy"), kVK_ANSI_V: String(localized: "Paste"), kVK_ANSI_X: String(localized: "Cut"),
+        kVK_ANSI_Z: String(localized: "Undo"), kVK_ANSI_S: String(localized: "Save"), kVK_ANSI_F: String(localized: "Find"), kVK_ANSI_G: String(localized: "Find Next"),
+        kVK_ANSI_P: String(localized: "Print"), kVK_ANSI_N: String(localized: "New"), kVK_ANSI_T: String(localized: "New Tab"), kVK_ANSI_O: String(localized: "Open"),
+        kVK_ANSI_H: String(localized: "Hide"), kVK_ANSI_M: String(localized: "Minimize"), kVK_ANSI_B: String(localized: "Bold"), kVK_ANSI_I: String(localized: "Italic"),
+        kVK_ANSI_U: String(localized: "Underline"), kVK_ANSI_R: String(localized: "Reload"), kVK_ANSI_L: String(localized: "Go to Address"),
+        kVK_ANSI_Comma: String(localized: "Settings"), kVK_ANSI_Grave: String(localized: "Cycle Windows"),
     ]
 
     /// Keys that type a character: with ⌥ (or ⌥⇧) alone they type accents and symbols. Space
@@ -496,7 +496,7 @@ enum FileAccess {
         var moves: [String: String] = [:]
         for (path, data) in saved where granted[path] == nil {
             var stale = false
-            guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, bookmarkDataIsStale: &stale),
+            guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutMounting], bookmarkDataIsStale: &stale),
                   url.startAccessingSecurityScopedResource() else { continue }
             let now = url.standardizedFileURL.path
             // Not into the Trash: that's on its way out, and the setting is better left as it was.
@@ -584,16 +584,16 @@ enum LoginItem {
 
     static var statusDescription: String {
         switch SMAppService.mainApp.status {
-        case .enabled: "Enabled"
-        case .notRegistered: "Off"
-        case .requiresApproval: "Needs approval in System Settings › General › Login Items"
-        case .notFound: "Unavailable — move LaunchGrid.app to /Applications and reopen it"
-        @unknown default: "Unknown"
+        case .enabled: String(localized: "Enabled")
+        case .notRegistered: String(localized: "Off")
+        case .requiresApproval: String(localized: "Needs approval in System Settings › General › Login Items")
+        case .notFound: String(localized: "Unavailable — move LaunchGrid.app to /Applications and reopen it")
+        @unknown default: String(localized: "Unknown")
         }
     }
 
     struct ScratchRun: LocalizedError {
-        var errorDescription: String? { "Not available in a scratch run (LAUNCHGRID_DATA_DIR is set)." }
+        var errorDescription: String? { String(localized: "Not available in a scratch run (LAUNCHGRID_DATA_DIR is set).") }
     }
 
     static func set(_ on: Bool) throws {

@@ -98,6 +98,29 @@ enum DebugScript {
                 case "choose": delegate.showChooseApps()
                 case "welcome": delegate.showFirstRun()
                 case "undo": state.undo()
+                case "bg":
+                    // "bg:wallpaper", or "bg:/path/to/picture" for a custom image.
+                    if arg.hasPrefix("/") {
+                        state.prefs.customImagePath = arg
+                        state.prefs.background = .image
+                    } else if let style = BackgroundStyle(rawValue: arg) {
+                        state.prefs.background = style
+                    }
+                case "blur": state.prefs.blurRadius = Double(arg) ?? 0
+                case "blursweep":
+                    // "blursweep:10-30": one radius every 30 ms, as dragging the slider does.
+                    let ends = arg.split(separator: "-").compactMap { Int($0) }
+                    guard ends.count == 2, ends[0] <= ends[1] else { break }
+                    for r in ends[0]...ends[1] {
+                        state.prefs.blurRadius = Double(r)
+                        try? await Task.sleep(for: .milliseconds(30))
+                    }
+                case "space":
+                    // As if the Space changed.
+                    NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+                case "renders":
+                    print("renders: blurs=\(ImageBlurCache.shared.renders) wallpaperLookups=\(BackgroundView.wallpaperLookups)")
+                    fflush(stdout)
                 case "keys":
                     // Comma-separated virtual key codes or literal characters, each optionally after
                     // modifiers, e.g. "keys:n,o,125,opt+51,ctrl+a,36".
@@ -205,6 +228,30 @@ enum DebugScript {
                     guard n.count == 2 else { break }
                     let ok = HotkeyService.shared.register(keyCode: n[0], modifiers: n[1])
                     print("hotkey: registered=\(ok) active=\(String(describing: HotkeyService.shared.activeCombo))")
+                    fflush(stdout)
+                case "hotkeyblock":
+                    // Takes "keyCode,modifiers" in a hotkey of its own, so registering it again is refused.
+                    let n = arg.split(separator: ",").compactMap { UInt32($0) }
+                    guard n.count == 2 else { break }
+                    var ref: EventHotKeyRef?
+                    let status = RegisterEventHotKey(n[0], n[1], EventHotKeyID(signature: OSType(0x4C47_4442), id: 9),
+                                                     GetApplicationEventTarget(), 0, &ref)
+                    print("hotkey: blocked \(arg) status=\(status)")
+                    fflush(stdout)
+                case "hotkeyrecord":
+                    // As if the Settings recorder caught "keyCode,modifiers": the same path, minus
+                    // the scratch-copy guard.
+                    let n = arg.split(separator: ",").compactMap { UInt32($0) }
+                    guard n.count == 2 else { break }
+                    let prefs = state.prefs
+                    let previous = (keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+                    HotkeyService.shared.register(keyCode: previous.keyCode, modifiers: previous.modifiers)
+                    prefs.hotkeyKeyCode = n[0]
+                    prefs.hotkeyModifiers = n[1]
+                    let ok = AppDelegate.registerHotkey(prefs: prefs, state: state, fallback: previous,
+                                                        register: { HotkeyService.shared.register(keyCode: $0, modifiers: $1) },
+                                                        activeCombo: HotkeyService.shared.activeCombo)
+                    print("hotkey: recorded=\(arg) ok=\(ok) saved=\(prefs.hotkeyKeyCode),\(prefs.hotkeyModifiers) active=\(String(describing: HotkeyService.shared.activeCombo)) problem=\(state.hotkeyProblem ?? "-")")
                     fflush(stdout)
                 case "press", "click", "fpress":
                     // Long-press (or click) item N on the current page, or in the open folder.

@@ -111,6 +111,10 @@ struct ToastLayer: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeOut(duration: 0.2), value: state.toast)
+        // VoiceOver doesn't see a toast appear; "Removed — ⌘Z to undo" is worth hearing.
+        .onChange(of: state.toast) { _, toast in
+            if let toast { AccessibilityNotification.Announcement(toast).post() }
+        }
     }
 }
 
@@ -148,6 +152,8 @@ struct TopBar: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .help("More")
+                .accessibilityLabel("More")
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
                     state.drag.menuButtonFrame = $0
                 }
@@ -192,6 +198,8 @@ struct SearchField: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
             SearchComposition.shared.fieldFrame = $0
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isSearchField)
         .accessibilityLabel("Search, type to filter apps")
         .accessibilityValue(state.query)
     }
@@ -310,19 +318,34 @@ struct PageView: View {
 
     static let gapID = UUID()
 
+    @AccessibilityFocusState private var voiceOverFocus: UUID?
+
     var body: some View {
         let layout = GridLayout(size: size, rows: state.grid.rows, columns: state.grid.columns)
         let icon = layout.iconSize(scale: state.prefs.iconScale)
+        // Read here once, not in every cell: a cell's body then reruns only when its own
+        // focus, selection or merge highlight changes, not on every arrow key.
+        let entries = entries
+        let focus = page == state.currentPage && state.openFolder == nil ? state.focusIndex : nil
+        let selection = state.selection
+        let mergeTarget = state.drag.mergeTarget
+        let editing = state.editing
         ZStack(alignment: .topLeading) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 if let item = entry.item {
-                    ItemCell(item: item, iconSize: icon, index: index, page: page)
+                    ItemCell(item: item, iconSize: icon, selected: selection.contains(item.id), focused: focus == index,
+                             mergeTarget: mergeTarget == item.id, editing: editing)
+                        .accessibilityFocused($voiceOverFocus, equals: item.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(index))
                 }
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        // VoiceOver follows the keyboard focus.
+        .onChange(of: focus) { _, i in
+            if let i, entries.indices.contains(i) { voiceOverFocus = entries[i].id }
+        }
     }
 }
 
@@ -331,8 +354,10 @@ struct ItemCell: View {
     @Environment(AppState.self) private var state
     let item: GridItem
     let iconSize: CGFloat
-    let index: Int
-    let page: Int
+    let selected: Bool
+    let focused: Bool
+    let mergeTarget: Bool
+    let editing: Bool
     /// Set while a long press that entered edit mode is held: its release is not a tap.
     @State private var swallowTap = false
 
@@ -340,10 +365,10 @@ struct ItemCell: View {
         ItemView(
             item: item,
             iconSize: iconSize,
-            selected: state.selection.contains(item.id),
-            focused: page == state.currentPage && state.focusIndex == index && state.openFolder == nil,
-            mergeTarget: state.drag.mergeTarget == item.id,
-            editing: state.editing,
+            selected: selected,
+            focused: focused,
+            mergeTarget: mergeTarget,
+            editing: editing,
             onDelete: { state.remove([item.id]) }
         )
         .onTapGesture { tapped() }
@@ -622,6 +647,7 @@ struct PageDots: View {
 
 struct SearchResultsView: View {
     @Environment(AppState.self) private var state
+    @AccessibilityFocusState private var voiceOverFocus: UUID?
 
     var body: some View {
         GeometryReader { geo in
@@ -639,10 +665,14 @@ struct SearchResultsView: View {
                     ItemView(item: .app(app), iconSize: icon, focused: state.focusIndex == i)
                         .onTapGesture { state.launch(app) }
                         .accessibilityAction { state.launch(app) }
+                        .accessibilityFocused($voiceOverFocus, equals: app.id)
                         .contextMenu { ItemMenu(item: .app(app)) }
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(i))
                 }
+            }
+            .onChange(of: state.focusIndex) { _, i in
+                if let i, results.indices.contains(i) { voiceOverFocus = results[i].id }
             }
         }
     }
@@ -652,6 +682,7 @@ struct SearchResultsView: View {
 
 struct FolderPanel: View {
     @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
     let folder: Folder
 
     var body: some View {
@@ -686,7 +717,7 @@ struct FolderPanel: View {
                         ForEach(0..<pages, id: \.self) { p in
                             // Hit target as large as the page dots'.
                             Circle()
-                                .fill(.white.opacity(p == state.folderPage ? 0.95 : 0.35))
+                                .fill(.white.opacity(p == state.folderPage ? 0.95 : contrast == .increased ? 0.6 : 0.35))
                                 .frame(width: 7, height: 7)
                                 .padding(4)
                                 .contentShape(Circle().inset(by: -4))
@@ -713,6 +744,7 @@ struct FolderPanel: View {
 
 struct FolderPageContent: View {
     @Environment(AppState.self) private var state
+    @AccessibilityFocusState private var voiceOverFocus: UUID?
     let folder: Folder
     let size: CGSize
 
@@ -728,16 +760,24 @@ struct FolderPageContent: View {
         }
         let start = state.folderPage * perPage
         let visible = Array(entries.enumerated()).filter { $0.offset >= start && $0.offset < start + perPage }
+        let focus = state.focusIndex
+        let selection = state.selection
+        let editing = state.editing
         return ZStack(alignment: .topLeading) {
             ForEach(visible, id: \.element.id) { offset, entry in
                 if let app = entry.app {
-                    FolderItemCell(app: app, iconSize: icon, focused: state.focusIndex == offset)
+                    FolderItemCell(app: app, iconSize: icon, selected: selection.contains(app.id), focused: focus == offset, editing: editing)
+                        .accessibilityFocused($voiceOverFocus, equals: app.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(offset - start))
                 }
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        // VoiceOver follows the keyboard focus.
+        .onChange(of: focus) { _, i in
+            if let i, entries.indices.contains(i), let app = entries[i].app { voiceOverFocus = app.id }
+        }
     }
 }
 
@@ -745,13 +785,15 @@ struct FolderItemCell: View {
     @Environment(AppState.self) private var state
     let app: AppRef
     let iconSize: CGFloat
+    let selected: Bool
     let focused: Bool
+    let editing: Bool
     /// Set while a long press that entered edit mode is held: its release is not a tap.
     @State private var swallowTap = false
 
     var body: some View {
-        ItemView(item: .app(app), iconSize: iconSize, selected: state.selection.contains(app.id), focused: focused,
-                 editing: state.editing, onDelete: { state.remove([app.id]) })
+        ItemView(item: .app(app), iconSize: iconSize, selected: selected, focused: focused,
+                 editing: editing, onDelete: { state.remove([app.id]) })
             .onTapGesture {
                 if swallowTap { swallowTap = false; return }
                 let mods = NSEvent.modifierFlags
@@ -898,8 +940,12 @@ struct MenuEntry: Identifiable {
         if multi {
             entries.append(.button(String(localized: "Group \(targets.count) Items")) { state.groupSelection(anchor: item.id) })
         }
-        let selected = state.selection.contains(item.id)
-        entries.append(.button(selected ? String(localized: "Deselect") : String(localized: "Select")) { state.toggleSelection(item.id) })
+        // Not from search results: the selection would stay behind, out of sight, once the
+        // search is cleared (as ⌘A leaves search results alone).
+        if state.query.isEmpty {
+            let selected = state.selection.contains(item.id)
+            entries.append(.button(selected ? String(localized: "Deselect") : String(localized: "Select")) { state.toggleSelection(item.id) })
+        }
         entries.append(.divider)
         entries.append(.button(multi ? String(localized: "Remove \(targets.count) Items") : String(localized: "Remove from Grid"),
                                destructive: true) { state.remove(targets) })
@@ -947,6 +993,12 @@ struct MenuEntry: Identifiable {
             case .action(let action):
                 let item = ActionMenuItem(title: entry.title, action: action)
                 item.isEnabled = entry.enabled
+                if entry.destructive {
+                    // In red, as the right-click menu shows a destructive button.
+                    item.attributedTitle = NSAttributedString(string: entry.title, attributes: [
+                        .font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.systemRed,
+                    ])
+                }
                 menu.addItem(item)
             }
         }

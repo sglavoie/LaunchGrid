@@ -28,7 +28,9 @@ struct LibraryActions: @unchecked Sendable {
     var saveFile: () -> Void
     var addMissing: () -> Void
     var chooseApps: () -> Void
-    var hotkeyChanged: () -> Void
+    /// Applies the shortcut in the preferences. A recorded one that macOS refuses is replaced
+    /// by `fallback`, the shortcut from before recording, so a working one is what gets saved.
+    var hotkeyChanged: (_ fallback: (keyCode: UInt32, modifiers: UInt32)?) -> Void
     var dockChanged: () -> Void
     var menuBarChanged: () -> Void
     var windowModeChanged: () -> Void
@@ -48,7 +50,7 @@ struct GeneralSettings: View {
             Section("Shortcut") {
                 HotkeyRecorder()
                 Toggle("Enable global shortcut", isOn: $prefs.hotkeyEnabled)
-                    .onChange(of: prefs.hotkeyEnabled) { actions?.hotkeyChanged() }
+                    .onChange(of: prefs.hotkeyEnabled) { actions?.hotkeyChanged(nil) }
             }
             Section("Startup & Visibility") {
                 // The toggle shows what the system reports, so a failed change springs back.
@@ -101,6 +103,8 @@ struct HotkeyRecorder: View {
     /// The window recording started in; recording stops when it loses key status.
     @State private var window: NSWindow?
     @State private var timeout: Task<Void, Never>?
+    /// The shortcut from before recording, to go back to if macOS refuses the new one.
+    @State private var previous: (keyCode: UInt32, modifiers: UInt32)?
 
     var body: some View {
         let prefs = state.prefs
@@ -135,7 +139,8 @@ struct HotkeyRecorder: View {
 
     private func start() {
         recording = true
-        hint = "Include ⌘, ⌥ or ⌃ (⇧ can be added), or use a function key. Esc cancels."
+        previous = (state.prefs.hotkeyKeyCode, state.prefs.hotkeyModifiers)
+        hint = String(localized: "Include ⌘, ⌥ or ⌃ (⇧ can be added), or use a function key. Esc cancels.")
         HotkeyService.shared.unregister()
         window = NSApp.keyWindow
         timeout = Task {
@@ -167,7 +172,8 @@ struct HotkeyRecorder: View {
         window = nil
         timeout?.cancel()
         timeout = nil
-        actions?.hotkeyChanged()
+        actions?.hotkeyChanged(previous)
+        previous = nil
     }
 }
 
@@ -202,11 +208,16 @@ struct AppearanceSettings: View {
                         get: { Color(nsColor: prefs.solidColor) },
                         set: { prefs.solidColor = NSColor($0) }
                     ), supportsOpacity: false)
+                    // Under 3:1 contrast with white, the grid's text colour.
+                    if prefs.solidColor.luminance > 0.3 {
+                        Text("App names and the search field are white, so they're hard to read on a light colour.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if prefs.background == .image {
                     LabeledContent("Image") {
                         HStack {
-                            Text(prefs.customImagePath.map { ($0 as NSString).lastPathComponent } ?? "None")
+                            Text(prefs.customImagePath.map { ($0 as NSString).lastPathComponent } ?? String(localized: "None"))
                                 .foregroundStyle(.secondary)
                             Button("Choose…") { chooseImage() }
                         }
@@ -255,7 +266,10 @@ struct LayoutSettings: View {
                 Stepper("Rows: \(rows)", value: $rows, in: 2...12)
                 Stepper("Columns: \(columns)", value: $columns, in: 3...16)
                 if rows != grid.rows || columns != grid.columns {
-                    Text("Items re-flow to fill each page in order\(after != grid.pages.count ? ": \(grid.pages.count) → \(after) pages" : "").")
+                    Group {
+                        if after != grid.pages.count { Text("Items re-flow to fill each page in order: \(grid.pages.count) → \(after) pages.") }
+                        else { Text("Items re-flow to fill each page in order.") }
+                    }
                         .font(.caption).foregroundStyle(after != grid.pages.count ? .orange : .secondary)
                     HStack {
                         Spacer()
@@ -308,21 +322,21 @@ struct LibrarySettings: View {
         @Bindable var prefs = state.prefs
         Form {
             Section("Apps") {
-                LabeledContent("On the grid", value: "\(state.grid.allApps.count) apps, \(state.grid.pages.count) pages")
-                LabeledContent("Installed", value: "\(state.installed.count) apps found")
-                LabeledContent("Excluded", value: "\(state.grid.removedBundleIDs.count) apps")
+                LabeledContent("On the grid") { Text("\(state.grid.allApps.count) apps, \(state.grid.pages.count) pages") }
+                LabeledContent("Installed") { Text("\(state.installed.count) apps found") }
+                LabeledContent("Excluded") { Text("\(state.grid.removedBundleIDs.count) apps") }
                 HStack {
                     Button("Choose Apps…") { actions.chooseApps() }
                     Button("Add Missing Apps…") { actions.addMissing() }
                 }
                 HStack {
                     Button("Rescan Now") {
-                        libraryStatus = "Rescanning…"
-                        state.rescan { libraryStatus = "Found \(state.installed.count) apps" }
+                        libraryStatus = String(localized: "Rescanning…")
+                        state.rescan { libraryStatus = String(localized: "Found \(state.installed.count) apps") }
                     }
                     Button("Regenerate Icons") {
-                        libraryStatus = "Regenerating icons…"
-                        state.regenerateIcons { libraryStatus = "Icons regenerated" }
+                        libraryStatus = String(localized: "Regenerating icons…")
+                        state.regenerateIcons { libraryStatus = String(localized: "Icons regenerated") }
                     }
                     if let libraryStatus {
                         Text(libraryStatus).font(.caption).foregroundStyle(.secondary)
