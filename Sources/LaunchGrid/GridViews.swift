@@ -485,8 +485,12 @@ struct Jiggle: ViewModifier {
         let period = 0.15 + Double(abs(seed) % 7) * 0.008
         content
             .rotationEffect(.degrees(on ? (tilted ? 1.6 : -1.6) : 0))
-            .animation(on ? .easeInOut(duration: period).repeatForever(autoreverses: true) : .easeOut(duration: 0.1),
-                       value: tilted)
+            .animation(on ? .easeInOut(duration: period).repeatForever(autoreverses: true) : nil, value: tilted)
+            // A repeating animation outlives later changes to the angle (animations are
+            // additive), so toggling rebuilds the view to drop it rather than leave icons
+            // wobbling after edit mode ends.
+            .id(on)
+            .transition(.identity)
             .onChange(of: on, initial: true) { _, on in tilted = on }
     }
 }
