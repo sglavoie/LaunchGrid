@@ -134,7 +134,8 @@ document.querySelectorAll('a[href^="/#"], a[href^="#"]').forEach((a) => a.addEve
 }));
 
 // The video below the hero loops, with a button (or a click on the video) to pause it; with
-// reduced motion, it waits for that button instead. Without this script it keeps native controls.
+// reduced motion, it waits for that button instead. Without this script it keeps native controls
+// and its poster, and plays only when asked.
 const video = document.getElementById("demo-video");
 const toggle = document.getElementById("demo-video-toggle");
 if (video && toggle) {
@@ -143,10 +144,6 @@ if (video && toggle) {
         toggle.setAttribute("aria-label", video.paused ? "Play the video" : "Pause the video");
     };
     const flip = () => (video.paused ? video.play().catch(() => {}) : video.pause());
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        video.removeAttribute("autoplay");
-        video.pause();
-    }
     video.controls = false;
     toggle.hidden = false;
     toggle.addEventListener("click", flip);
@@ -154,6 +151,8 @@ if (video && toggle) {
     video.addEventListener("play", sync);
     video.addEventListener("pause", sync);
     sync();
+    // A blocked play() rejects and leaves the play button showing.
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) video.play().catch(() => {});
 }
 
 // Settings screenshots: one panel at a time behind a tab list, arrow keys moving between tabs.

@@ -1,9 +1,20 @@
 name: CI
 
+# Changes only to the website or the documentation skip it (website.yml checks the website).
 on:
   push:
     branches: [main]
+    paths-ignore: ["website/**", "docs/**", "**.md"]
   pull_request:
+    paths-ignore: ["website/**", "docs/**", "**.md"]
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels its run still in progress; runs on main all finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -31,7 +42,8 @@ jobs:
         # Its own build folder (inside the cache), so the flag doesn't rebuild everything twice.
         run: swift test --scratch-path .build/app-store -Xswiftc -DAPP_STORE
       - name: Bundle
-        run: scripts/bundle.sh release
+        # Universal, as the downloadable release is.
+        run: UNIVERSAL=1 scripts/bundle.sh release
 
   shellcheck:
     runs-on: ubuntu-latest

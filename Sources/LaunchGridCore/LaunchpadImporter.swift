@@ -62,11 +62,16 @@ public enum LaunchpadImporter {
         var customPath: String?
     }
 
-    /// - Parameter resolve: maps a bundle ID to an installed path (normally via NSWorkspace).
+    /// - Parameters:
+    ///   - resolve: maps a bundle ID to an installed path (normally via NSWorkspace).
+    ///   - installed: paths of the installed apps as the scan spells them. An imported app
+    ///     found at another spelling of one (Launch Services gives Safari's cryptex path, the
+    ///     scan its `/Applications` symlink) takes the scan's, so it matches its installed app.
     public static func importDatabase(
         at url: URL,
         rows: Int,
         columns: Int,
+        installed: [String] = [],
         resolve: (String) -> String?
     ) throws -> Result {
         // Copy first so a live database is never touched. Its write-ahead log comes along:
@@ -108,17 +113,20 @@ public enum LaunchpadImporter {
             }
         }
 
-        return build(items: items, apps: apps, groupTitles: groupTitles, rows: rows, columns: columns, resolve: resolve)
+        return build(items: items, apps: apps, groupTitles: groupTitles, rows: rows, columns: columns,
+                     installed: installed, resolve: resolve)
     }
 
     static func build(
         items: [Row], apps: [Int: AppRow], groupTitles: [Int: String],
-        rows: Int, columns: Int, resolve: (String) -> String?
+        rows: Int, columns: Int, installed: [String] = [], resolve: (String) -> String?
     ) -> Result {
         let children = Dictionary(grouping: items, by: \.parent).mapValues { $0.sorted { $0.ordering < $1.ordering } }
         var skipped: [String] = [], duplicates: [String] = []
         var imported = 0
         var seen = Set<String>()
+        func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
+        let spelling = Dictionary(installed.map { (real($0), $0) }, uniquingKeysWith: { a, _ in a })
 
         /// `visited` guards against parent_id cycles in a damaged database.
         func countApps(under id: Int, visited: inout Set<Int>) -> Int {
@@ -139,19 +147,21 @@ public enum LaunchpadImporter {
             let title = [row.title, row.bundleID].compactMap { $0 }.first { !$0.isEmpty } ?? "App"
             // AppGrid invents `manual_app_<hash>` IDs for apps it added by path.
             let bundleID = row.bundleID.flatMap { $0.hasPrefix("manual_app_") || $0.isEmpty ? nil : $0 }
-            var path: String?
-            if let p = row.customPath, FileManager.default.fileExists(atPath: p) { path = p }
-            if path == nil, let b = bundleID { path = resolve(b) }
-            guard let path else {
+            var candidate: String?
+            if let p = row.customPath, FileManager.default.fileExists(atPath: p) { candidate = p }
+            if candidate == nil, let b = bundleID { candidate = resolve(b) }
+            guard let found = candidate else {
                 skipped.append(title)
                 return nil
             }
+            let resolved = real(found)
+            let path = spelling[resolved] ?? found
             var ref = AppRef(bundleID: bundleID, path: path, name: title)
-            if bundleID == nil, let real = AppScanner.infoDictionary(ofBundleAt: URL(fileURLWithPath: path))?["CFBundleIdentifier"] as? String {
-                ref.bundleID = real
+            if bundleID == nil, let id = AppScanner.infoDictionary(ofBundleAt: URL(fileURLWithPath: path))?["CFBundleIdentifier"] as? String {
+                ref.bundleID = id
             }
             // By path: copies sharing a bundle ID (Xcode and Xcode-beta) are separate apps.
-            guard seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted else {
+            guard seen.insert(resolved).inserted else {
                 duplicates.append(title)
                 return nil
             }
@@ -199,7 +209,15 @@ public enum LaunchpadImporter {
         var grid = Grid(rows: rows, columns: columns, pages: [])
         if let root {
             let pageRows = (children[root.id] ?? []).filter { $0.type == ItemType.page.rawValue }
-            grid.pages = pageRows.map { Page(title: groupTitles[$0.id], items: pageItems($0.id)) }.filter { !$0.items.isEmpty }
+            // A page fuller than this grid holds splits into several, so its overflow doesn't
+            // spill onto the next imported page and shift every page after it.
+            let capacity = grid.capacity
+            grid.pages = pageRows.flatMap { row in
+                let items = pageItems(row.id)
+                return stride(from: 0, to: items.count, by: capacity).map {
+                    Page(title: groupTitles[row.id], items: Array(items[$0..<min($0 + capacity, items.count)]))
+                }
+            }
         }
         grid.normalize()
         return Result(grid: grid, imported: imported, skipped: skipped, duplicates: duplicates)
@@ -218,7 +236,11 @@ public enum LaunchpadImporter {
             for path in [tmp.path, tmpWAL] { try? fm.removeItem(atPath: path) }
             let before = walHeader(wal)
             try fm.copyItem(at: url, to: tmp)
-            if fm.fileExists(atPath: wal) { try fm.copyItem(atPath: wal, toPath: tmpWAL) }
+            if fm.fileExists(atPath: wal) {
+                do { try fm.copyItem(atPath: wal, toPath: tmpWAL) }
+                // Checkpointed away since: the header check below sees that and tries again.
+                catch where !fm.fileExists(atPath: wal) {}
+            }
             if walHeader(tmpWAL) == before, walHeader(wal) == before { return }
         }
         throw ImportError.readFailed("the database kept changing while it was being copied")

@@ -570,11 +570,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func importDatabase(_ url: URL, from source: String) {
         let rows = state.grid.rows, columns = state.grid.columns
+        let installed = state.installed.map(\.path)
         Task {
             // Reading the database and asking Launch Services about every app can take a while.
             let outcome = await Task.detached(priority: .userInitiated) {
                 Result {
-                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns) { id in
+                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed) { id in
                         NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
                     }
                 }

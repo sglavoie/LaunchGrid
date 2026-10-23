@@ -126,10 +126,11 @@ extension Grid {
         spill(from: place(items, page: page, at: index))
     }
 
-    /// Inserts items on a page without spilling; returns the page.
+    /// Inserts items on a page without spilling; returns the page. A page past the end
+    /// becomes one new page after the last, not a run of empty ones.
     private mutating func place(_ items: [GridItem], page: Int, at index: Int) -> Int {
-        let page = max(0, page)
-        while page >= pages.count { pages.append(Page()) }
+        let page = min(max(0, page), pages.count)
+        if page == pages.count { pages.append(Page()) }
         let i = min(max(0, index), pages[page].items.count)
         pages[page].items.insert(contentsOf: items, at: i)
         return page

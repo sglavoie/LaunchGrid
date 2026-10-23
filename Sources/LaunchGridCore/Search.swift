@@ -4,7 +4,9 @@ public enum Search {
     /// Match score for `name` against `query`: prefix > word start > initials > substring >
     /// subsequence, whatever the name's length. Tiers don't overlap; length ranks within one.
     /// A query of several words also counts as a word start when each of its words starts
-    /// a word of the name, in any order ("word micro" finds "Microsoft Word").
+    /// a different word of the name, in any order ("word micro" finds "Microsoft Word").
+    /// Separators don't count towards a prefix, so "wifi" finds "Wi-Fi Explorer" and
+    /// "visual-" finds "Visual Studio Code" as if typed without them.
     /// Returns nil when there is no match.
     public static func score(_ name: String, query: String) -> Int? {
         let q = normalize(query)
@@ -14,11 +16,10 @@ public enum Search {
         if n.hasPrefix(q) { return 900 - min(n.count, 99) }
         let isSeparator: (Character) -> Bool = { !$0.isLetter && !$0.isNumber }
         let words = n.split(whereSeparator: isSeparator).map(String.init)
-        if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
         let queryWords = q.split(whereSeparator: isSeparator)
-        if queryWords.count > 1, queryWords.allSatisfy({ qw in words.contains { $0.hasPrefix(qw) } }) {
-            return 700 - min(n.count, 99)
-        }
+        if !queryWords.isEmpty, words.joined().hasPrefix(queryWords.joined()) { return 900 - min(n.count, 99) }
+        if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
+        if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
         if acronym(of: name).hasPrefix(q) { return 600 }
         if n.contains(q) { return 500 - min(n.count, 99) }
         if q.count >= 3, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
@@ -56,6 +57,22 @@ public enum Search {
             if wordStart || hump { out.append(ch) }
         }
         return normalize(out)
+    }
+
+    /// Whether each query word starts a different word of the name, so "word word" doesn't
+    /// find "Microsoft Word" through its one "Word".
+    static func startsDistinctWords(_ queryWords: [Substring], of words: [String]) -> Bool {
+        var used = Array(repeating: false, count: words.count)
+        func assign(_ i: Int) -> Bool {
+            guard i < queryWords.count else { return true }
+            for (k, word) in words.enumerated() where !used[k] && word.hasPrefix(queryWords[i]) {
+                used[k] = true
+                if assign(i + 1) { return true }
+                used[k] = false
+            }
+            return false
+        }
+        return assign(0)
     }
 
     static func isSubsequence(_ q: String, of s: String) -> Bool {

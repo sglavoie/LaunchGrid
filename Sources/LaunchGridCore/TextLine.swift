@@ -16,7 +16,12 @@ public struct TextLine: Equatable, Sendable {
         // Counted after joining: a combining accent or the second half of a flag merges with
         // the character before it.
         let head = String(beforeCaret) + s
-        text = head + afterCaret
+        let joined = head + afterCaret
+        // Typing never changes the characters after the caret: an insertion that would fuse
+        // with them (a lone regional indicator before a flag, which would pair it off with
+        // the flag's first half and break every flag after it) is dropped.
+        guard joined.suffix(afterCaret.count).elementsEqual(afterCaret) else { return }
+        text = joined
         caret = min(head.count, text.count)
     }
 

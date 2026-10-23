@@ -78,6 +78,23 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.map(\.name) == ["C"], "scans keep excluded apps out")
     }
 
+    @Test func excludingAnAppAlsoTakesItsTileLeftAtAStalePath() {
+        let old = AppRef(bundleID: "com.x", path: "/Volumes/Gone/Old/X.app", name: "X")
+        let x = installed("X", id: "com.x")
+        let start = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(old), .app(x.makeRef()), .app(app("C"))])])
+        var g = start
+        Reconciler.choose(include: [], exclude: [x], in: &g, installed: [x, InstalledApp(old)],
+                          isStale: { $0 == old.path })
+        #expect(g.allApps.map(\.name) == ["C"], "the stale tile isn't another copy")
+        #expect(g.removedBundleIDs == ["com.x"])
+
+        // On an unmounted volume it may well be a second copy: it stays, and only this one is excluded.
+        g = start
+        Reconciler.choose(include: [], exclude: [x], in: &g, installed: [x, InstalledApp(old)])
+        #expect(g.allApps.map(\.path) == [old.path, "/Applications/C.app"])
+        #expect(g.removedBundleIDs == [x.path])
+    }
+
     @Test func dropsDuplicatesAndRefreshesNames() {
         var a2 = app("A")
         a2.name = "Old"
@@ -531,6 +548,45 @@ func tempDir(_ prefix: String) -> URL {
         #expect(titles(r.grid.pages[0]) == ["Outer"])
         #expect(r.grid.pages[0].items[0].folder?.apps.map(\.name) == ["Notes", "com.apple.Maps"], "an empty title isn't a name")
         #expect(r.imported == 2)
+    }
+
+    @Test func aPageFullerThanTheGridSplitsInsteadOfShiftingTheNext() {
+        typealias Row = LaunchpadImporter.Row
+        // Two pages of three apps each, imported into a grid of two.
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0),
+                     Row(id: 10, type: 3, parent: 1, ordering: 0), Row(id: 20, type: 3, parent: 1, ordering: 1)]
+            + (0..<3).map { Row(id: 100 + $0, type: 4, parent: 10, ordering: $0) }
+            + (0..<3).map { Row(id: 200 + $0, type: 4, parent: 20, ordering: $0) }
+        var apps: [Int: LaunchpadImporter.AppRow] = [:]
+        for i in 0..<3 {
+            apps[100 + i] = LaunchpadImporter.AppRow(title: "W\(i)", bundleID: "com.w\(i)")
+            apps[200 + i] = LaunchpadImporter.AppRow(title: "G\(i)", bundleID: "com.g\(i)")
+        }
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [10: "Work", 20: "Games"],
+                                        rows: 1, columns: 2) { "/Applications/\($0).app" }
+        #expect(r.grid.pages.map(titles) == [["W0", "W1"], ["W2"], ["G0", "G1"], ["G2"]])
+        #expect(r.grid.pages.map(\.title) == ["Work", "Work", "Games", "Games"])
+    }
+
+    @Test func importedAppsTakeTheScansSpellingOfTheirPath() throws {
+        // Launch Services gives Safari's cryptex path; the scan finds it through the
+        // /Applications symlink. The grid must use the scan's, or the app shows up twice.
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let real = dir.appendingPathComponent("Cryptex/Safari.app")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        let link = dir.appendingPathComponent("Safari.app")
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "Safari", bundleID: "com.apple.Safari")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                        installed: [link.path]) { _ in real.path }
+        #expect(r.grid.allApps.map(\.path) == [link.path])
+        let unknown = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7) { _ in real.path }
+        #expect(unknown.grid.allApps.map(\.path) == [real.path], "an app the scan didn't find keeps its own path")
     }
 
     @Test func readsChangesStillInTheWriteAheadLog() throws {

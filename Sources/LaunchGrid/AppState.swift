@@ -385,8 +385,7 @@ final class AppState {
         }
     }
 
-    /// "Regenerate Icons": renders every icon again.
-    /// Re-renders every icon; `completion` runs once they are all back in the cache.
+    /// "Regenerate Icons": re-renders every icon; `completion` runs once they are all back in the cache.
     func regenerateIcons(completion: (@MainActor () -> Void)? = nil) {
         IconProvider.shared.clear()
         iconGeneration += 1
@@ -507,7 +506,12 @@ final class AppState {
             grid = g
             return
         }
-        apply { Reconciler.choose(include: include, exclude: exclude, in: &$0, installed: among) }
+        // A tile whose app is gone from a reachable place is the old place of an installed copy.
+        let scanned = installedByPath, unreachable = unreachableFolders
+        let isStale: (String) -> Bool = {
+            scanned[$0] == nil && Self.isReachable($0, unreachableFolders: unreachable) && !FileManager.default.fileExists(atPath: $0)
+        }
+        apply { Reconciler.choose(include: include, exclude: exclude, in: &$0, installed: among, isStale: isStale) }
         IconProvider.shared.prewarm(include.map(\.path))
         let toast = switch (include.isEmpty, exclude.isEmpty) {
         case (false, true): String(localized: "\(include.count) included — ⌘Z to undo")

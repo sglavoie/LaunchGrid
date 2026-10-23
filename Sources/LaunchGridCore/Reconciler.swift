@@ -201,15 +201,21 @@ public enum Reconciler {
 
     /// Applies a choice of which apps belong on the grid. Excluded apps leave it (folders and
     /// pages they empty go too) and are remembered as removed; included ones are added back.
+    /// - Parameter isStale: whether a path holds an app no longer there (gone from a reachable
+    ///   place, not merely on an unmounted volume). A tile left at such a path is the excluded
+    ///   app's old place, not another copy of it, so it leaves with it.
     public static func choose(include: [InstalledApp], exclude: [InstalledApp], in grid: inout Grid,
-                              installed: [InstalledApp] = []) {
-        let among = installed + include + exclude + grid.allApps.map(InstalledApp.init)
+                              installed: [InstalledApp] = [], isStale: (String) -> Bool = { _ in false }) {
+        let among = installed.filter { !isStale($0.path) } + include + exclude
+            + grid.allApps.filter { !isStale($0.path) }.map(InstalledApp.init)
         let copies = CopyIndex(among)
         let paths = Set(exclude.map(\.path))
         // Match by key too (a ref whose path is stale), unless other copies share that key.
         let keys = Set(exclude.filter { !copies.hasCopies($0) }.map(\.key))
         let ids = grid.allApps.filter { paths.contains($0.path) || keys.contains($0.key) }.map(\.id)
-        grid.removingEmptiedPages { $0.remove(ids, installed: among) }
+        // Only taken off: the exclusions recorded below cover every tile matched, and `remove`
+        // would count a stale tile as another copy again.
+        grid.removingEmptiedPages { $0.detach(ids); $0.normalize() }
         for app in exclude { grid.setExcluded(app, true, copies: copies) }
         add(include, to: &grid, installed: among)
     }

@@ -350,6 +350,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
             // Pages are hidden behind search results; don't turn them unseen.
             if state.query.isEmpty { state.flipPage(mods.contains(.shift) ? -1 : 1) }
             return nil
+        case kVK_PageUp, kVK_PageDown:
+            if state.query.isEmpty { state.flipPage(code == kVK_PageUp ? -1 : 1) }
+            return nil
+        case kVK_Home, kVK_End:
+            // The first or last page (of the open folder), or in the search either end of it.
+            let home = code == kVK_Home
+            if !state.query.isEmpty {
+                editSearch { home ? $0.moveToStart() : $0.moveToEnd() }
+            } else {
+                let pages = state.openFolder.map { FolderLayout.pageCount(apps: $0.apps.count, grid: state.grid) }
+                    ?? state.grid.pages.count
+                state.flipPage(home ? -pages : pages)
+            }
+            return nil
         default:
             break
         }

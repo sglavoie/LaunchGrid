@@ -19,6 +19,14 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
+# Building and notarising takes minutes, and publish.sh would then refuse a version that is
+# already released. Skipped without gh, which publish.sh needs anyway.
+VERSION="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' scripts/bundle.sh)"
+if command -v gh >/dev/null 2>&1 && gh release view "v$VERSION" >/dev/null 2>&1; then
+    echo "Release v$VERSION already exists; bump VERSION in scripts/bundle.sh and commit first." >&2
+    exit 1
+fi
+
 if [ -z "${SIGN_IDENTITY:-}" ]; then
     IDS="$(security find-identity -v -p codesigning | sed -n 's/.*) \([0-9A-F]\{40\}\) "Developer ID Application: .*/\1/p')"
     if [ "$(echo "$IDS" | grep -c .)" != 1 ]; then

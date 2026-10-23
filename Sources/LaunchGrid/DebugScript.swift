@@ -131,6 +131,10 @@ enum DebugScript {
                 case "menusave":
                     // The menu bar's Save Grid File…, async so the script goes on while the panel is up.
                     DispatchQueue.main.async { delegate.saveGridFileFromMenu() }
+                case "results":
+                    // The search's matches, best first, and where each app lives.
+                    print("results: \(state.allSearchResults.map { "\($0.title) \($0.path)" })")
+                    fflush(stdout)
                 case "toast":
                     print("toast: \(state.toast ?? "-")")
                     fflush(stdout)

@@ -39,6 +39,17 @@ import Testing
         #expect(flag.text.isEmpty)
     }
 
+    @Test func insertingNeverChangesTheCharactersAfterTheCaret() {
+        let fr = "\u{1F1EB}\u{1F1F7}", de = "\u{1F1E9}\u{1F1EA}", us = "\u{1F1FA}\u{1F1F8}"
+        var l = line("|" + fr + de)
+        l.insert("\u{1F1FA}")
+        #expect(l.text == fr + de, "a lone half would re-pair both flags")
+        #expect(l.caret == 0)
+        l.insert(us)
+        #expect(marked(l) == us + "|" + fr + de, "a whole flag goes in")
+        #expect(after("|" + fr) { $0.insert("a") } == "a|" + fr)
+    }
+
     @Test func movesByCharacterAndToEitherEnd() {
         #expect(after("ab|c") { $0.moveLeft() } == "a|bc")
         #expect(after("|abc") { $0.moveLeft() } == "|abc")

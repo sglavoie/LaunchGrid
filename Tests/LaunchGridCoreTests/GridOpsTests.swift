@@ -121,6 +121,15 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(titles(g.pages[0]) == ["F", "C"])
     }
 
+    @Test func insertPastTheLastPageAddsOnlyOnePage() {
+        var g = grid([["A"]])
+        g.insert([.app(app("X"))], page: 3, at: 0)
+        #expect(g.pages.map(titles) == [["A"], ["X"]])
+        let b = g.pages[0].items[0].id
+        g.move([b], toPage: 5, at: 0)
+        #expect(g.pages.map(titles) == [[], ["X"], ["A"]])
+    }
+
     @Test func insertOnANegativePageUsesTheFirst() {
         var g = grid([["A"]])
         g.insert([.app(app("X"))], page: -1, at: 0)
@@ -296,6 +305,22 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.rows == 1 && g.columns == 1)
     }
 
+    @Test func saveKeepsThePreviousSaveAsABackup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let first = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A"))])])
+        var second = first
+        second.pages[0].items.append(.app(app("B")))
+        try store.save(first)
+        #expect(throws: (any Error).self) { try store.loadBackup() }
+        try store.save(second)
+        #expect(try store.load() == second)
+        #expect(try store.loadBackup() == first)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".tmp") }
+        #expect(leftovers.isEmpty, "the temporary file is renamed into place")
+    }
+
     @Test func saveKeepsASymlinkedFileASymlink() throws {
         let fm = FileManager.default
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("store-\(UUID().uuidString)")
@@ -387,6 +412,19 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
             #expect(Search.score("Photo Raw Organizer", query: "pro")! > Search.score("x" + name + "pro", query: "pro")!)
             #expect(Search.score("x" + name + "pro", query: "pro")! > Search.score("p" + name + "ro", query: "pro")!)
         }
+    }
+
+    @Test func separatorsDontCountTowardsAPrefix() {
+        let apps = ["WiFiman", "Kiwifier", "Wi-Fi Explorer", "Visual Studio Code"].map { app($0) }
+        #expect(Search.results(in: apps, query: "wifi").map(\.name) == ["WiFiman", "Wi-Fi Explorer", "Kiwifier"])
+        #expect(Search.results(in: apps, query: "visual-").map(\.name) == ["Visual Studio Code"])
+        #expect(Search.results(in: apps, query: "code.").map(\.name) == ["Visual Studio Code"])
+    }
+
+    @Test func eachQueryWordStartsADifferentWord() {
+        let apps = ["Microsoft Word", "Word Counter"].map { app($0) }
+        #expect(Search.results(in: apps, query: "word word").isEmpty)
+        #expect(Search.results(in: apps, query: "word co").map(\.name) == ["Word Counter"])
     }
 
     @Test func queryWordsMatchInAnyOrder() {

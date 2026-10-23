@@ -125,9 +125,11 @@ struct HotkeyRecorder: View {
             if recording, note.object as? NSWindow === window { stop() }
         }
         if let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
-            Label(KeyCombo.conflictIsSystemSetting(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+            let system = KeyCombo.conflictIsSystemSetting(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+            Label(!system ? "Also used for \(conflict). Pick another shortcut to keep it working."
+                  : KeyCombo.readsSystemShortcuts
                   ? "Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another."
-                  : "Also used for \(conflict). Pick another shortcut to keep it working.",
+                  : "macOS uses this for \(conflict) unless that shortcut is off in System Settings › Keyboard › Keyboard Shortcuts. If it's on, turn it off or pick another.",
                   systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
         }

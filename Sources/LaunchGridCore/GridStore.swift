@@ -50,7 +50,50 @@ public struct GridStore: Sendable {
             try? fm.removeItem(at: backup)
             try? fm.copyItem(at: target, to: backup)
         }
-        try GridStore.encode(grid).write(to: target, options: .atomic)
+        try GridStore.writeDurably(GridStore.encode(grid), to: target)
+    }
+
+    /// Writes `data` to a temporary file beside `url`, flushes it to the disk itself, then
+    /// renames it over `url` and flushes the folder. A power cut leaves the old file or the
+    /// new one, whole: `Data.write(options: .atomic)` renames without flushing, so both the
+    /// file and the backup cloned from it could come back empty.
+    static func writeDurably(_ data: Data, to url: URL) throws {
+        let folder = url.deletingLastPathComponent().path
+        let tmp = folder + "/.\(url.lastPathComponent).\(UUID().uuidString).tmp"
+        let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        guard fd >= 0 else { throw posixError() }
+        var renamed = false
+        defer { if !renamed { unlink(tmp) } }
+        do {
+            defer { close(fd) }
+            try data.withUnsafeBytes { buffer in
+                guard let base = buffer.baseAddress else { return }
+                var written = 0
+                while written < buffer.count {
+                    let n = write(fd, base + written, buffer.count - written)
+                    if n < 0 {
+                        if errno == EINTR { continue }
+                        throw posixError()
+                    }
+                    written += n
+                }
+            }
+            // F_FULLFSYNC also empties the drive's own cache, which fsync leaves to the drive.
+            // Some file systems don't support it; fsync is the most they offer.
+            guard fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0 else { throw posixError() }
+        }
+        guard rename(tmp, url.path) == 0 else { throw posixError() }
+        renamed = true
+        // The rename itself lives in the folder.
+        let dir = open(folder, O_RDONLY)
+        if dir >= 0 {
+            _ = fcntl(dir, F_FULLFSYNC) == 0 || fsync(dir) == 0
+            close(dir)
+        }
+    }
+
+    private static func posixError() -> Error {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     /// `url` with symlinks followed, including a last one whose target doesn't exist yet

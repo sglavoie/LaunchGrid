@@ -19,7 +19,12 @@ OUT_DIR=build/app-store
 PROFILE="${PROVISIONING_PROFILE:-private/LaunchGrid.provisionprofile}"
 PB=/usr/libexec/PlistBuddy
 UPLOAD=0
-[ "${1:-}" = --upload ] && UPLOAD=1
+for arg in "$@"; do
+    case "$arg" in
+        --upload) UPLOAD=1 ;;
+        *) echo "Unknown argument: $arg" >&2; echo "Usage: scripts/app-store.sh [--upload]" >&2; exit 2 ;;
+    esac
+done
 if [ "$UPLOAD" = 1 ]; then
     # shellcheck source=/dev/null
     [ -f private/app-store-connect.env ] && . private/app-store-connect.env

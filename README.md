@@ -44,7 +44,7 @@ On first launch, a welcome window lets you choose which installed apps to includ
 | Show / hide | **⌥Space** (change in Settings), the menu-bar icon, or the Dock icon |
 | Launch | Click, or arrow keys + Return |
 | Search | Just type. Results rank prefix > word start > initials ("vsc") > substring > fuzzy. Return opens the first result |
-| Pages | Swipe, scroll, ←/→, Tab, ⌘1…9, click the page dots |
+| Pages | Swipe, scroll, ←/→, Tab, Page Up/Down, Home/End (first and last page), ⌘1…9, click the page dots |
 | Esc | Clears search → closes folder (focus returns to it) → leaves edit mode → hides |
 | Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. Clicking selects instead of launching. ✕ removes an item; with the keyboard, Return renames the focused item (or the open folder), ⌫ removes it and ⌥ + arrow keys move it (with the rest of the selection) one slot, onto the next or previous page past either end |
 | Select | ⌘-click / ⇧-click, ⌘A, or Space on the focused item. Then drag them together, **Group** (⌘G), **Remove** (⌫), or Move to Page |

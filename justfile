@@ -86,12 +86,12 @@ ci: build test test-app-store (bundle "release")
 
 # Serve the website (launchgrid.sglavoie.com) locally with the Workers runtime
 website:
-    cd website && npx -y wrangler@4 dev
+    cd website && npx -y wrangler@4.149.0 dev
 
 # Publish the website to launchgrid.sglavoie.com (pushing website/ to main does this too)
 website-deploy:
     scripts/check-website.sh
-    cd website && npx -y wrangler@4 deploy
+    cd website && npx -y wrangler@4.149.0 deploy
 
 # Record the website's video and Settings screenshots (run in a terminal window with Screen Recording)
 demo-video *args:

@@ -340,14 +340,25 @@ enum KeyCombo {
         return String(utf16CodeUnits: chars, count: length).uppercased()
     }
 
-    /// Known system shortcuts. No public API lists them, so this is a static best effort.
-    /// Entries with a symbolic hotkey ID are skipped when the user has turned that shortcut off
-    /// or moved it to another key in System Settings.
     /// Whether `conflict` names a macOS shortcut that can be turned off in System Settings.
     static func conflictIsSystemSetting(keyCode: UInt32, modifiers: UInt32) -> Bool {
         knownShortcuts.contains { $0.0 == Int(keyCode) && $0.1 == modifiers && $0.3 != nil }
     }
 
+    /// Whether `conflict` can tell a system shortcut turned off in System Settings from one
+    /// still on. Not in the sandbox, where the system's shortcut settings can't be read (nor in
+    /// the Mac App Store build, which doesn't try): such a conflict may already be resolved.
+    static var readsSystemShortcuts: Bool {
+        #if APP_STORE
+        false
+        #else
+        !Sandbox.isActive
+        #endif
+    }
+
+    /// Known system shortcuts. No public API lists them, so this is a static best effort.
+    /// Entries with a symbolic hotkey ID are skipped when the user has turned that shortcut off
+    /// or moved it to another key in System Settings.
     private static var knownShortcuts: [(Int, UInt32, String, Int?)] {
         let cmd = UInt32(cmdKey), opt = UInt32(optionKey), ctrl = UInt32(controlKey), shift = UInt32(shiftKey)
         return [
@@ -411,7 +422,10 @@ enum KeyCombo {
     /// Whether macOS still binds symbolic hotkey `id` to this combo. A missing entry means the
     /// default binding, which is on.
     private static func isSystemShortcutActive(id: Int, keyCode: UInt32, modifiers: UInt32) -> Bool {
-        guard let all = UserDefaults(suiteName: "com.apple.symbolichotkeys")?
+        #if APP_STORE
+        return true
+        #else
+        guard readsSystemShortcuts, let all = UserDefaults(suiteName: "com.apple.symbolichotkeys")?
                 .dictionary(forKey: "AppleSymbolicHotKeys"),
               let entry = all[String(id)] as? [String: Any] else { return true }
         if let enabled = entry["enabled"] as? Bool, !enabled { return false }
@@ -424,6 +438,7 @@ enum KeyCombo {
         if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
         let stored = NSEvent.ModifierFlags(rawValue: UInt(params[2])).intersection([.command, .option, .control, .shift])
         return params[1] == Int(keyCode) && stored == flags
+        #endif
     }
 }
 

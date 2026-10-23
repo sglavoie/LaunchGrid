@@ -47,6 +47,12 @@ git -C "$TAP_DIR" pull -q --ff-only
 # Through a temporary file: scripts get BSD sed, whose -i takes a different argument from GNU's.
 sed -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" "$CASK" > "$CASK.tmp"
 mv "$CASK.tmp" "$CASK"
+# The substitutions match nothing if the cask's layout changes; don't push a cask that still
+# points at the previous release.
+if ! grep -q "^  version \"$VERSION\"$" "$CASK" || ! grep -q "^  sha256 \"$SHA\"$" "$CASK"; then
+    echo "$CASK lacks version \"$VERSION\" or sha256 \"$SHA\"; update it by hand." >&2
+    exit 1
+fi
 # A rerun after a failed push finds the cask already committed: push what is there.
 if ! git -C "$TAP_DIR" diff --quiet HEAD -- Casks/launchgrid.rb; then
     git -C "$TAP_DIR" commit -q -m "launchgrid $VERSION" Casks/launchgrid.rb
