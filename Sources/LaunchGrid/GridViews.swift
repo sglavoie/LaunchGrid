@@ -8,11 +8,15 @@ struct GridRootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // A folder or the rename card is modal: VoiceOver stays out of what's beneath it.
+        let folderModal = state.openFolder != nil
+        let editModal = state.textEdit != nil
         ZStack {
             BackgroundView()
                 .contentShape(Rectangle())
                 .onTapGesture { backgroundClicked() }
                 .contextMenu { BackgroundMenu() }
+                .accessibilityHidden(folderModal || editModal)
 
             VStack(spacing: 0) {
                 TopBar()
@@ -30,6 +34,7 @@ struct GridRootView: View {
                     .padding(.bottom, 18)
             }
             .padding(.horizontal, 48)
+            .accessibilityHidden(folderModal || editModal)
 
             if let folder = state.openFolder {
                 Color.black.opacity(0.35)
@@ -37,7 +42,11 @@ struct GridRootView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { state.closeFolder() }
                     .transition(.opacity)
+                    .accessibilityHidden(true)
                 FolderPanel(folder: folder)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityAddTraits(.isModal)
+                    .accessibilityHidden(editModal)
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
             }
 
@@ -45,6 +54,10 @@ struct GridRootView: View {
 
             if let edit = state.textEdit {
                 TextEditCard(request: edit)
+                    // A new request (another rename) starts over with its own text.
+                    .id(edit.id)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityAddTraits(.isModal)
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
             }
 
@@ -135,6 +148,9 @@ struct TopBar: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
+                    state.drag.menuButtonFrame = $0
+                }
             }
         }
     }
@@ -142,19 +158,24 @@ struct TopBar: View {
 
 struct SearchField: View {
     @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
+        let high = contrast == .increased
+        let marked = SearchComposition.shared.marked
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.white.opacity(0.6))
-            if state.query.isEmpty {
+                .foregroundStyle(.white.opacity(high ? 0.85 : 0.6))
+            if state.query.isEmpty && marked.isEmpty {
                 Text("Search")
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.45))
             } else {
                 let line = state.searchLine
                 // The caret floats over the join, so moving it doesn't push the text apart.
+                // What an input method is still composing sits at the caret, underlined.
                 HStack(spacing: 0) {
                     Text(line.beforeCaret)
+                    Text(marked).underline()
                         .overlay(alignment: .trailing) { Caret().offset(x: 1.5) }
                     Text(line.afterCaret)
                 }
@@ -167,7 +188,10 @@ struct SearchField: View {
         .padding(.horizontal, 10)
         .frame(width: 240, height: 28)
         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(high ? 0.5 : 0.12)))
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
+            SearchComposition.shared.fieldFrame = $0
+        }
         .accessibilityLabel("Search, type to filter apps")
         .accessibilityValue(state.query)
     }
@@ -244,6 +268,10 @@ struct Pager: View {
                         }
                     }
                     .frame(width: w, height: geo.size.height)
+                    // Neighbours peek into the side margins; only the page shown takes clicks
+                    // and VoiceOver. (Drags find their targets on the current page by arithmetic.)
+                    .allowsHitTesting(p == state.currentPage)
+                    .accessibilityHidden(p != state.currentPage)
                 }
             }
             .offset(x: -CGFloat(state.currentPage) * w + state.swipeOffset)
@@ -253,6 +281,8 @@ struct Pager: View {
             }
         }
         .clipped()
+        // Pages run left to right in every language, as the swipes and arrow keys do.
+        .environment(\.layoutDirection, .leftToRight)
         .task(id: state.currentPage) {
             if settledPage == nil { settledPage = state.currentPage; return }
             // Longer than the page spring takes to come to rest.
@@ -356,6 +386,7 @@ struct ItemCell: View {
 struct ItemView: View {
     @Environment(AppState.self) private var state
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     let item: GridItem
     let iconSize: CGFloat
     var selected = false
@@ -381,7 +412,7 @@ struct ItemView: View {
                     Button(action: onDelete) {
                         Image(systemName: "xmark")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.black.opacity(0.75))
+                            .foregroundStyle(.black.opacity(contrast == .increased ? 1 : 0.75))
                             .frame(width: 20, height: 20)
                             .background(Circle().fill(.white.opacity(0.92)))
                             .shadow(radius: 2)
@@ -397,10 +428,15 @@ struct ItemView: View {
                 Text(item.title)
                     .font(.system(size: max(11, min(13, iconSize * 0.14))))
                     .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
+                    .shadow(color: .black.opacity(contrast == .increased ? 0.9 : 0.5), radius: 2, y: 1)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: iconSize * 1.5)
+                    // Increase Contrast backs the label, so it reads over any wallpaper.
+                    .padding(.horizontal, contrast == .increased ? 4 : 0)
+                    .background {
+                        if contrast == .increased { Capsule().fill(.black.opacity(0.6)) }
+                    }
             }
         }
         .padding(6)
@@ -413,7 +449,7 @@ struct ItemView: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(item.folder != nil ? "Folder \(item.title)" : item.title)
+        .accessibilityLabel(item.folder != nil ? Text("Folder \(item.title)") : Text(verbatim: item.title))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
@@ -429,6 +465,7 @@ struct AppIcon: View {
     @Environment(AppState.self) private var state
     let path: String
     let size: CGFloat
+    /// Kept here too, so an icon the cache has since let go of stays on screen.
     @State private var loaded: NSImage?
 
     var body: some View {
@@ -441,7 +478,9 @@ struct AppIcon: View {
         }
         .frame(width: size, height: size)
         .task(id: "\(path)|\(state.iconGeneration)") {
-            if IconProvider.shared.cached(path) == nil || loaded != nil { loaded = await IconProvider.shared.icon(path) }
+            // Returns at once from the cache.
+            let image = await IconProvider.shared.icon(path)
+            if image !== loaded { loaded = image }
         }
     }
 }
@@ -542,6 +581,7 @@ struct DragGhost: View {
 
 struct PageDots: View {
     @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         let count = state.query.isEmpty ? state.grid.pages.count + (state.showsVirtualPage ? 1 : 0) : 0
@@ -550,14 +590,14 @@ struct PageDots: View {
                 ForEach(0..<count, id: \.self) { p in
                     let title = state.grid.pages.indices.contains(p) ? state.grid.pages[p].title : nil
                     Circle()
-                        .fill(.white.opacity(p == state.currentPage ? 0.95 : 0.35))
+                        .fill(.white.opacity(p == state.currentPage ? 0.95 : contrast == .increased ? 0.6 : 0.35))
                         .frame(width: 8, height: 8)
                         .padding(4)
                         .contentShape(Circle().inset(by: -4))
                         .onTapGesture { state.goToPage(p) }
-                        .help(state.grid.pages.indices.contains(p) ? title ?? "Page \(p + 1)" : "New page")
+                        .help(state.grid.pages.indices.contains(p) ? title.map { Text(verbatim: $0) } ?? Text("Page \(p + 1)") : Text("New page"))
                         .accessibilityLabel(state.grid.pages.indices.contains(p)
-                                            ? title.map { "Page \(p + 1), \($0)" } ?? "Page \(p + 1)" : "New page")
+                                            ? title.map { Text("Page \(p + 1), \($0)") } ?? Text("Page \(p + 1)") : Text("New page"))
                         .accessibilityAddTraits(p == state.currentPage ? [.isButton, .isSelected] : .isButton)
                         .accessibilityAction { state.goToPage(p) }
                 }
@@ -565,7 +605,11 @@ struct PageDots: View {
                 // Search shows one page of matches; say how many didn't fit.
                 let hidden = state.allSearchResults.count - state.searchResults.count
                 if hidden > 0 {
-                    Text("\(hidden) more \(hidden == 1 ? "match" : "matches") — keep typing to narrow the search")
+                    // Separate keys, so a translation can give the count its plural forms.
+                    Group {
+                        if hidden == 1 { Text("1 more match — keep typing to narrow the search") }
+                        else { Text("\(hidden) more matches — keep typing to narrow the search") }
+                    }
                         .font(.callout)
                         .foregroundStyle(.white.opacity(0.6))
                 }
@@ -750,7 +794,7 @@ struct ItemAccessibilityActions: ViewModifier {
             .accessibilityAction {
                 if !state.editing || (isFolder && state.selection.isEmpty) { open() } else { state.toggleSelection(id) }
             }
-            .accessibilityAction(named: state.selection.contains(id) ? "Deselect" : "Select") { state.toggleSelection(id) }
+            .accessibilityAction(named: state.selection.contains(id) ? Text("Deselect") : Text("Select")) { state.toggleSelection(id) }
             .accessibilityAction(named: "Rename") { state.beginRename(id) }
             .accessibilityAction(named: "Remove") { state.remove([id]) }
     }
@@ -796,65 +840,164 @@ struct TextEditCard: View {
 
 // MARK: - Menus
 
+/// One line of a grid menu. The menus are described once, so a right-click (SwiftUI) and
+/// ⌃Return (AppKit, which macOS 14 can't host SwiftUI menus in) show the same thing.
+struct MenuEntry: Identifiable {
+    enum Kind {
+        case action(@MainActor () -> Void)
+        case submenu([MenuEntry])
+        case divider
+    }
+
+    let id = UUID()
+    var title = ""
+    var kind: Kind
+    var enabled = true
+    var destructive = false
+
+    // Computed, so each divider gets its own ID.
+    static var divider: MenuEntry { MenuEntry(kind: .divider) }
+
+    static func button(_ title: String, enabled: Bool = true, destructive: Bool = false,
+                       _ action: @escaping @MainActor () -> Void) -> MenuEntry {
+        MenuEntry(title: title, kind: .action(action), enabled: enabled, destructive: destructive)
+    }
+
+    static func submenu(_ title: String, _ entries: [MenuEntry]) -> MenuEntry {
+        MenuEntry(title: title, kind: .submenu(entries))
+    }
+
+    /// The right-click item menu for `item`.
+    @MainActor
+    static func item(_ item: GridItem, state: AppState) -> [MenuEntry] {
+        let targets = state.targets(for: item.id)
+        let multi = targets.count > 1
+        var entries: [MenuEntry] = []
+        if case .app(let a) = item {
+            entries.append(.button(String(localized: "Open")) { state.launch(a) })
+            entries.append(.button(String(localized: "Show in Finder")) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: a.path)])
+                state.onHide()
+            })
+        } else if case .folder(let f) = item {
+            entries.append(.button(String(localized: "Open Folder")) { state.openFolder(f.id) })
+            entries.append(.button(String(localized: "Ungroup")) { state.apply { $0.ungroup(f.id) } })
+        }
+        if !multi {
+            entries.append(.button(String(localized: "Rename…")) { state.beginRename(item.id) })
+        }
+        entries.append(.divider)
+        let pages = state.grid.pages.indices.map { p in
+            MenuEntry.button(state.grid.pages[p].title.map { "\(p + 1) — \($0)" } ?? String(localized: "Page \(p + 1)")) {
+                state.moveToPage(targets, page: p)
+            }
+        }
+        let newPage = MenuEntry.button(String(localized: "New Page")) { state.moveToPage(targets, page: state.grid.pages.count) }
+        entries.append(.submenu(multi ? String(localized: "Move \(targets.count) Items to Page") : String(localized: "Move to Page"),
+                                pages + [.divider, newPage]))
+        if multi {
+            entries.append(.button(String(localized: "Group \(targets.count) Items")) { state.groupSelection(anchor: item.id) })
+        }
+        let selected = state.selection.contains(item.id)
+        entries.append(.button(selected ? String(localized: "Deselect") : String(localized: "Select")) { state.toggleSelection(item.id) })
+        entries.append(.divider)
+        entries.append(.button(multi ? String(localized: "Remove \(targets.count) Items") : String(localized: "Remove from Grid"),
+                               destructive: true) { state.remove(targets) })
+        return entries
+    }
+
+    /// The page menu: the ⋯ button's, and a right-click on the background.
+    @MainActor
+    static func page(state: AppState) -> [MenuEntry] {
+        var entries: [MenuEntry] = [
+            .button(state.editing ? String(localized: "Done Editing") : String(localized: "Edit Layout")) { state.editing.toggle() },
+            .divider,
+            .button(String(localized: "Undo"), enabled: state.canUndo) { state.undo() },
+            .button(String(localized: "Redo"), enabled: state.canRedo) { state.redo() },
+            .divider,
+            .button(String(localized: "New Page")) { state.newPage() },
+            .button(String(localized: "Edit Page Title…")) { state.beginPageTitleEdit(state.currentPage) },
+        ]
+        if state.currentItems.isEmpty && state.grid.pages.count > 1 {
+            entries.append(.button(String(localized: "Delete Empty Page")) { state.deleteCurrentPage() })
+        }
+        entries += [
+            .button(String(localized: "Sort This Page")) { state.sortCurrentPage() },
+            .button(String(localized: "Sort Everything")) { state.sortEverything() },
+            .divider,
+            .button(String(localized: "Add Missing Apps…")) { state.onAddMissing() },
+            .button(String(localized: "Settings…")) { state.onOpenSettings() },
+        ]
+        return entries
+    }
+
+    /// The same entries as an AppKit menu.
+    @MainActor
+    static func nsMenu(_ entries: [MenuEntry]) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for entry in entries {
+            switch entry.kind {
+            case .divider:
+                menu.addItem(.separator())
+            case .submenu(let sub):
+                let item = NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
+                item.submenu = nsMenu(sub)
+                menu.addItem(item)
+            case .action(let action):
+                let item = ActionMenuItem(title: entry.title, action: action)
+                item.isEnabled = entry.enabled
+                menu.addItem(item)
+            }
+        }
+        return menu
+    }
+}
+
+/// An AppKit menu item that runs a closure.
+@MainActor
+private final class ActionMenuItem: NSMenuItem {
+    private let run: @MainActor () -> Void
+
+    init(title: String, action run: @escaping @MainActor () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(runAction), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func runAction() { run() }
+}
+
+/// Menu entries as SwiftUI menu content.
+struct MenuEntries: View {
+    let entries: [MenuEntry]
+
+    var body: some View {
+        ForEach(entries) { entry in
+            switch entry.kind {
+            case .divider:
+                Divider()
+            case .submenu(let sub):
+                Menu(entry.title) { MenuEntries(entries: sub) }
+            case .action(let action):
+                Button(entry.title, role: entry.destructive ? .destructive : nil) { action() }
+                    .disabled(!entry.enabled)
+            }
+        }
+    }
+}
+
 struct ItemMenu: View {
     @Environment(AppState.self) private var state
     let item: GridItem
 
-    var body: some View {
-        let targets = state.targets(for: item.id)
-        let multi = targets.count > 1
-        if case .app(let a) = item {
-            Button("Open") { state.launch(a) }
-            Button("Show in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: a.path)])
-                state.onHide()
-            }
-        } else if case .folder(let f) = item {
-            Button("Open Folder") { state.openFolder(f.id) }
-            Button("Ungroup") { state.apply { $0.ungroup(f.id) } }
-        }
-        if !multi {
-            Button("Rename…") { state.beginRename(item.id) }
-        }
-        Divider()
-        Menu(multi ? "Move \(targets.count) Items to Page" : "Move to Page") {
-            ForEach(state.grid.pages.indices, id: \.self) { p in
-                Button(state.grid.pages[p].title.map { "\(p + 1) — \($0)" } ?? "Page \(p + 1)") {
-                    state.moveToPage(targets, page: p)
-                }
-            }
-            Divider()
-            Button("New Page") { state.moveToPage(targets, page: state.grid.pages.count) }
-        }
-        if multi {
-            Button("Group \(targets.count) Items") { state.groupSelection(anchor: item.id) }
-        }
-        Button(state.selection.contains(item.id) ? "Deselect" : "Select") { state.toggleSelection(item.id) }
-        Divider()
-        Button(multi ? "Remove \(targets.count) Items" : "Remove from Grid", role: .destructive) {
-            state.remove(targets)
-        }
-    }
+    var body: some View { MenuEntries(entries: MenuEntry.item(item, state: state)) }
 }
 
 struct BackgroundMenu: View {
     @Environment(AppState.self) private var state
 
-    var body: some View {
-        Button(state.editing ? "Done Editing" : "Edit Layout") { state.editing.toggle() }
-        Divider()
-        Button("Undo") { state.undo() }.disabled(!state.canUndo)
-        Button("Redo") { state.redo() }.disabled(!state.canRedo)
-        Divider()
-        Button("New Page") { state.newPage() }
-        Button("Edit Page Title…") { state.beginPageTitleEdit(state.currentPage) }
-        if state.currentItems.isEmpty && state.grid.pages.count > 1 {
-            Button("Delete Empty Page") { state.deleteCurrentPage() }
-        }
-        Button("Sort This Page") { state.sortCurrentPage() }
-        Button("Sort Everything") { state.sortEverything() }
-        Divider()
-        Button("Add Missing Apps…") { state.onAddMissing() }
-        Button("Settings…") { state.onOpenSettings() }
-    }
+    var body: some View { MenuEntries(entries: MenuEntry.page(state: state)) }
 }

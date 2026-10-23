@@ -7,6 +7,11 @@ import LaunchGridCore
 /// writes PNG snapshots of our windows into `LAUNCHGRID_DEBUG_DIR` (default: the temp folder).
 @MainActor
 enum DebugScript {
+    /// The menu the "menus" step closes once it has printed it, and the item it then chooses.
+    private static weak var trackedMenu: NSMenu?
+    private static var menuChoice: String?
+    private static var watchingMenus = false
+
     static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate) {
         let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let dir = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_DIR"] ?? NSTemporaryDirectory()
@@ -112,6 +117,30 @@ enum DebugScript {
                                                      charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code ?? 0)
                         if let event { NSApp.postEvent(event, atStart: false) }
                         try? await Task.sleep(for: .milliseconds(120))
+                    }
+                case "menus":
+                    // Prints each menu that opens, then closes it, so keyboard menus can be checked;
+                    // "menus:Select" also chooses the item with that title.
+                    menuChoice = arg.isEmpty ? nil : arg
+                    if watchingMenus { break }
+                    watchingMenus = true
+                    NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil) { note in
+                        // Menus post this on the main thread.
+                        nonisolated(unsafe) let menu = note.object as? NSMenu
+                        MainActor.assumeIsolated { trackedMenu = menu }
+                        // Menu tracking runs the loop in its own mode, which the common modes include.
+                        let timer = Timer(timeInterval: 0.3, repeats: false) { _ in
+                            MainActor.assumeIsolated {
+                                guard let menu = trackedMenu else { return }
+                                print("menu: \(menu.items.map { $0.isEnabled ? $0.title : "(\($0.title))" }.filter { !$0.isEmpty })")
+                                fflush(stdout)
+                                menu.cancelTracking()
+                                if let choice = menuChoice, let i = menu.items.firstIndex(where: { $0.title == choice }) {
+                                    menu.performActionForItem(at: i)
+                                }
+                            }
+                        }
+                        RunLoop.main.add(timer, forMode: .common)
                     }
                 case "state":
                     print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active)")

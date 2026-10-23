@@ -83,6 +83,7 @@ final class DragController {
     @ObservationIgnored var pagerFrame: CGRect = .zero
     @ObservationIgnored var folderPanelFrame: CGRect = .zero
     @ObservationIgnored var folderGridFrame: CGRect = .zero
+    @ObservationIgnored var menuButtonFrame: CGRect = .zero
 
     func isDragged(_ id: UUID) -> Bool { active && ids.contains(id) }
 
@@ -160,6 +161,12 @@ extension AppState {
             if abandoned == start { return }
             drag.abandonedStart = nil // A new gesture: its end event never arrived.
         }
+        if drag.decided && start != drag.gestureStart {
+            // A new gesture while the last one is still decided: its end never arrived.
+            // Drop what it left (a lifted item, a half swipe) and decide afresh.
+            drag.reset()
+            swipeOffset = 0
+        }
         if !drag.decided {
             drag.decided = true
             drag.gestureStart = start
@@ -187,8 +194,9 @@ extension AppState {
             let w = max(drag.pagerFrame.width, 1)
             let dx = location.x - start.x, flick = predicted.x - start.x
             withAnimation(Self.pageAnimation) {
-                if dx < -w * 0.18 || flick < -w * 0.5 { currentPage = min(currentPage + 1, grid.pages.count - 1) }
-                if dx > w * 0.18 || flick > w * 0.5 { currentPage = max(currentPage - 1, 0) }
+                // Through goToPage, which keeps keyboard focus on the new page.
+                if dx < -w * 0.18 || flick < -w * 0.5 { goToPage(currentPage + 1) }
+                if dx > w * 0.18 || flick > w * 0.5 { goToPage(currentPage - 1) }
                 swipeOffset = 0
             }
             return

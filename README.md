@@ -17,11 +17,11 @@ scripts/install.sh           # build, quit the installed copy, replace /Applicat
 swift test                   # core and app-state tests
 ```
 
-With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just sandbox` (the build signed with the Mac App Store sandbox, so its layout and settings live in its container; quit the installed copy first), `just test`, `just ci` and `just clean`.
+With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just sandbox` (the build signed with the Mac App Store sandbox, so its layout and settings live in its container; quit the installed copy first), `just test`, `just test-app-store`, `just ci` and `just clean`.
 
-CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26.
+CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26, runs the tests again against the Mac App Store variant (`just test-app-store`) and checks `scripts/*.sh` with shellcheck.
 
-The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home, support and privacy policy) is static HTML in `website/public`, served by a Cloudflare Worker: `just website` previews it. Pushing a change under `website/` to `main` publishes it (`.github/workflows/website.yml`), after `scripts/check-website.sh` confirms that every file the pages refer to exists; `just website-deploy` does the same by hand. `docs/app-store-submission.md` tracks what the Mac App Store still needs. The video and Settings screenshots on the home page come from `just demo-video` (`scripts/record-demo.sh`), which drives a scratch copy through `scripts/demo/story.txt` and `scripts/demo/settings.txt` with the apps in `scripts/demo/apps.txt`; edit those and run it again to refresh them. It needs ffmpeg, cwebp and Screen Recording permission for the terminal you run it in.
+The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home, support and privacy policy) is static HTML in `website/public`, served by a Cloudflare Worker: `just website` previews it. Pushing a change under `website/` to `main` publishes it (`.github/workflows/website.yml`), after `scripts/check-website.sh` confirms that every file and `#anchor` the pages refer to exists (pull requests run the same check); `just website-deploy` does the same by hand. `docs/app-store-submission.md` tracks what the Mac App Store still needs. The video and Settings screenshots on the home page come from `just demo-video` (`scripts/record-demo.sh`), which drives a scratch copy through `scripts/demo/story.txt` and `scripts/demo/settings.txt` with the apps in `scripts/demo/apps.txt`; edit those and run it again to refresh them. It needs ffmpeg, cwebp and Screen Recording permission for the terminal you run it in.
 
 Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.launchgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 
@@ -46,12 +46,12 @@ On first launch, a welcome window lets you choose which installed apps to includ
 | Search | Just type. Results rank prefix > word start > initials ("vsc") > substring > fuzzy. Return opens the first result |
 | Pages | Swipe, scroll, ←/→, Tab, ⌘1…9, click the page dots |
 | Esc | Clears search → closes folder (focus returns to it) → leaves edit mode → hides |
-| Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. Clicking selects instead of launching. ✕ removes an item; with the keyboard, Return renames the focused item (or the open folder) and ⌫ removes it |
+| Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. Clicking selects instead of launching. ✕ removes an item; with the keyboard, Return renames the focused item (or the open folder), ⌫ removes it and ⌥ + arrow keys move it (with the rest of the selection) one slot, onto the next or previous page past either end |
 | Select | ⌘-click / ⇧-click, ⌘A, or Space on the focused item. Then drag them together, **Group** (⌘G), **Remove** (⌫), or Move to Page |
 | Drag & drop | Drop in a gap to reorder. Hold over an app for a moment to make a folder, or over a folder to add to it. Hold at the screen edge to flip pages, including onto a new page. Drag out of an open folder to take an app out |
 | Folders | Click the title to rename. Ungroup from the context menu. A folder disappears when its last app leaves |
 | Undo / redo | ⌘Z / ⇧⌘Z, 50 levels, including imports, rebuilds and resizes |
-| Right-click | Item: Open, Show in Finder, Rename, Move to Page, Group, Remove. Background: page and sort actions |
+| Right-click | Item: Open, Show in Finder, Rename, Move to Page, Group, Remove. Background: page and sort actions. With the keyboard, ⌃Return opens the focused item's menu and ⇧⌃Return the ⋯ menu |
 
 **Settings:**
 
@@ -73,7 +73,7 @@ Two targets, each with a test target (`LaunchGridCoreTests`, `LaunchGridTests`):
 - **`LaunchGridCore`**: pure, unit-tested logic.
   - `Model`: value-type `Grid`, which makes undo a snapshot.
   - `GridOps`: insert with overflow spill, move, group, reflow, sort.
-  - `Reconciler`: add new apps, drop deleted ones, follow moved ones, keep the removed list. It never prunes on an empty scan, nor apps on an unmounted volume or under a missing scan folder.
+  - `Reconciler`: add new apps, drop deleted ones, follow moved ones, keep the removed list. It never prunes on an empty scan, nor apps on an unmounted volume or under a scan folder that is missing or can't be listed.
   - `AppScanner`: depth-limited, symlink-cycle-safe, skips bundle contents.
   - `Search`, `GridStore`.
   - `LaunchpadImporter`: reads a copy of the database and its write-ahead log; it handles Apple's multi-root DB, AppGrid's `custom_path` and `manual_app_*` IDs, and nested folder pages.

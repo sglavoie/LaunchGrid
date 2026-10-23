@@ -146,6 +146,19 @@ p { margin: 0 0 1em; }
     display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: clamp(8px, 1.4vw, 16px); background: #000;
     box-shadow: 0 30px 60px -30px rgb(0 0 0 / 0.6), 0 0 0 1px var(--line);
 }
+.player { position: relative; }
+.play-toggle {
+    position: absolute; right: clamp(10px, 1.6vw, 18px); bottom: clamp(10px, 1.6vw, 18px);
+    display: grid; place-items: center; width: 40px; height: 40px; padding: 0; cursor: pointer;
+    border: 1px solid rgb(255 255 255 / 0.25); border-radius: 999px;
+    background: rgb(18 21 46 / 0.6); color: #fff; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    opacity: 0.75; transition: opacity 0.2s;
+}
+.play-toggle[hidden] { display: none; }
+.player:hover .play-toggle, .play-toggle:focus-visible { opacity: 1; }
+.play-toggle svg { width: 16px; height: 16px; fill: currentColor; }
+.play-toggle .icon-play, .play-toggle.paused .icon-pause { display: none; }
+.play-toggle.paused .icon-play { display: block; }
 .shot figcaption { margin-top: 14px; text-align: center; font-size: 0.95rem; color: var(--muted); }
 
 /* Settings screenshots: every panel shares one grid cell, so switching tabs never changes the height. */

@@ -73,14 +73,20 @@ steps() { grep -v '^[[:space:]]*#' "$1" | grep . | paste -sd';' -; }
 APPS=$(grep -v '^[[:space:]]*#' scripts/demo/apps.txt | grep . | paste -sd, -)
 
 # Runs the steps against a fresh layout of the demo apps, logging to $WORK/<log>.log, and takes
-# the window screenshots that "shoot" steps ask for.
+# the window screenshots that "shoot" steps ask for. Fails when the app doesn't quit cleanly: a
+# pipeline's status is its last command's, so the app's own goes through $WORK/<log>.status.
 run_app() {
     log="$WORK/$1.log"
-    rm -rf "$WORK/data"
+    status_file="$WORK/$1.status"
+    rm -rf "$WORK/data" "$status_file"
     mkdir -p "$WORK/data"
-    LAUNCHGRID_DATA_DIR="$WORK/data" LAUNCHGRID_DEBUG_DIR="$WORK" \
-        LAUNCHGRID_DEBUG_SCRIPT="only:$APPS;size:5x7;build:alpha;$2;quit" \
-        "$APP/Contents/MacOS/LaunchGrid" 2>&1 | while IFS= read -r line; do
+    {
+        status=0
+        LAUNCHGRID_DATA_DIR="$WORK/data" LAUNCHGRID_DEBUG_DIR="$WORK" \
+            LAUNCHGRID_DEBUG_SCRIPT="only:$APPS;size:5x7;build:alpha;$2;quit" \
+            "$APP/Contents/MacOS/LaunchGrid" 2>&1 || status=$?
+        echo "$status" >"$status_file"
+    } | while IFS= read -r line; do
             printf '%s\n' "$line" >>"$log"
             case "$line" in
                 "shoot: "*)
@@ -98,6 +104,12 @@ run_app() {
             esac
         done
     grep '^only:' "$log" || true
+    status="$(cat "$status_file" 2>/dev/null || echo unknown)"
+    if [ "$status" != 0 ]; then
+        echo "LaunchGrid exited with status $status during the $1 run;" >&2
+        echo "see $log and ~/Library/Logs/DiagnosticReports." >&2
+        exit 1
+    fi
 }
 
 if [ "$STILLS" = 1 ]; then

@@ -36,7 +36,12 @@ function score(name, query) {
     const len = Math.min(n.length, 99);
     if (n === q) return 1000;
     if (n.startsWith(q)) return 900 - len;
-    if (n.split(/[^\p{L}\p{N}]+/u).some((w) => w.startsWith(q))) return 700 - len;
+    const separators = /[^\p{L}\p{N}]+/u;
+    const words = n.split(separators).filter(Boolean);
+    if (words.some((w) => w.startsWith(q))) return 700 - len;
+    // Several words, each starting a word of the name, in any order: "capture video".
+    const queryWords = q.split(separators).filter(Boolean);
+    if (queryWords.length > 1 && queryWords.every((qw) => words.some((w) => w.startsWith(qw)))) return 700 - len;
     if (acronym(name).startsWith(q)) return 600;
     if (n.includes(q)) return 500 - len;
     if (q.length >= 3 && isSubsequence(q, n)) return 200 - len;
@@ -128,12 +133,27 @@ document.querySelectorAll('a[href^="/#"], a[href^="#"]').forEach((a) => a.addEve
     section.style.animation = "";
 }));
 
-// The video below the hero loops; with reduced motion, it waits for its controls instead.
+// The video below the hero loops, with a button (or a click on the video) to pause it; with
+// reduced motion, it waits for that button instead. Without this script it keeps native controls.
 const video = document.getElementById("demo-video");
-if (video && matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    video.removeAttribute("autoplay");
-    video.pause();
-    video.controls = true;
+const toggle = document.getElementById("demo-video-toggle");
+if (video && toggle) {
+    const sync = () => {
+        toggle.classList.toggle("paused", video.paused);
+        toggle.setAttribute("aria-label", video.paused ? "Play the video" : "Pause the video");
+    };
+    const flip = () => (video.paused ? video.play().catch(() => {}) : video.pause());
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        video.removeAttribute("autoplay");
+        video.pause();
+    }
+    video.controls = false;
+    toggle.hidden = false;
+    toggle.addEventListener("click", flip);
+    video.addEventListener("click", flip);
+    video.addEventListener("play", sync);
+    video.addEventListener("pause", sync);
+    sync();
 }
 
 // Settings screenshots: one panel at a time behind a tab list, arrow keys moving between tabs.

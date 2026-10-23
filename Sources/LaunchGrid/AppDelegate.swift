@@ -46,8 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let storeURL = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"]
             .map { URL(fileURLWithPath: $0).appendingPathComponent("grid.json") } ?? GridStore.defaultURL
-        FileAccess.restore()
         state = AppState(prefs: prefs, store: GridStore(url: storeURL))
+        // Before the first scan, so it sees the folders and apps the bookmarks reach.
+        state.followMovedApps(FileAccess.restore(prefs: prefs))
+        // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
+        if Sandbox.isActive { state.onAppPathsInUse = { FileAccess.forgetApps(notIn: $0) } }
+        FileAccess.onBookmarkFailure = { [weak self] url in
+            self?.showError("LaunchGrid can't keep access to “\(url.lastPathComponent)”",
+                            "It can be used until LaunchGrid quits. After that, choose it again.")
+        }
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
         state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
@@ -77,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    FileAccess.restore()
+                    if let self { self.state.followMovedApps(FileAccess.restore(prefs: self.prefs)) }
                     self?.startWatching(onlyIfChanged: true)
                     self?.state.rescan()
                 }

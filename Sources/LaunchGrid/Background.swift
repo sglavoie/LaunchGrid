@@ -103,9 +103,11 @@ final class ImageBlurCache: @unchecked Sendable {
     func image(url: URL, radius: Double) -> NSImage? {
         let key = "\(url.path)|\(radius)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
-        guard var ci = CIImage(contentsOf: url) else { return nil }
-        // Work at a reduced size: the result is blurred anyway.
-        let scale = min(1, 1600 / max(ci.extent.width, 1))
+        // Upright, as the camera held it: a portrait photo is stored sideways with an EXIF orientation.
+        guard var ci = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else { return nil }
+        // Work at a reduced size: the result is blurred anyway. The longer side sets it, so a
+        // tall picture is shrunk as much as a wide one.
+        let scale = min(1, 1600 / max(ci.extent.width, ci.extent.height, 1))
         ci = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let extent = ci.extent
         if radius > 0 {

@@ -24,9 +24,21 @@ NOTES="${1:-LaunchGrid $VERSION. Signed and notarised; macOS 14+, Apple silicon 
 # releases/latest/download/LaunchGrid.zip link follows each release.
 git fetch -q origin
 git merge-base --is-ancestor "$COMMIT" origin/main || { echo "Push $COMMIT to origin first." >&2; exit 1; }
-# Rerunning after a failed cask update keeps the release that is already there.
+# Rerunning after a failed cask update keeps the release that is already there, as long as its
+# zip is this one: the cask's sha256 has to match what Homebrew downloads.
 if gh release view "v$VERSION" >/dev/null 2>&1; then
-    echo "Release v$VERSION already exists; updating the cask only."
+    REMOTE_DIR="$(mktemp -d)"
+    trap 'rm -rf "$REMOTE_DIR"' EXIT
+    gh release download "v$VERSION" --pattern LaunchGrid.zip --dir "$REMOTE_DIR" \
+        || { echo "Release v$VERSION exists but its LaunchGrid.zip couldn't be downloaded." >&2; exit 1; }
+    REMOTE_SHA="$(shasum -a 256 "$REMOTE_DIR/LaunchGrid.zip" | cut -d' ' -f1)"
+    if [ "$REMOTE_SHA" != "$SHA" ]; then
+        echo "Release v$VERSION already exists with a different LaunchGrid.zip" >&2
+        echo "(sha256 $REMOTE_SHA there, $SHA here). Bump VERSION in scripts/bundle.sh," >&2
+        echo "commit, push, then run just release and just publish again." >&2
+        exit 1
+    fi
+    echo "Release v$VERSION already exists with this zip; updating the cask only."
 else
     gh release create "v$VERSION" "$ZIP" --target "$COMMIT" --title "LaunchGrid $VERSION" --notes "$NOTES"
 fi
@@ -35,6 +47,9 @@ git -C "$TAP_DIR" pull -q --ff-only
 # Through a temporary file: scripts get BSD sed, whose -i takes a different argument from GNU's.
 sed -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" "$CASK" > "$CASK.tmp"
 mv "$CASK.tmp" "$CASK"
-git -C "$TAP_DIR" commit -q -m "launchgrid $VERSION" Casks/launchgrid.rb
+# A rerun after a failed push finds the cask already committed: push what is there.
+if ! git -C "$TAP_DIR" diff --quiet HEAD -- Casks/launchgrid.rb; then
+    git -C "$TAP_DIR" commit -q -m "launchgrid $VERSION" Casks/launchgrid.rb
+fi
 git -C "$TAP_DIR" push -q
 echo "Published v$VERSION; the cask now installs it (brew upgrade --cask launchgrid)."

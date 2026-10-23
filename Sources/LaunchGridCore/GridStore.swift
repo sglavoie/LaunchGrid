@@ -71,7 +71,31 @@ public struct GridStore: Sendable {
             throw GridFileError.invalid("grid size \(grid.rows)×\(grid.columns) is out of range")
         }
         grid.version = Grid.currentVersion
+        freshenRepeatedIDs(in: &grid)
         grid.normalize()
         return grid
+    }
+
+    /// Gives a fresh ID to each item (app or folder, inside folders too) whose ID an earlier
+    /// item already has, so a hand-edited or merged file can't make `locate` and `detach`
+    /// disagree about which item an ID means.
+    static func freshenRepeatedIDs(in grid: inout Grid) {
+        var seen = Set<UUID>()
+        func fresh(_ id: inout UUID) {
+            if !seen.insert(id).inserted { id = UUID() }
+        }
+        for p in grid.pages.indices {
+            for i in grid.pages[p].items.indices {
+                switch grid.pages[p].items[i] {
+                case .app(var a):
+                    fresh(&a.id)
+                    grid.pages[p].items[i] = .app(a)
+                case .folder(var f):
+                    fresh(&f.id)
+                    for k in f.apps.indices { fresh(&f.apps[k].id) }
+                    grid.pages[p].items[i] = .folder(f)
+                }
+            }
+        }
     }
 }

@@ -21,6 +21,7 @@ PB=/usr/libexec/PlistBuddy
 UPLOAD=0
 [ "${1:-}" = --upload ] && UPLOAD=1
 if [ "$UPLOAD" = 1 ]; then
+    # shellcheck source=/dev/null
     [ -f private/app-store-connect.env ] && . private/app-store-connect.env
     if [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_ISSUER_ID:-}" ]; then
         echo "--upload needs ASC_KEY_ID and ASC_ISSUER_ID; see this script's header." >&2

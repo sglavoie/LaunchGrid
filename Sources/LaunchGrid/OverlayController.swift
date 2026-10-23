@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Observation
 import SwiftUI
 import LaunchGridCore
 
@@ -14,6 +15,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private let state: AppState
     private var panel: OverlayPanel?
     private var panelMode: WindowMode?
+    private var host: NSHostingView<AnyView>?
+    /// First responder while the panel is up, so input methods compose into the search.
+    private let textInput = SearchInputView()
     private var monitors: [Any] = []
     /// The display the panel and its background belong to.
     private(set) var screen: NSScreen?
@@ -37,6 +41,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated { self?.placePanel() }
         }
         installMonitors()
+        textInput.onInsert = { [weak self] in self?.insertIntoSearch($0) }
     }
 
     func toggle() {
@@ -57,11 +62,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(textInput)
         state.didShow()
     }
 
     func hide(deactivate: Bool = true) {
         guard let panel, panel.isVisible else { return }
+        textInput.discardComposition()
         state.isShown = false
         state.saveNow()
         visibilityGeneration += 1
@@ -126,7 +133,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
             .environment(\.screenID, screen?.displayID ?? 0)
         let host = NSHostingView(rootView: AnyView(root))
         host.sizingOptions = []
-        p.contentView = host
+        // The text input view sits beside the SwiftUI content, out of sight.
+        let container = NSView()
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        container.addSubview(textInput)
+        p.contentView = container
+        self.host = host
         if mode == .window {
             p.contentView?.wantsLayer = true
             p.contentView?.layer?.cornerRadius = 12
@@ -150,14 +164,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case .behindDock:
             panel.setFrame(screen.visibleFrame, display: true)
         case .window:
+            let v = screen.visibleFrame
             if let saved = savedFrame(for: screen) {
-                let r = NSRectFromString(saved)
-                if screen.visibleFrame.intersects(r) {
+                var r = NSRectFromString(saved)
+                if v.intersects(r) {
+                    // Pulled fully onto the screen (the Dock or a resolution may have changed
+                    // since), no smaller than the minimum size.
+                    r.size.width = max(panel.minSize.width, min(r.width, v.width))
+                    r.size.height = max(panel.minSize.height, min(r.height, v.height))
+                    r.origin.x = max(v.minX, min(r.minX, v.maxX - r.width))
+                    r.origin.y = max(v.minY, min(r.minY, v.maxY - r.height))
                     panel.setFrame(r, display: true)
                     return
                 }
             }
-            let v = screen.visibleFrame
             let size = NSSize(width: v.width * 0.7, height: v.height * 0.75)
             panel.setFrame(NSRect(x: v.midX - size.width / 2, y: v.midY - size.height / 2, width: size.width, height: size.height),
                            display: true)
@@ -166,7 +186,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Points the background (blurred desktop or wallpaper) at `screen`.
     private func showBackground(for screen: NSScreen) {
-        if let host = panel?.contentView as? NSHostingView<AnyView> {
+        if let host {
             host.rootView = AnyView(GridRootView().environment(state).environment(\.screenID, screen.displayID))
         }
     }
@@ -256,6 +276,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if Int(event.keyCode) == kVK_Escape { state.textEdit = nil; return nil }
             return event
         }
+        // While an input method composes, it has every key (Return commits, Esc cancels).
+        if textInput.hasMarkedText(), textInput.handle(event) { return nil }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let code = Int(event.keyCode)
         let cmd = mods.contains(.command)
@@ -277,7 +299,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
             else { hide() }
             return nil
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            if state.editing && state.query.isEmpty {
+            if mods == .control {
+                showFocusedMenu()
+            } else if mods == [.control, .shift] {
+                showPageMenu()
+            } else if state.editing && state.query.isEmpty {
                 // Edit mode renames: the focused item, else the open folder.
                 if let id = focusedID ?? state.openFolderID { state.beginRename(id) }
             } else {
@@ -295,6 +321,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 }
             } else if cmd && horizontal {
                 state.flipPage(code == kVK_LeftArrow ? -1 : 1)
+            } else if mods.contains(.option) && state.editing && state.query.isEmpty && state.focusIndex != nil {
+                moveFocusedItem(code)
             } else {
                 moveFocus(code)
             }
@@ -331,7 +359,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             switch key {
             case "z": mods.contains(.shift) ? state.redo() : state.undo()
             case "e": state.editing.toggle()
-            case "a": selectAll()
+            // Search results hide the page; selecting it unseen would let ⌫ remove it.
+            case "a": if state.query.isEmpty { selectAll() }
             case "f": state.query = ""
             case "g": state.groupSelection()
             case "n": state.newPage()
@@ -344,6 +373,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 }
             case "1", "2", "3", "4", "5", "6", "7", "8", "9":
                 state.query = ""
+                if state.openFolder != nil { state.closeFolder() }
                 state.goToPage(Int(key)! - 1)
             default:
                 return event
@@ -368,16 +398,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             return nil
         }
-        if let chars = event.characters, !chars.isEmpty,
-           chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .privateUse }) {
-            if state.query.isEmpty && chars == " " {
-                // Space selects (or deselects) the focused item.
-                if !event.isARepeat, let id = focusedID { state.toggleSelection(id) }
-                return nil
-            }
-            insertIntoSearch(chars)
+        if state.query.isEmpty && event.characters == " " {
+            // Space selects (or deselects) the focused item.
+            if !event.isARepeat, let id = focusedID { state.toggleSelection(id) }
             return nil
         }
+        // Text goes through the input context, so dead keys and input methods compose;
+        // what it commits arrives in `insertIntoSearch`.
+        if panel.firstResponder !== textInput { panel.makeFirstResponder(textInput) }
+        textInput.handle(event)
         return nil
     }
 
@@ -474,6 +503,97 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// ⌥ + arrow in edit mode: moves the focused item one slot, together with the rest of the
+    /// selection when it's part of one. ←/→ past either end of a page carry it onto the
+    /// neighbouring page (a new one after the last); in an open folder it stays in the folder.
+    private func moveFocusedItem(_ code: Int) {
+        guard let i = state.focusIndex, let id = focusedID else { return }
+        let folder = state.openFolder
+        let pool = folder?.apps.map(\.id) ?? state.currentItems.map(\.id)
+        // Selected items elsewhere stay put: only the ones here move, in their order.
+        let ids = state.targets(for: id).filter(pool.contains)
+        let lead = ids.firstIndex(of: id) ?? 0
+        let rest = pool.count - ids.count
+        let cols = state.grid.columns
+        let horizontal = code == kVK_LeftArrow || code == kVK_RightArrow
+        let step = switch code {
+        case kVK_LeftArrow: -1
+        case kVK_RightArrow: 1
+        case kVK_UpArrow: -cols
+        default: cols
+        }
+        // Where the moved items start among the others, so the focused one lands a step on.
+        let at = i - lead + step
+        if let folder {
+            guard at >= 0, at <= rest else { return }
+            state.apply { $0.addToFolder(ids, folder: folder.id, at: at) }
+        } else if at >= 0, at <= rest {
+            let page = state.currentPage
+            state.apply { $0.move(ids, toPage: page, at: at) }
+        } else if horizontal {
+            let page = state.currentPage + step
+            // Nothing before the first page; a new page after the last only if one is left behind.
+            guard page >= 0, page < state.grid.pages.count || rest > 0 else { return }
+            state.apply { g in
+                if page >= g.pages.count { g.addPage() }
+                let end = g.pages[page].items.count
+                g.removingEmptiedPages { $0.move(ids, toPage: page, at: step < 0 ? end : 0) }
+            }
+        } else {
+            return // past the top or bottom row
+        }
+        // Follow the focused item wherever it went, spills and emptied pages included.
+        guard let loc = state.grid.locate(id) else { return }
+        if let fi = loc.folderIndex {
+            state.focusIndex = fi
+            let page = fi / FolderLayout.perPage(state.grid)
+            if page != state.folderPage { state.flipPage(page - state.folderPage) }
+        } else {
+            state.goToPage(loc.page)
+            state.focusIndex = loc.index
+        }
+    }
+
+    /// ⌃Return: the focused item's context menu, as a right-click on it would show; with
+    /// nothing focused, the page menu.
+    private func showFocusedMenu() {
+        guard let i = state.focusIndex else { return showPageMenu() }
+        let item: GridItem
+        let center: CGPoint
+        if !state.query.isEmpty {
+            guard let app = state.searchResults[safe: i] else { return }
+            item = .app(app)
+            let c = state.pageLayout.center(i), f = state.drag.pagerFrame
+            center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
+        } else if let folder = state.openFolder {
+            guard let app = folder.apps[safe: i] else { return }
+            item = .app(app)
+            let c = state.folderLayout.center(i - state.folderPage * FolderLayout.perPage(state.grid))
+            let f = state.drag.folderGridFrame
+            center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
+        } else {
+            guard let found = state.currentItems[safe: i] else { return }
+            item = found
+            let c = state.pageLayout.center(i), f = state.drag.pagerFrame
+            center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
+        }
+        popUp(MenuEntry.item(item, state: state), at: center)
+    }
+
+    /// ⇧⌃Return: the ⋯ menu, under its button.
+    func showPageMenu() {
+        let b = state.drag.menuButtonFrame
+        popUp(MenuEntry.page(state: state), at: CGPoint(x: b.minX, y: b.maxY + 4))
+    }
+
+    /// Shows a menu at `point`, in root coordinates.
+    private func popUp(_ entries: [MenuEntry], at point: CGPoint) {
+        guard let host else { return }
+        // Root coordinates run from the top left; the hosting view's may not.
+        let local = host.isFlipped ? point : NSPoint(x: point.x, y: host.bounds.height - point.y)
+        MenuEntry.nsMenu(entries).popUp(positioning: nil, at: local, in: host)
+    }
+
     private func activateFocused() {
         if !state.query.isEmpty {
             let results = state.searchResults
@@ -534,4 +654,103 @@ extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
+}
+
+/// Holds what an input method is composing in the search, for the search field to show.
+@MainActor @Observable
+final class SearchComposition {
+    static let shared = SearchComposition()
+    var marked = ""
+    /// The search field's frame in the overlay's root coordinates, for the candidate window.
+    @ObservationIgnored var fieldFrame: CGRect = .zero
+}
+
+/// An invisible text input client for the search. Keys reach it from the overlay's key
+/// monitor through `handle(_:)`, so dead keys and input methods (CJK) compose: marked text
+/// is shown in the search field and committed text goes to `onInsert`. Its document is only
+/// the marked text, since the search keeps its own text and caret.
+@MainActor
+final class SearchInputView: NSView, @preconcurrency NSTextInputClient {
+    var onInsert: (String) -> Void = { _ in }
+    private var markedSelection = NSRange(location: 0, length: 0)
+    private var composition: SearchComposition { .shared }
+
+    override var acceptsFirstResponder: Bool { true }
+    override func isAccessibilityElement() -> Bool { false }
+
+    /// Interprets a key as text, through the input context. Returns whether it took the key.
+    @discardableResult
+    func handle(_ event: NSEvent) -> Bool {
+        if let context = inputContext, context.handleEvent(event) { return true }
+        return false
+    }
+
+    /// Drops a composition in progress, without inserting it.
+    func discardComposition() {
+        guard hasMarkedText() else { return }
+        inputContext?.discardMarkedText()
+        composition.marked = ""
+    }
+
+    private static func plain(_ string: Any) -> String {
+        (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
+    }
+
+    // MARK: NSTextInputClient
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        composition.marked = ""
+        let text = Self.plain(string)
+        // Function keys and other control characters aren't text.
+        guard !text.isEmpty, text.unicodeScalars.allSatisfy({
+            !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .privateUse
+        }) else { return }
+        onInsert(text)
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        composition.marked = Self.plain(string)
+        markedSelection = selectedRange
+    }
+
+    func unmarkText() {
+        let text = composition.marked
+        composition.marked = ""
+        if !text.isEmpty { onInsert(text) }
+    }
+
+    func hasMarkedText() -> Bool { !composition.marked.isEmpty }
+
+    func markedRange() -> NSRange {
+        hasMarkedText() ? NSRange(location: 0, length: (composition.marked as NSString).length)
+            : NSRange(location: NSNotFound, length: 0)
+    }
+
+    func selectedRange() -> NSRange {
+        hasMarkedText() ? markedSelection : NSRange(location: 0, length: 0)
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        let text = composition.marked as NSString
+        let r = NSIntersectionRange(range, NSRange(location: 0, length: text.length))
+        guard r.length > 0 else { return nil }
+        actualRange?.pointee = r
+        return NSAttributedString(string: text.substring(with: r))
+    }
+
+    func characterIndex(for point: NSPoint) -> Int { NSNotFound }
+
+    /// Below the search field, where the candidate window belongs.
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        guard let window, let content = window.contentView else { return .zero }
+        let f = composition.fieldFrame
+        let bottomLeft = content.isFlipped ? NSPoint(x: f.minX, y: f.maxY) : NSPoint(x: f.minX, y: content.bounds.height - f.maxY)
+        let inWindow = content.convert(bottomLeft, to: nil)
+        return window.convertToScreen(NSRect(x: inWindow.x, y: inWindow.y, width: f.width, height: f.height))
+    }
+
+    /// Editing commands (arrows, Return) are the key monitor's; nothing to do here.
+    override func doCommand(by selector: Selector) {}
 }

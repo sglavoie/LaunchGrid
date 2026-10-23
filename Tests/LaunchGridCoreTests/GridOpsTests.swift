@@ -313,6 +313,21 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try GridStore.decode(old).recentlyPruned.isEmpty)
     }
 
+    @Test func repeatedItemIDsGetFreshOnes() throws {
+        let id = UUID()
+        let a = AppRef(id: id, bundleID: "com.test.a", path: "/Applications/A.app")
+        let b = AppRef(id: id, bundleID: "com.test.b", path: "/Applications/B.app")
+        let c = AppRef(id: id, bundleID: "com.test.c", path: "/Applications/C.app")
+        let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(a), .folder(Folder(id: id, name: "F", apps: [b, c]))])])
+        var decoded = try GridStore.decode(GridStore.encode(g))
+        let ids = [decoded.pages[0].items[0].id, decoded.pages[0].items[1].id] + (decoded.pages[0].items[1].folder?.apps.map(\.id) ?? [])
+        #expect(ids.count == 4 && Set(ids).count == 4)
+        #expect(ids[0] == id, "the first keeps its ID")
+        #expect(decoded.allApps.map(\.name) == ["A", "B", "C"])
+        decoded.remove([id])
+        #expect(decoded.allApps.map(\.name) == ["B", "C"], "an ID now means one item")
+    }
+
     @Test func rejectsNewerVersion() {
         let data = #"{"version": 99, "rows": 5, "columns": 7, "pages": [], "removedBundleIDs": []}"#.data(using: .utf8)!
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }

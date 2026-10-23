@@ -16,6 +16,10 @@ build:
 test *args:
     swift test {{args}}
 
+# Run the tests against the Mac App Store variant, in its own build folder
+test-app-store:
+    swift test --scratch-path .build/app-store -Xswiftc -DAPP_STORE
+
 # Build build/LaunchGrid.app (debug or release)
 bundle config="release":
     scripts/bundle.sh {{config}}
@@ -75,10 +79,10 @@ app-store *args:
 
 # Create the GitHub release for that build and update the Homebrew cask (optional release notes)
 publish *notes:
-    scripts/publish.sh "{{notes}}"
+    scripts/publish.sh {{quote(notes)}}
 
 # Build, test and bundle, as CI does
-ci: build test (bundle "release")
+ci: build test test-app-store (bundle "release")
 
 # Serve the website (launchgrid.sglavoie.com) locally with the Workers runtime
 website:

@@ -82,6 +82,9 @@ extension GridItem: Codable {
     private enum CodingKeys: String, CodingKey { case type, app, folder }
     private enum Kind: String, Codable { case app, folder }
 
+    /// An unknown `type` fails the whole file (`GridStore` reports it as invalid), so a new
+    /// item kind needs a `Grid.currentVersion` bump: older builds then say the file is from a
+    /// newer version instead of calling it corrupt.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Kind.self, forKey: .type) {

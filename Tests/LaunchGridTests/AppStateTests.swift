@@ -1,3 +1,4 @@
+import Carbon.HIToolbox
 import Foundation
 import os
 import Testing
@@ -405,7 +406,7 @@ func installed(_ name: String) -> InstalledApp {
         state.scanner = { _ in
             let n = scans.withLock { $0 += 1; return $0 }
             Thread.sleep(forTimeInterval: 0.1)
-            return n == 1 ? [installed("A")] : [installed("A"), installed("B")]
+            return AppScanner.ScanResult(apps: n == 1 ? [installed("A")] : [installed("A"), installed("B")])
         }
         let log = Log()
         state.rescan { log.entries.append("first saw \(state.installed.count)") }
@@ -499,5 +500,141 @@ func installed(_ name: String) -> InstalledApp {
         try FileManager.default.removeItem(at: url) // the user moved it away
         state.saveNow()
         #expect(try savedTitles(state) == ["A"])
+    }
+}
+
+@MainActor @Suite(.tempDir) struct UnlistedFolderTests {
+    @Test func theScannerReportsFoldersItCouldNotList() throws {
+        let root = TempDir.url.appendingPathComponent("Apps")
+        let locked = root.appendingPathComponent("Locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        let missing = TempDir.url.appendingPathComponent("Missing")
+
+        let result = AppScanner.scanReporting(roots: [root, missing])
+        #expect(result.apps.isEmpty)
+        // Folders found in a listing are named as the listing names them (/private/var, here).
+        #expect(result.unlisted.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+            == [locked.resolvingSymlinksInPath().path, missing.path])
+    }
+
+    @Test func appsUnderAFolderTheScanCouldNotListAreKept() {
+        let state = makeState(["A"])
+        var g = state.grid
+        g.pages[0].items.append(.app(AppRef(bundleID: "com.test.B", path: "/Volumes/NAS/Apps/B.app", name: "B")))
+        g.pages[0].items.append(.app(AppRef(bundleID: "com.test.C", path: "/Users/x/Denied/C.app", name: "C")))
+        state.replaceGrid(g)
+
+        state.catalogScanned([installed("A")], unlisted: ["/Users/x/Denied"])
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "C"], "B's volume isn't mounted; C's folder couldn't be listed")
+        state.catalogScanned([installed("A")])
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"], "once listed, C's absence counts")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct OutsideAppTests {
+    /// A minimal app bundle in the test's folder, outside every scan folder.
+    func makeBundle(_ name: String) throws -> String {
+        let app = TempDir.url.appendingPathComponent("Elsewhere/\(name).app")
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info: NSDictionary = ["CFBundleIdentifier": "com.test.\(name)", "CFBundleName": name]
+        try info.write(to: contents.appendingPathComponent("Info.plist"))
+        return app.path
+    }
+
+    @Test func rebuildingKeepsAppsAddedFromOutsideTheScanFolders() throws {
+        let path = try makeBundle("Outside")
+        let state = makeState(["A"])
+        state.catalogScanned(["A", "B"].map(installed))
+        state.addApps([InstalledApp(bundleID: "com.test.Outside", path: path, name: "Outside")])
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "Outside"])
+
+        state.build(style: .alphabetical)
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "Outside"])
+        #expect(state.selectableApps.map(\.path).contains(path), "still offered in Choose Apps")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct WelcomeExclusionTests {
+    @Test func includingTheLastExcludedAppAgainIsSaved() {
+        let url = TempDir.url.appendingPathComponent("grid.json")
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        state.catalogScanned(["A", "B"].map(installed))
+        state.chooseApps(include: [], exclude: [installed("B")])
+        state.saveNow()
+        state.chooseApps(include: [installed("B")], exclude: [])
+        state.saveNow()
+
+        let reopened = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        #expect(reopened.grid.removedBundleIDs.isEmpty)
+    }
+}
+
+@MainActor @Suite(.tempDir) struct FileAccessTests {
+    @Test func aMovedItemsSettingsFollowIt() {
+        let prefs = testPreferences()
+        prefs.extraFolders = ["/Volumes/A/Apps", "/Users/x/Tools"]
+        prefs.customImagePath = "/Users/x/Pictures/bg.jpg"
+        FileAccess.migrate(prefs, from: "/Users/x/Tools", to: "/Users/x/Utilities")
+        FileAccess.migrate(prefs, from: "/Users/x/Pictures/bg.jpg", to: "/Users/x/Pictures/Old/bg.jpg")
+        #expect(prefs.extraFolders == ["/Volumes/A/Apps", "/Users/x/Utilities"])
+        #expect(prefs.customImagePath == "/Users/x/Pictures/Old/bg.jpg")
+
+        FileAccess.migrate(prefs, from: "/Volumes/A/Apps", to: "/Users/x/Utilities")
+        #expect(prefs.extraFolders == ["/Users/x/Utilities"], "no folder twice")
+    }
+
+    @Test func onlyAppsNoLongerInUseLoseTheirBookmarks() {
+        let bookmarked = ["/Users/x/Tools", "/Users/x/bg.jpg", "/Users/x/A.app", "/Users/x/B.app"]
+        #expect(FileAccess.unusedApps(among: bookmarked, inUse: ["/Users/x/A.app"]) == ["/Users/x/B.app"])
+    }
+
+    @Test func appsInTheUndoHistoryAreStillInUse() throws {
+        let state = makeState(["A", "B"])
+        let b = try #require(state.grid.allApps.last)
+        state.remove([b.id])
+        #expect(state.appPathsInUse.contains(b.path), "⌘Z can bring it back")
+    }
+
+    @Test func movedAppsAreFollowedWithoutAnUndoStep() {
+        let state = makeState(["A", "B"])
+        state.followMovedApps(["/Applications/B.app": "/Users/x/Apps/B.app"])
+        #expect(state.grid.allApps.map(\.path) == ["/Applications/A.app", "/Users/x/Apps/B.app"])
+        #expect(!state.canUndo)
+    }
+}
+
+@Suite struct LauncherTests {
+    @Test func copiesInTheTrashAreNotFallbacks() {
+        #expect(Launcher.isInTrash("/Users/x/.Trash/Xcode.app"))
+        #expect(Launcher.isInTrash("/Volumes/Ext/.Trashes/501/Xcode.app"))
+        #expect(!Launcher.isInTrash("/Applications/Xcode.app"))
+    }
+
+    @Test func cancellingIsNotAnError() {
+        #expect(Launcher.isUserCancel(NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)))
+        let wrapped = NSError(domain: "com.apple.launchservices", code: 1,
+                              userInfo: [NSUnderlyingErrorKey: NSError(domain: NSOSStatusErrorDomain, code: Int(userCanceledErr))])
+        #expect(Launcher.isUserCancel(wrapped))
+        #expect(!Launcher.isUserCancel(Launcher.NotFound()))
+    }
+}
+
+@Suite struct ShortcutConflictTests {
+    let cmd = UInt32(cmdKey), opt = UInt32(optionKey), shift = UInt32(shiftKey), ctrl = UInt32(controlKey)
+
+    @Test func commonEditingCommandsAreFlagged() {
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_C), modifiers: cmd) == "Copy (in most apps)")
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_V), modifiers: cmd) != nil)
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_C), modifiers: cmd | ctrl) == nil)
+    }
+
+    @Test func optionWithAPrintableKeyBlocksTyping() {
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_E), modifiers: opt) != nil)
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_2), modifiers: opt | shift) != nil)
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_Space), modifiers: opt) == nil, "the default shortcut")
+        #expect(KeyCombo.conflict(keyCode: UInt32(kVK_ANSI_E), modifiers: opt | ctrl) == nil)
     }
 }

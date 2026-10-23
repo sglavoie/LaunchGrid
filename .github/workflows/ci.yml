@@ -25,9 +25,19 @@ jobs:
             spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
       - name: Build
         run: swift build
-      - name: Build the Mac App Store variant
-        run: swift build -Xswiftc -DAPP_STORE
       - name: Test
         run: swift test
+      - name: Test the Mac App Store variant
+        # Its own build folder (inside the cache), so the flag doesn't rebuild everything twice.
+        run: swift test --scratch-path .build/app-store -Xswiftc -DAPP_STORE
       - name: Bundle
         run: scripts/bundle.sh release
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the shell scripts
+        # Preinstalled on GitHub's Ubuntu runners.
+        run: shellcheck scripts/*.sh

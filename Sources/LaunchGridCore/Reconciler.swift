@@ -51,14 +51,22 @@ public enum Reconciler {
         // Dedup by path: two copies of one app (Xcode and Xcode-beta) share a bundle ID.
         var seen = Set<String>()
         var pruned: [PrunedApp] = []
+        // Folders this pass emptied, so older memory entries from them recreate them too.
+        var emptiedFolders = Set<UUID>()
+        // A copy, so `match` reads no part of `grid` while the loops below write to it.
+        let removed = grid.removedBundleIDs
 
         /// The installed app `ref` stands for: the one at its path, else (when its own app
-        /// is gone from there) an unclaimed one with its bundle ID.
+        /// is gone from there, not merely out of reach) an unclaimed, unexcluded one with its
+        /// bundle ID.
         func match(for ref: AppRef) -> (app: InstalledApp, moved: Bool)? {
             let atPath = byPath[ref.path]
             if let atPath, ref.bundleID == nil || atPath.bundleID == ref.bundleID { return (atPath, false) }
-            if let id = ref.bundleID, atPath != nil || !pathExists(ref.path),
-               let other = byBundle[id]?.first(where: { !gridPaths.contains($0.path) && !seen.contains($0.path) }) {
+            if let id = ref.bundleID, atPath != nil || (isReachable(ref.path) && !pathExists(ref.path)),
+               let other = byBundle[id]?.first(where: {
+                   !gridPaths.contains($0.path) && !seen.contains($0.path)
+                       && !removed.contains($0.key) && !removed.contains($0.path)
+               }) {
                 return (other, true)
             }
             // Another app now lives at this path (e.g. an update changed the bundle ID): adopt it.
@@ -89,11 +97,27 @@ public enum Reconciler {
             return ref
         }
 
+        // Apps pruned by earlier passes, which no longer show among their old neighbours.
+        let earlier = grid.recentlyPruned
+        /// The IDs before slot `i` among `ids`, nearest last, counting apps an earlier pass
+        /// pruned from just before it (`index` gives such an entry's slot there, if it was in
+        /// this list). One pruned at slot k sat just before the item now at k.
+        func neighbours(_ ids: [UUID], before i: Int, index: (PrunedApp) -> Int?) -> [UUID] {
+            let gone = earlier.compactMap { e in index(e).flatMap { $0 <= i ? (Double($0) - 0.5, e.app.id) : nil } }
+            let here = ids[..<i].enumerated().map { (Double($0.offset), $0.element) }
+            // A stable sort keeps several pruned at one slot oldest first, as they stood.
+            let all = (gone + here).enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }
+            return all.suffix(neighbourMemory).map(\.element.1)
+        }
+
         for p in grid.pages.indices {
             let pageID = grid.pages[p].id
             let items = grid.pages[p].items
+            let itemIDs = items.map(\.id)
             grid.pages[p].items = items.enumerated().compactMap { i, item in
-                func before() -> [UUID] { items[..<i].suffix(neighbourMemory).map(\.id) }
+                func before() -> [UUID] {
+                    neighbours(itemIDs, before: i) { $0.pageID == pageID && $0.folderID == nil ? $0.index : nil }
+                }
                 switch item {
                 case .app(let a):
                     return refresh(a) { PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before()) }
@@ -104,11 +128,13 @@ public enum Reconciler {
                         refresh(a) {
                             PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,
                                       folderID: folderID, folderName: folderName, folderIndex: fi,
-                                      before: before(), folderBefore: apps[..<fi].suffix(neighbourMemory).map(\.id))
+                                      before: before(),
+                                      folderBefore: neighbours(apps.map(\.id), before: fi) { $0.folderID == folderID ? $0.folderIndex : nil })
                         }
                     }
                     guard f.apps.isEmpty else { return .folder(f) }
                     for k in pruned.indices where pruned[k].folderID == f.id { pruned[k].folderEmptied = true }
+                    emptiedFolders.insert(f.id)
                     return nil
                 }
             }
@@ -118,6 +144,8 @@ public enum Reconciler {
         var memory: [PrunedApp] = []
         for var entry in grid.recentlyPruned where now.timeIntervalSince(entry.prunedAt) < restoreWindow {
             guard !grid.isExcluded(key: entry.app.key, path: entry.app.path) else { continue }
+            // Its folder outlived it until this pass pruned the folder's last app.
+            if let id = entry.folderID, emptiedFolders.contains(id) { entry.folderEmptied = true }
             guard let (found, _) = match(for: entry.app) else {
                 memory.append(entry)
                 continue

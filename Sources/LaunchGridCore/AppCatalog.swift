@@ -19,12 +19,32 @@ public enum AppScanner {
     /// Apps flagged `LSDefaultSystemHidden` (e.g. the two bundles both named Siri) are left
     /// out, as macOS leaves them out of its own app list; they can still be added by hand.
     public static func scan(roots: [URL], maxDepth: Int = 3) -> [InstalledApp] {
+        scanReporting(roots: roots, maxDepth: maxDepth).apps
+    }
+
+    /// What a scan found, and the folders it couldn't list.
+    public struct ScanResult: Sendable {
+        public var apps: [InstalledApp]
+        /// Folders (roots included) that couldn't be listed: missing, denied by privacy
+        /// controls, a stalled network volume or a lapsed sandbox bookmark. Their apps went
+        /// unseen, which says nothing about whether they are still there.
+        public var unlisted: [String]
+
+        public init(apps: [InstalledApp], unlisted: [String] = []) {
+            self.apps = apps
+            self.unlisted = unlisted
+        }
+    }
+
+    /// `scan(roots:maxDepth:)`, also reporting the folders it couldn't list.
+    public static func scanReporting(roots: [URL], maxDepth: Int = 3) -> ScanResult {
         let fm = FileManager.default
         // Shallowest depth each directory was walked at: a root nested in another root's
         // depth limit is walked again from its own, shallower, depth.
         var visited: [String: Int] = [:]
         var results: [InstalledApp] = []
         var paths = Set<String>()
+        var unlisted: [String] = []
 
         /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
         func consider(_ url: URL, realPath: String) {
@@ -37,7 +57,10 @@ public enum AppScanner {
             let real = dir.resolvingSymlinksInPath().path
             if let seen = visited[real], seen <= depth { return } // symlink cycle or repeat
             visited[real] = depth
-            guard let children = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(scanKeys)) else { return }
+            guard let children = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(scanKeys)) else {
+                unlisted.append(dir.path)
+                return
+            }
             for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 if child.lastPathComponent.hasPrefix(".") { continue }
                 // Answered from the values prefetched with the listing. Only a symlink is
@@ -55,7 +78,7 @@ public enum AppScanner {
         }
 
         for root in roots { walk(root, depth: 1) }
-        return results
+        return ScanResult(apps: results, unlisted: unlisted)
     }
 
     static let scanKeys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .contentTypeKey, .isPackageKey, .isHiddenKey]

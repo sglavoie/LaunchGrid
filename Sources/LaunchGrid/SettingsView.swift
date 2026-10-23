@@ -120,7 +120,9 @@ struct HotkeyRecorder: View {
             if recording, note.object as? NSWindow === window { stop() }
         }
         if let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
-            Label("Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another.",
+            Label(KeyCombo.conflictIsSystemSetting(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+                  ? "Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another."
+                  : "Also used for \(conflict). Pick another shortcut to keep it working.",
                   systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
         }

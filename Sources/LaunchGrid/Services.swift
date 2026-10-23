@@ -17,30 +17,45 @@ enum Launcher {
         var errorDescription: String? { "It's on “\(volume)”, which isn't connected." }
     }
 
-    /// Opens the app at its stored path, falling back to its bundle ID.
-    /// Returns the path that was actually launched.
+    /// Opens the app at its stored path, falling back to its bundle ID when it's gone from
+    /// there. Returns the path that was actually launched.
     @MainActor
     static func launch(_ app: AppRef) async throws -> String {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
-        var failure: Error = NotFound()
+        // The app is still there and failed to open (damaged, refused by Gatekeeper, cancelled):
+        // that's the answer, not a reason to open another copy with its bundle ID.
         if FileManager.default.fileExists(atPath: app.path) {
-            do {
-                _ = try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: config)
-                return app.path
-            } catch {
-                failure = error
-            }
+            _ = try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: config)
+            return app.path
         }
         // An app on a volume that isn't mounted hasn't gone anywhere: say so, rather than open
         // another copy with its bundle ID (Xcode for Xcode-beta).
         if let volume = Volume.unmountedVolume(for: app.path) { throw VolumeNotMounted(volume: volume) }
-        // Retry elsewhere only if Launch Services knows another copy.
-        if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id), url.path != app.path {
+        // Retry elsewhere only if Launch Services knows another copy, and not one in the Trash.
+        if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
+           url.path != app.path, !isInTrash(url.path) {
             _ = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
             return url.path
         }
-        throw failure
+        throw NotFound()
+    }
+
+    /// Whether `path` is inside a Trash: the home one (~/.Trash) or a volume's (.Trashes).
+    nonisolated static func isInTrash(_ path: String) -> Bool {
+        (path as NSString).pathComponents.contains { $0 == ".Trash" || $0 == ".Trashes" }
+    }
+
+    /// Whether the person cancelled the launch (e.g. in Gatekeeper's "downloaded from the
+    /// Internet" prompt): nothing to report.
+    nonisolated static func isUserCancel(_ error: Error) -> Bool {
+        var next: NSError? = error as NSError
+        while let e = next {
+            if e.domain == NSCocoaErrorDomain && e.code == NSUserCancelledError { return true }
+            if e.domain == NSOSStatusErrorDomain && e.code == Int(userCanceledErr) { return true }
+            next = e.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
     }
 }
 
@@ -318,9 +333,14 @@ enum KeyCombo {
     /// Known system shortcuts. No public API lists them, so this is a static best effort.
     /// Entries with a symbolic hotkey ID are skipped when the user has turned that shortcut off
     /// or moved it to another key in System Settings.
-    static func conflict(keyCode: UInt32, modifiers: UInt32) -> String? {
+    /// Whether `conflict` names a macOS shortcut that can be turned off in System Settings.
+    static func conflictIsSystemSetting(keyCode: UInt32, modifiers: UInt32) -> Bool {
+        knownShortcuts.contains { $0.0 == Int(keyCode) && $0.1 == modifiers && $0.3 != nil }
+    }
+
+    private static var knownShortcuts: [(Int, UInt32, String, Int?)] {
         let cmd = UInt32(cmdKey), opt = UInt32(optionKey), ctrl = UInt32(controlKey), shift = UInt32(shiftKey)
-        let known: [(Int, UInt32, String, Int?)] = [
+        return [
             (kVK_Space, cmd, "Spotlight", 64),
             (kVK_Space, cmd | opt, "Finder search window", 65),
             (kVK_Space, ctrl, "Select previous input source", 60),
@@ -338,10 +358,45 @@ enum KeyCombo {
             (kVK_ANSI_Q, cmd, "Quit (in every app)", nil),
             (kVK_ANSI_W, cmd, "Close Window (in every app)", nil),
         ]
-        guard let match = known.first(where: { $0.0 == Int(keyCode) && $0.1 == modifiers }) else { return nil }
-        if let id = match.3, !isSystemShortcutActive(id: id, keyCode: keyCode, modifiers: modifiers) { return nil }
-        return match.2
     }
+
+    static func conflict(keyCode: UInt32, modifiers: UInt32) -> String? {
+        let cmd = UInt32(cmdKey), opt = UInt32(optionKey), shift = UInt32(shiftKey)
+        if let match = knownShortcuts.first(where: { $0.0 == Int(keyCode) && $0.1 == modifiers }) {
+            if let id = match.3, !isSystemShortcutActive(id: id, keyCode: keyCode, modifiers: modifiers) { return nil }
+            return match.2
+        }
+        // A global shortcut takes the key from every app, so these stop working everywhere.
+        if modifiers == cmd, let command = commonCommands[Int(keyCode)] { return "\(command) (in most apps)" }
+        if modifiers == opt || modifiers == opt | shift, printableKeys.contains(Int(keyCode)) {
+            return "typing special characters (⌥ with this key types an accent or symbol)"
+        }
+        return nil
+    }
+
+    /// ⌘ shortcuts that nearly every app uses for editing and documents.
+    static let commonCommands: [Int: String] = [
+        kVK_ANSI_A: "Select All", kVK_ANSI_C: "Copy", kVK_ANSI_V: "Paste", kVK_ANSI_X: "Cut",
+        kVK_ANSI_Z: "Undo", kVK_ANSI_S: "Save", kVK_ANSI_F: "Find", kVK_ANSI_G: "Find Next",
+        kVK_ANSI_P: "Print", kVK_ANSI_N: "New", kVK_ANSI_T: "New Tab", kVK_ANSI_O: "Open",
+        kVK_ANSI_H: "Hide", kVK_ANSI_M: "Minimize", kVK_ANSI_B: "Bold", kVK_ANSI_I: "Italic",
+        kVK_ANSI_U: "Underline", kVK_ANSI_R: "Reload", kVK_ANSI_L: "Go to Address",
+        kVK_ANSI_Comma: "Settings", kVK_ANSI_Grave: "Cycle Windows",
+    ]
+
+    /// Keys that type a character: with ⌥ (or ⌥⇧) alone they type accents and symbols. Space
+    /// isn't one of them, so the default ⌥Space stays quiet.
+    static let printableKeys: Set<Int> = [
+        kVK_ANSI_A, kVK_ANSI_B, kVK_ANSI_C, kVK_ANSI_D, kVK_ANSI_E, kVK_ANSI_F, kVK_ANSI_G, kVK_ANSI_H,
+        kVK_ANSI_I, kVK_ANSI_J, kVK_ANSI_K, kVK_ANSI_L, kVK_ANSI_M, kVK_ANSI_N, kVK_ANSI_O, kVK_ANSI_P,
+        kVK_ANSI_Q, kVK_ANSI_R, kVK_ANSI_S, kVK_ANSI_T, kVK_ANSI_U, kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_X,
+        kVK_ANSI_Y, kVK_ANSI_Z,
+        kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7,
+        kVK_ANSI_8, kVK_ANSI_9,
+        kVK_ANSI_Minus, kVK_ANSI_Equal, kVK_ANSI_LeftBracket, kVK_ANSI_RightBracket, kVK_ANSI_Backslash,
+        kVK_ANSI_Semicolon, kVK_ANSI_Quote, kVK_ANSI_Comma, kVK_ANSI_Period, kVK_ANSI_Slash, kVK_ANSI_Grave,
+        kVK_ISO_Section,
+    ]
 
     /// Whether macOS still binds symbolic hotkey `id` to this combo. A missing entry means the
     /// default binding, which is on.
@@ -422,33 +477,72 @@ final class FolderWatcher: @unchecked Sendable {
 @MainActor
 enum FileAccess {
     private static let key = "bookmarks"
-    /// Bookmarked items in use, by the path they were picked at.
+    /// Bookmarked items in use, by the path they were picked at (or have moved to since).
     private static var granted: [String: URL] = [:]
+    /// Called when an item just picked couldn't be bookmarked: access to it ends when
+    /// LaunchGrid quits.
+    static var onBookmarkFailure: (URL) -> Void = { _ in }
 
     /// Starts using the saved bookmarks not yet in use. At launch, and when a volume mounts:
-    /// a bookmark to an unmounted volume only resolves once it's back.
-    static func restore() {
-        guard Sandbox.isActive else { return }
+    /// a bookmark to an unmounted volume only resolves once it's back. An item renamed or
+    /// moved since it was picked is followed: its bookmark and the setting naming it (an extra
+    /// folder, the background picture) take its new path. Returns the moves, old path to new,
+    /// for the grid to follow apps added with Browse.
+    @discardableResult
+    static func restore(prefs: Preferences) -> [String: String] {
+        guard Sandbox.isActive else { return [:] }
         let d = Preferences.appDefaults
         var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
+        var moves: [String: String] = [:]
         for (path, data) in saved where granted[path] == nil {
             var stale = false
             guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, bookmarkDataIsStale: &stale),
                   url.startAccessingSecurityScopedResource() else { continue }
+            let now = url.standardizedFileURL.path
+            // Not into the Trash: that's on its way out, and the setting is better left as it was.
+            if now != URL(fileURLWithPath: path).standardizedFileURL.path, !Launcher.isInTrash(now), saved[now] == nil {
+                saved[path] = nil
+                saved[now] = bookmark(url) ?? data
+                granted[now] = url
+                moves[path] = now
+                migrate(prefs, from: path, to: now)
+                NSLog("LaunchGrid: \(path) moved to \(now); following it")
+                continue
+            }
             granted[path] = url
             if stale, let fresh = bookmark(url) { saved[path] = fresh }
         }
         d.set(saved, forKey: key)
+        return moves
     }
 
-    /// Remembers an item just picked in a panel.
-    static func remember(_ url: URL) {
-        guard Sandbox.isActive, granted[url.path] == nil, let data = bookmark(url) else { return }
+    /// Points the settings naming `old` (an extra scan folder, the background picture) at `new`.
+    static func migrate(_ prefs: Preferences, from old: String, to new: String) {
+        if prefs.extraFolders.contains(old) {
+            var folders = prefs.extraFolders.map { $0 == old ? new : $0 }
+            var seen = Set<String>()
+            folders = folders.filter { seen.insert($0).inserted }
+            prefs.extraFolders = folders
+        }
+        if prefs.customImagePath == old { prefs.customImagePath = new }
+    }
+
+    /// Remembers an item just picked in a panel. False, after telling `onBookmarkFailure`,
+    /// when it couldn't be bookmarked, so access to it won't outlast this run.
+    @discardableResult
+    static func remember(_ url: URL) -> Bool {
+        guard Sandbox.isActive, granted[url.path] == nil else { return true }
+        guard let data = bookmark(url) else {
+            NSLog("LaunchGrid: could not bookmark \(url.path); access ends when LaunchGrid quits")
+            onBookmarkFailure(url)
+            return false
+        }
         let d = Preferences.appDefaults
         var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
         saved[url.path] = data
         d.set(saved, forKey: key)
         if url.startAccessingSecurityScopedResource() { granted[url.path] = url }
+        return true
     }
 
     static func forget(_ path: String) {
@@ -458,6 +552,19 @@ enum FileAccess {
         var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
         saved[path] = nil
         d.set(saved, forKey: key)
+    }
+
+    /// Forgets the bookmarks of apps added with Browse that are no longer in `inUse`.
+    static func forgetApps(notIn inUse: Set<String>) {
+        guard Sandbox.isActive else { return }
+        let saved = Preferences.appDefaults.dictionary(forKey: key) as? [String: Data] ?? [:]
+        for path in unusedApps(among: saved.keys, inUse: inUse) { forget(path) }
+    }
+
+    /// The app bundles among `bookmarked` that aren't in `inUse`. Folders and pictures are
+    /// forgotten when their setting changes, not here.
+    nonisolated static func unusedApps(among bookmarked: some Sequence<String>, inUse: Set<String>) -> [String] {
+        bookmarked.filter { ($0 as NSString).pathExtension == "app" && !inUse.contains($0) }.sorted()
     }
 
     private static func bookmark(_ url: URL) -> Data? {

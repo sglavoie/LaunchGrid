@@ -120,19 +120,27 @@
       <section class="shot" aria-label="Video of LaunchGrid">
         <div class="wrap">
           <figure>
-            <!-- Recorded by scripts/record-demo.sh; demo.js pauses it for reduced motion. -->
-            <video
-              id="demo-video"
-              src="/video/demo.mp4"
-              poster="/video/demo-poster.webp"
-              width="1920"
-              height="1080"
-              autoplay
-              muted
-              loop
-              playsinline
-              aria-label="LaunchGrid in use: moving through the grid with the arrow keys, finding Visual Studio Code by typing vsc and Calculator and Calendar by typing cal, turning to the second page and back, then grouping Discord, FaceTime and Messages into a folder named Social and undoing it."
-            ></video>
+            <!-- Recorded by scripts/record-demo.sh. demo.js swaps the native controls for the
+                 pause button, and starts it paused for reduced motion. -->
+            <div class="player">
+              <video
+                id="demo-video"
+                src="/video/demo.mp4"
+                poster="/video/demo-poster.webp"
+                width="1920"
+                height="1080"
+                autoplay
+                muted
+                loop
+                playsinline
+                controls
+                aria-label="LaunchGrid in use: moving through the grid with the arrow keys, finding Visual Studio Code by typing vsc and Calculator and Calendar by typing cal, turning to the second page and back, then grouping Discord, FaceTime and Messages into a folder named Social and undoing it."
+              ></video>
+              <button type="button" class="play-toggle" id="demo-video-toggle" aria-controls="demo-video" aria-label="Pause the video" hidden>
+                <svg class="icon-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1" /><rect x="9.5" y="2.5" width="3" height="11" rx="1" /></svg>
+                <svg class="icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4a.8.8 0 0 0 1.2.7l8.3-5.2a.8.8 0 0 0 0-1.4L5.7 2.1a.8.8 0 0 0-1.2.7z" /></svg>
+              </button>
+            </div>
             <figcaption>
               The real app, driven from the keyboard: arrows, search, pages,
               a folder, and undo.

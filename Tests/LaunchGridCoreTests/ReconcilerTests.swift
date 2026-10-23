@@ -121,6 +121,28 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(moved.moved == ["Xcode-beta"])
     }
 
+    @Test func movedRefSkipsACopyTheUserRemoved() {
+        let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        let beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
+        Reconciler.add([beta], to: &g, installed: [InstalledApp(xcode)])
+        g.remove([g.allApps[1].id], installed: [InstalledApp(xcode), beta])
+        #expect(g.removedBundleIDs == [beta.path])
+        // Xcode.app is deleted: its tile must not take over the excluded beta.
+        let report = Reconciler.reconcile(&g, installed: [beta], autoAdd: true, pathExists: { _ in false })
+        #expect(report.moved.isEmpty && report.added.isEmpty)
+        #expect(g.allApps.isEmpty)
+    }
+
+    @Test func unreachableAppIsNotMovedOntoAnotherCopy() {
+        let ext = AppRef(bundleID: "com.test.foo", path: "/Volumes/Ext/Foo.app", name: "Foo")
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(ext)])])
+        let report = Reconciler.reconcile(&g, installed: [installed("Foo")], autoAdd: false,
+                                          isReachable: { !$0.hasPrefix("/Volumes/Ext/") }, pathExists: { _ in false })
+        #expect(report.moved.isEmpty && report.removed.isEmpty)
+        #expect(g.allApps.map(\.path) == ["/Volumes/Ext/Foo.app"])
+    }
+
     @Test func appBrieflyMissingReturnsToItsSlotFolderAndName() {
         var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(app("A")), .app(app("B")), .app(app("C")), .app(app("D"))])])
         let ids = g.pages[0].items.map(\.id)
@@ -149,6 +171,29 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("C")], autoAdd: false, now: t0)
         _ = Reconciler.reconcile(&g, installed: ["A", "B", "C"].map { installed($0) }, autoAdd: false, now: t0 + 5)
         #expect(g.folder(fid)?.apps.map(\.name) == ["A", "B", "C"])
+    }
+
+    @Test func folderEmptiedOverTwoScansComesBackWhole() {
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(app("A")), .app(app("Word")), .app(app("Excel"))])])
+        let fid = g.group([g.pages[0].items[1].id, g.pages[0].items[2].id], name: "Office")!
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("Excel")], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [installed("A")], autoAdd: false, now: t0 + 5)
+        #expect(g.folder(fid) == nil)
+        let back = Reconciler.reconcile(&g, installed: ["A", "Word", "Excel"].map { installed($0) }, autoAdd: false, now: t0 + 10)
+        #expect(back.restored == ["Word", "Excel"])
+        #expect(titles(g.pages[0]) == ["A", "Office"], "Word goes back in the folder, not beside it")
+        #expect(g.folder(fid)?.apps.map(\.name) == ["Word", "Excel"], "in their old order")
+    }
+
+    @Test func appsPrunedOverTwoScansComeBackInOrder() {
+        let all = ["A", "B", "C", "D"].map { installed($0) }
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: ["A", "B", "C", "D"].map { .app(app($0)) })])
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        _ = Reconciler.reconcile(&g, installed: [all[0], all[2], all[3]], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [all[0], all[3]], autoAdd: false, now: t0 + 5)
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: t0 + 10)
+        #expect(titles(g.pages[0]) == ["A", "B", "C", "D"])
     }
 
     @Test func folderTheUserUngroupedIsNotRecreatedOnRestore() {
