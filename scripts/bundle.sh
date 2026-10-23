@@ -22,7 +22,8 @@ cp "$BIN" "$APP/Contents/MacOS/LaunchGrid"
 
 # App icon (cached between builds).
 ICNS="build/AppIcon.icns"
-if [ ! -f "$ICNS" ] || [ scripts/make-icon.swift -nt "$ICNS" ]; then
+# `find -newer` rather than `-nt`, which POSIX sh lacks.
+if [ ! -f "$ICNS" ] || [ -n "$(find scripts/make-icon.swift -newer "$ICNS")" ]; then
     TMP="$(mktemp -d)"
     swift scripts/make-icon.swift "$TMP/icon.png"
     mkdir "$TMP/AppIcon.iconset"

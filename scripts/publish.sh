@@ -11,7 +11,7 @@ ZIP="$OUT_DIR/LaunchGrid.zip"
 TAP_DIR="${TAP_DIR:-../homebrew-tap}"
 CASK="$TAP_DIR/Casks/launchgrid.rb"
 
-[ -f "$ZIP" ] && [ -f "$OUT_DIR/COMMIT" ] || { echo "No release build; run: just release" >&2; exit 1; }
+if [ ! -f "$ZIP" ] || [ ! -f "$OUT_DIR/COMMIT" ]; then echo "No release build; run: just release" >&2; exit 1; fi
 xcrun stapler validate "$APP" >/dev/null || { echo "$APP has no notarisation ticket" >&2; exit 1; }
 [ -f "$CASK" ] || { echo "No cask at $CASK; set TAP_DIR to your homebrew-tap clone" >&2; exit 1; }
 

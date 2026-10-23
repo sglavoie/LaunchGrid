@@ -158,7 +158,7 @@ if [ "$VIDEO" = 1 ]; then
 
     START=$(sed -n 's/^mark: start //p' "$WORK/video.log")
     END=$(sed -n 's/^mark: end //p' "$WORK/video.log")
-    [ -n "$START" ] && [ -n "$END" ] || { echo "No mark:start/mark:end in $WORK/video.log" >&2; exit 1; }
+    if [ -z "$START" ] || [ -z "$END" ]; then echo "No mark:start/mark:end in $WORK/video.log" >&2; exit 1; fi
     FIRST=$(ffprobe -v error -show_entries format=start_time -of csv=p=0 "$WORK/raw.mkv")
     FROM=$(echo "$START - $FIRST" | bc)
     TO=$(echo "$END - $FIRST" | bc)
