@@ -228,7 +228,7 @@ extension Grid {
             rows: try c.decodeIfPresent(Int.self, forKey: .rows) ?? 5,
             columns: try c.decodeIfPresent(Int.self, forKey: .columns) ?? 7,
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
-            removedBundleIDs: try c.decodeIfPresent(Set<String>.self, forKey: .removedBundleIDs) ?? [],
+            removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs) ?? []),
             // Disposable: an unreadable list is dropped rather than failing the whole file.
             recentlyPruned: (try? c.decodeIfPresent([PrunedApp].self, forKey: .recentlyPruned)) ?? []
         )

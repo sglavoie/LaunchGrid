@@ -59,14 +59,18 @@ struct GridRootView: View {
 
             DragLayer()
 
-            if let edit = state.textEdit {
-                TextEditCard(request: edit)
-                    // A new request (another rename) starts over with its own text.
-                    .id(edit.id)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityAddTraits(.isModal)
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
+            ZStack {
+                if let edit = state.textEdit {
+                    TextEditCard(request: edit)
+                        // A new request (another rename) starts over with its own text.
+                        .id(edit.id)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityAddTraits(.isModal)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
+                }
             }
+            // `textEdit` changes outside any animation. With Reduce Motion, a short fade.
+            .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.textEdit?.id)
 
             ToastLayer()
                 .allowsHitTesting(false)
@@ -129,8 +133,10 @@ struct ToastLayer: View {
             AccessibilityNotification.Announcement(String(localized: "LaunchGrid, \(page)")).post()
         }
         // Nor a page flip with nothing focused (Tab, a swipe), nor edit mode turning on or off.
+        // With an item focused, VoiceOver moves to it, which says enough; during a drag, edge
+        // flips would announce every page passed.
         .onChange(of: state.currentPage) {
-            guard state.isShown, let page = pageDescription else { return }
+            guard state.isShown, state.focusIndex == nil, !state.drag.active, let page = pageDescription else { return }
             AccessibilityNotification.Announcement(page).post()
         }
         .onChange(of: state.editing) { _, editing in
@@ -430,8 +436,9 @@ struct PageView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
-        // VoiceOver follows the keyboard focus.
-        .onChange(of: focus) { _, i in
+        // VoiceOver follows the keyboard focus, also onto a page drawn afresh with focus on it
+        // (⌘4, End, a page dot further away, a search result revealed).
+        .onChange(of: focus, initial: true) { _, i in
             if let i, entries.indices.contains(i) { voiceOverFocus = entries[i].id }
         }
     }
@@ -625,28 +632,29 @@ struct FolderIcon: View {
     typealias GridItem = SwiftUI.GridItem
 }
 
-/// Gentle rotation wobble in edit mode. A repeating animation rather than a per-frame
-/// timeline, so a full page of icons doesn't re-render its views every frame.
-/// Off with Reduce Motion.
+/// Gentle rotation wobble in edit mode: keyframes that repeat while `active`, upright
+/// otherwise. Only the rotation is redrawn as they play, not the icon views, and
+/// turning them off doesn't rebuild the icon (a repeating animation outlived later changes
+/// to the angle, and rebuilding to drop it lost each icon's loaded image). Off with Reduce Motion.
 struct Jiggle: ViewModifier {
     let active: Bool
     let seed: Int
-    @State private var tilted = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         let on = active && !reduceMotion
         // Slightly different periods keep neighbours out of step.
         let period = 0.15 + Double(abs(seed) % 7) * 0.008
-        content
-            .rotationEffect(.degrees(on ? (tilted ? 1.6 : -1.6) : 0))
-            .animation(on ? .easeInOut(duration: period).repeatForever(autoreverses: true) : nil, value: tilted)
-            // A repeating animation outlives later changes to the angle (animations are
-            // additive), so toggling rebuilds the view to drop it rather than leave icons
-            // wobbling after edit mode ends.
-            .id(on)
-            .transition(.identity)
-            .onChange(of: on, initial: true) { _, on in tilted = on }
+        content.keyframeAnimator(initialValue: 0.0, repeating: on) { view, angle in
+            // Stopped keyframes keep the angle they reached: upright once edit mode ends.
+            view.rotationEffect(.degrees(on ? angle : 0))
+        } keyframes: { _ in
+            KeyframeTrack {
+                CubicKeyframe(1.6, duration: period / 2)
+                CubicKeyframe(-1.6, duration: period)
+                CubicKeyframe(0, duration: period / 2)
+            }
+        }
     }
 }
 
@@ -893,8 +901,8 @@ struct FolderPageContent: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
-        // VoiceOver follows the keyboard focus.
-        .onChange(of: focus) { _, i in
+        // VoiceOver follows the keyboard focus, also into a folder opened with focus in it.
+        .onChange(of: focus, initial: true) { _, i in
             if let i, entries.indices.contains(i), let app = entries[i].app { voiceOverFocus = app.id }
         }
     }

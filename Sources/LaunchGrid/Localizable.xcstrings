@@ -161,6 +161,38 @@
         }
       }
     },
+    "%lld entries in “%@” could not be read and will be left out.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@n@ in “%2$@” could not be read and will be left out."
+          },
+          "substitutions": {
+            "n": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg entry"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg entries"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld more matches — keep typing to narrow the search": {
       "localizations": {
         "en": {
@@ -485,6 +517,38 @@
         }
       }
     },
+    "Loaded %@; left out %lld unreadable entries": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loaded %1$@; left out %#@n@"
+          },
+          "substitutions": {
+            "n": {
+              "argNum": 2,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg unreadable entry"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg unreadable entries"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Move %lld Items to Page": {
       "localizations": {
         "en": {
@@ -544,6 +608,38 @@
                 "stringUnit": {
                   "state": "translated",
                   "value": "Removed %lld items — ⌘Z to undo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Your current pages and folders will be replaced by the %lld apps found in the %@ layout. ⌘Z in the grid undoes it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your current pages and folders will be replaced by the %#@n@ found in the %2$@ layout. ⌘Z in the grid undoes it."
+          },
+          "substitutions": {
+            "n": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg app"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg apps"
+                    }
+                  }
                 }
               }
             }

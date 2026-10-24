@@ -154,14 +154,28 @@ public struct GridStore: Sendable {
         /// The version, also when written as text ("2"), so a newer file is told apart from a broken one.
         struct Header: Decodable {
             var version: Int?
+            /// A version that is there but isn't a whole number ("2.1", 1.5, an object), as a
+            /// number when it reads as one.
+            var unreadable: Double??
             enum CodingKeys: String, CodingKey { case version }
             init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
-                version = (try? c.decodeIfPresent(Int.self, forKey: .version))
-                    ?? (try? c.decodeIfPresent(String.self, forKey: .version)).flatMap { $0.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
+                let text = (try? c.decodeIfPresent(String.self, forKey: .version)).flatMap { $0?.trimmingCharacters(in: .whitespaces) }
+                version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? text.flatMap { Int($0) }
+                if version == nil, c.contains(.version), (try? c.decodeNil(forKey: .version)) != true {
+                    unreadable = .some((try? c.decode(Double.self, forKey: .version)) ?? text.flatMap { Double($0) })
+                }
             }
         }
-        let version = (try? JSONDecoder().decode(Header.self, from: data))?.version ?? 1
+        let header = try? JSONDecoder().decode(Header.self, from: data)
+        // Treated as version 1 it would be saved over as one, losing what a newer version wrote.
+        if let unreadable = header?.unreadable {
+            if let v = unreadable, v.isFinite, v > Double(Grid.currentVersion) {
+                throw GridFileError.unsupportedVersion(Int(min(v, 1_000_000)))
+            }
+            throw GridFileError.invalid("its format version isn't a whole number")
+        }
+        let version = header?.version ?? 1
         guard version <= Grid.currentVersion else { throw GridFileError.unsupportedVersion(version) }
         guard version >= 1 else { throw GridFileError.invalid("version \(version) is not a format version") }
         // Future migrations go here, keyed on `version`.

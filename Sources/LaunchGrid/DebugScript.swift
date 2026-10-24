@@ -60,6 +60,20 @@ enum DebugScript {
                     if let f = state.grid.pages.flatMap(\.items).compactMap(\.folder).first { state.openFolder(f.id) }
                 case "focus": state.focusIndex = Int(arg) ?? 0
                 case "rename": if let item = state.currentItems.first { state.beginRename(item.id) }
+                case "renamesnap", "editsnap":
+                    // "renamesnap:ms,name": opens (or, open, closes) the rename card and snaps ms later,
+                    // within its transition; "editsnap:ms,name" turns edit mode on or off the same way.
+                    let n = arg.split(separator: ",", maxSplits: 1).map(String.init)
+                    guard n.count == 2, let ms = Int(n[0]) else { break }
+                    if parts[0] == "editsnap" {
+                        state.editing.toggle()
+                    } else if state.textEdit != nil {
+                        state.textEdit = nil
+                    } else if let item = state.currentItems.first {
+                        state.beginRename(item.id)
+                    }
+                    try? await Task.sleep(for: .milliseconds(ms))
+                    snapshot(name: n[1], dir: dir)
                 case "settings": delegate.showSettings()
                 case "tab": state.settingsTab = arg
                 case "settingsheight": state.settingsHeight = Double(arg).map { CGFloat($0) }
@@ -110,7 +124,7 @@ enum DebugScript {
                     DispatchQueue.main.async { delegate.application(NSApp, open: [url]) }
                 case "loadfile":
                     // Load Grid File… (menu bar or Settings), its panel and any alert driven from outside.
-                    DispatchQueue.main.async { delegate.loadGridFile() }
+                    DispatchQueue.main.async { delegate.loadGridFile(done: nil) }
                 case "alert":
                     // Prints the texts of the modal window up (an alert), then presses the button titled `arg`, if any.
                     guard let window = NSApp.modalWindow, let view = window.contentView else {

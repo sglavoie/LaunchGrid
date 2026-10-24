@@ -430,7 +430,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "e": state.editing.toggle()
             // Search results hide the page; selecting it unseen would let ⌫ remove it.
             case "a": if state.query.isEmpty { selectAll() }
-            case "f": state.endSearch()
+            case "f": if !state.query.isEmpty { state.endSearch() }
             case "g": state.groupSelection()
             case "n":
                 // The new page is shown, so nothing may stay in front of it.

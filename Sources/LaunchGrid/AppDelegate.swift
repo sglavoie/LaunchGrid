@@ -218,28 +218,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     /// Loads a layout file, from Finder or the Load Grid File panel, asking before it replaces
-    /// a grid that has apps on it.
-    private func openLayout(_ url: URL) {
+    /// a grid that has apps on it. `done` gets what happened, for Settings to show.
+    private func openLayout(_ url: URL, done: (@MainActor (String) -> Void)? = nil) {
         overlay.hide(deactivate: false)
         NSApp.activate()
-        // Read first: a file that can't be loaded shouldn't ask to replace anything.
-        guard let layout = readLayout(at: url) else { return }
-        switch layout {
-        case .database:
-            // Asks once the database is read, and only when apps in it were found.
-            importDatabase(url, from: url.lastPathComponent)
-        case .grid(let grid):
-            if !state.grid.allApps.isEmpty {
-                let alert = NSAlert()
-                alert.messageText = String(localized: "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?")
-                alert.informativeText = String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")
-                alert.addButton(withTitle: String(localized: "Replace"))
-                alert.addButton(withTitle: String(localized: "Cancel"))
-                guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            // Read first, off the main thread (a file on a stalled volume mustn't hang the app):
+            // a file that can't be loaded shouldn't ask to replace anything.
+            guard let layout = await readLayout(at: url) else { return }
+            switch layout {
+            case .database:
+                // The open panel granted the file alone, not the write-ahead log beside it.
+                let wal = url.path + "-wal"
+                if Sandbox.isActive, FileManager.default.fileExists(atPath: wal) {
+                    guard allowReading(url, from: url.lastPathComponent, checking: wal) else { return }
+                }
+                // Asks once the database is read, and only when apps in it were found.
+                importDatabase(url, from: url.lastPathComponent, done: done)
+            case .grid(let grid, let skipped):
+                let name = url.deletingPathExtension().lastPathComponent
+                // Said before replacing anything, as an unreadable saved layout is.
+                let leftOut = skipped > 0 ? String(localized: "\(skipped) entries in “\(name)” could not be read and will be left out.") : nil
+                if !state.grid.allApps.isEmpty {
+                    let alert = NSAlert()
+                    alert.messageText = String(localized: "Replace your layout with “\(name)”?")
+                    alert.informativeText = [leftOut, String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")]
+                        .compactMap { $0 }.joined(separator: "\n\n")
+                    alert.addButton(withTitle: String(localized: "Replace"))
+                    alert.addButton(withTitle: String(localized: "Cancel"))
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                } else if let leftOut {
+                    showError(String(localized: "Some of “\(name)” couldn't be read"), leftOut)
+                }
+                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid))
+                let message = skipped > 0
+                    ? String(localized: "Loaded \(url.lastPathComponent); left out \(skipped) unreadable entries")
+                    : String(localized: "Loaded \(url.lastPathComponent)")
+                state.showToast(message)
+                done?(message)
+                closeFirstRunIfDone()
             }
-            state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid))
-            state.showToast(String(localized: "Loaded \(url.lastPathComponent)"))
-            closeFirstRunIfDone()
         }
     }
 
@@ -429,7 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: String(localized: "Sort Everything"), action: #selector(sortEverything), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
-        menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile as () -> Void), keyEquivalent: "").target = self
         let importMenu = NSMenu()
         let appGrid = importMenu.addItem(withTitle: String(localized: "From AppGrid…"), action: #selector(importAppGrid as () -> Void), keyEquivalent: "")
         appGrid.target = self
@@ -513,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             },
             importAppGrid: { [weak self] done in self?.importAppGrid(done: done) },
             importLaunchpad: { [weak self] done in self?.importLaunchpad(done: done) },
-            loadFile: { [weak self] in self?.loadGridFile() },
+            loadFile: { [weak self] done in self?.loadGridFile(done: done) },
             saveFile: { [weak self] in self?.saveGridFile() },
             addMissing: { [weak self] in self?.showAddMissing() },
             chooseApps: { [weak self] in self?.showChooseApps() },
@@ -652,8 +670,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Inside the sandbox, a database outside it can only be read once the person picks its
     /// folder (which also covers its write-ahead log). The panel opens on that folder, so
     /// allowing it is one click.
-    private func allowReading(_ url: URL, from source: String) -> Bool {
-        guard Sandbox.isActive, !FileManager.default.isReadableFile(atPath: url.path) else { return true }
+    /// `checking` is the file that has to be readable, the database itself by default.
+    private func allowReading(_ url: URL, from source: String, checking path: String? = nil) -> Bool {
+        let path = path ?? url.path
+        guard Sandbox.isActive, !FileManager.default.isReadableFile(atPath: path) else { return true }
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSOpenPanel()
@@ -663,7 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.canChooseFiles = false
         panel.directoryURL = url.deletingLastPathComponent()
         guard panel.runModal() == .OK else { return false }
-        guard FileManager.default.isReadableFile(atPath: url.path) else {
+        guard FileManager.default.isReadableFile(atPath: path) else {
             showError(String(localized: "Could not import from \(source)"), String(localized: "Choose the folder that holds the \(source) database: \(url.deletingLastPathComponent().path)"))
             return false
         }
@@ -743,6 +763,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func loadGridFile() {
+        loadGridFile(done: nil)
+    }
+
+    /// `done` gets what happened, for Settings to show beside its buttons.
+    func loadGridFile(done: (@MainActor (String) -> Void)?) {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSOpenPanel()
@@ -753,23 +778,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             + ["agrid", "db", "sqlite", "sqlite3"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        openLayout(url)
+        openLayout(url, done: done)
     }
 
     /// What a file opened as a layout holds.
     private enum OpenedLayout {
-        case grid(Grid)
+        /// With how many of its entries couldn't be read and are left out.
+        case grid(Grid, skipped: Int)
         /// A Launchpad or AppGrid database (or an `.agrid` file), for the importer.
         case database
     }
 
     /// Reads and checks a layout file; nil, after saying why, when it can't be loaded.
-    private func readLayout(at url: URL) -> OpenedLayout? {
-        do {
-            let data = try Data(contentsOf: url)
-            if data.prefix(16) == Data("SQLite format 3\0".utf8) { return .database }
-            return .grid(try GridStore.decode(data))
-        } catch {
+    private func readLayout(at url: URL) async -> OpenedLayout? {
+        let outcome = await Task.detached(priority: .userInitiated) {
+            Result { () throws -> OpenedLayout in
+                let data = try Data(contentsOf: url)
+                if data.prefix(16) == Data("SQLite format 3\0".utf8) { return .database }
+                let (grid, skipped) = try GridStore.decodeCountingSkipped(data)
+                return .grid(grid, skipped: skipped)
+            }
+        }.value
+        switch outcome {
+        case .success(let layout): return layout
+        case .failure(let error):
             showError(String(localized: "Could not load the grid file"), error.localizedDescription)
             return nil
         }

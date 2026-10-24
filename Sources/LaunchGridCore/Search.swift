@@ -27,12 +27,15 @@ public enum Search {
         }
         if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
-        if acronym(of: name).hasPrefix(q) { return 600 }
+        // With the humps and without: "qp" is QuickTime Player's initials as much as "qtp" is.
+        if acronym(of: name).hasPrefix(q) || acronym(of: name, humps: false).hasPrefix(q) { return 600 }
         if queryWords.count > 1, startsWordsOrInitials(queryWords, of: words) { return 600 }
         if n.contains(q) { return 500 - min(n.count, 99) }
         // Two characters say more in a script without an alphabet ("网音" for 网易云音乐).
+        // Counted as typed: one Hangul syllable is several letters in `q`.
         let minimum = query.contains(where: TextLine.isUnspaced) ? 2 : 3
-        if q.count >= minimum, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
+        let typed = query.precomposedStringWithCanonicalMapping.filter { !$0.isWhitespace }.count
+        if typed >= minimum, q.count >= minimum, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
         return nil
     }
 
@@ -98,15 +101,16 @@ public enum Search {
     ]
 
     /// Initials of words and of camel-case humps: "Visual Studio Code" → "vsc", "GarageBand" → "gb",
-    /// and after a run of capitals, "PDFExpert" → "pe".
-    static func acronym(of name: String) -> String {
+    /// and after a run of capitals, "PDFExpert" → "pe". Without `humps`, words only: "QuickTime
+    /// Player" → "qp". An apostrophe between letters stays inside the word: "Don't Sleep" → "ds".
+    static func acronym(of name: String, humps: Bool = true) -> String {
         let chars = Array(name)
         var out = ""
         for (i, ch) in chars.enumerated() where ch.isLetter || ch.isNumber {
             let previous: Character = i > 0 ? chars[i - 1] : " "
             let next: Character = i + 1 < chars.count ? chars[i + 1] : " "
-            let wordStart = !(previous.isLetter || previous.isNumber)
-            let hump = ch.isUppercase && (previous.isLowercase || (previous.isUppercase && next.isLowercase))
+            let wordStart = i == 0 || !TextLine.isWord(chars, i - 1)
+            let hump = humps && ch.isUppercase && (previous.isLowercase || (previous.isUppercase && next.isLowercase))
             if wordStart || hump { out.append(ch) }
         }
         return normalize(out)

@@ -223,6 +223,30 @@ func installed(_ name: String) -> InstalledApp {
         next.saveNow()
         #expect(try next.store.loadBackup().allApps.map(\.title) == ["C"], "a new run refreshes it at once")
     }
+
+    @Test func theBackupIsRefreshedAgainOnceTheIntervalHasPassed() throws {
+        let clock = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 0))
+        let writer = LayoutWriter(store: GridStore(url: TempDir.url.appendingPathComponent("grid.json"))) {
+            clock.withLock { $0 }
+        }
+        func save(_ name: String) throws {
+            if let error = writer.save(Grid(pages: [Page(items: [.app(AppRef(bundleID: nil, path: "/Applications/\(name).app", name: name))])])) {
+                throw error
+            }
+        }
+        func backup() throws -> [String] { try writer.store.loadBackup().allApps.map(\.title) }
+        try save("A")
+        try save("B") // the first save to refresh it: A
+        try save("C")
+        clock.withLock { $0 += LayoutWriter.backupInterval - 1 }
+        try save("D")
+        #expect(try backup() == ["A"], "kept until the interval has passed")
+        clock.withLock { $0 += 1 }
+        try save("E")
+        #expect(try backup() == ["D"], "then refreshed with the save before")
+        try save("F")
+        #expect(try backup() == ["D"])
+    }
 }
 
 @MainActor @Suite(.tempDir) struct SelectionTests {
@@ -449,6 +473,19 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.map(\.name) == ["B", "C"])
         state.undo()
         #expect(state.grid.allApps.map(\.name) == ["B"])
+    }
+
+    @Test func aDeletedAppDoesNotBecomeTheCopyBesideIt() {
+        let xcode = InstalledApp(bundleID: "com.test.xcode", path: "/Applications/LGTestXcode.app", name: "LGTestXcode")
+        let beta = InstalledApp(bundleID: "com.test.xcode", path: "/Applications/LGTestXcode-beta.app", name: "LGTestXcode-beta")
+        let state = makeState(["A"])
+        state.prefs.autoAddApps = false
+        state.catalogScanned([installed("A"), xcode])
+        state.apply { $0.appendAtEnd([.app(xcode.makeRef())]) }
+        state.catalogScanned([installed("A"), xcode, beta])
+        state.catalogScanned([installed("A"), beta]) // Xcode deleted
+        #expect(state.grid.allApps.map(\.name) == ["A"])
+        #expect(state.missingApps == [beta])
     }
 
     @Test func copiesSharingABundleIDAreChosenSeparately() {
@@ -1009,6 +1046,29 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
+@Suite(.tempDir) struct BlurCacheIdentityTests {
+    @Test func aPictureCopiedOverInPlaceIsANewPicture() throws {
+        try FileManager.default.createDirectory(at: TempDir.url, withIntermediateDirectories: true)
+        let url = TempDir.url.appendingPathComponent("bg.jpg")
+        try Data(repeating: 1, count: 200_000).write(to: url)
+        let first = ImageBlurCache.identity(of: url)
+        #expect(ImageBlurCache.identity(of: url) == first, "the same file reads the same")
+
+        // Written into the same file, as `cp` does: the same inode and the same size.
+        func overwrite(at offset: UInt64) throws {
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.seek(toOffset: offset)
+            try handle.write(contentsOf: Data([2]))
+            try handle.close()
+        }
+        try overwrite(at: 199_999)
+        let second = ImageBlurCache.identity(of: url)
+        #expect(second != first, "a change at the end")
+        try overwrite(at: 0)
+        #expect(ImageBlurCache.identity(of: url) != second, "a change at the start")
+    }
+}
+
 @MainActor @Suite(.tempDir) struct DragDeferralTests {
     @Test func aScanDuringADragWaitsForTheDrop() {
         let state = makeState(["A"])
@@ -1037,6 +1097,27 @@ func installed(_ name: String) -> InstalledApp {
         state.closeFolder()
         state.didHide()
         #expect(state.openFolderID == nil, "hiding closes it")
+    }
+
+    @Test func aSearchEndedAnotherWayForgetsTheFolderItStartedIn() throws {
+        let state = makeState(["A", "B", "C"])
+        let ids = state.grid.pages[0].items.map(\.id)
+        state.apply { _ = $0.group(Array(ids.prefix(2)), name: "F") }
+        let folder = try #require(state.grid.pages[0].items.compactMap(\.folder).first)
+        state.openFolder(folder.id)
+        state.folderBeforeSearch = (folder.id, 0) // as typing does
+        state.openFolderID = nil
+        state.query = "c"
+        state.didHide()
+        state.endSearch()
+        #expect(state.openFolderID == nil, "a later ⌘F or Esc doesn't reopen it")
+
+        state.openFolder(folder.id)
+        state.folderBeforeSearch = (folder.id, 0)
+        state.openFolderID = nil
+        state.query = "c"
+        state.endSearch()
+        #expect(state.openFolderID == folder.id, "ending the search itself still goes back")
     }
 
     @Test func swipingPastTheFirstOrLastPageGivesWayLittle() {

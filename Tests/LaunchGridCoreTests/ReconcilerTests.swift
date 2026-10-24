@@ -151,6 +151,26 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(moved.moved == ["Xcode-beta"])
     }
 
+    @Test func aGoneAppDoesNotBecomeACopyThatWasThereAllAlong() {
+        let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        let beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
+        // Xcode.app is deleted; the beta, never added, was installed beside it.
+        let report = Reconciler.reconcile(&g, installed: [beta], autoAdd: false, pathExists: { _ in false },
+                                          wasInstalledBefore: { $0 == beta.path })
+        #expect(report.moved.isEmpty && report.removed == ["Xcode"])
+        #expect(g.allApps.isEmpty)
+        #expect(Reconciler.missingApps(in: Grid(pages: [Page(items: [.app(xcode)])]), installed: [beta],
+                                       wasInstalledBefore: { $0 == beta.path }) == [beta],
+                "nor does it stand for the beta in Add Missing Apps")
+
+        // Renamed: the copy with another name is new, so it is the same app.
+        var h = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
+        let renamed = Reconciler.reconcile(&h, installed: [beta], autoAdd: false, pathExists: { _ in false },
+                                           wasInstalledBefore: { _ in false })
+        #expect(renamed.moved == ["Xcode-beta"])
+    }
+
     @Test func movedRefSkipsACopyTheUserRemoved() {
         let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
         let beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
@@ -887,6 +907,52 @@ func tempDir(_ prefix: String) -> URL {
         #expect(LaunchpadImporter.walHeader(url.path + "-wal") == first, "appending keeps the header")
         #expect(sqlite3_exec(db, "PRAGMA wal_checkpoint(RESTART); INSERT INTO t VALUES (3);", nil, nil, nil) == SQLITE_OK)
         #expect(LaunchpadImporter.walHeader(url.path + "-wal") != first, "a reset log has new salts")
+    }
+
+    @Test func aLogResetBetweenTheTwoCopiesIsCopiedAgain() throws {
+        let url = tempDir("lp").appendingPathExtension("db")
+        let copy = tempDir("lp-copy").appendingPathExtension("db")
+        defer {
+            for base in [url, copy] { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: base.path + suffix) } }
+        }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let setup = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE t (a); INSERT INTO t VALUES (1);"
+        #expect(sqlite3_exec(db, setup, nil, nil, nil) == SQLITE_OK)
+        func reset() { sqlite3_exec(db, "PRAGMA wal_checkpoint(RESTART); INSERT INTO t VALUES (2);", nil, nil, nil) }
+
+        var resets = 0
+        try LaunchpadImporter.copyDatabase(at: url, to: copy) { if resets == 0 { resets += 1; reset() } }
+        #expect(LaunchpadImporter.walHeader(copy.path + "-wal") == LaunchpadImporter.walHeader(url.path + "-wal"),
+                "the second try copied a matching pair")
+
+        #expect(throws: LaunchpadImporter.ImportError.self, "a log reset every time is given up on") {
+            try LaunchpadImporter.copyDatabase(at: url, to: copy, attempts: 3) { reset() }
+        }
+    }
+
+    @Test func aLogCheckpointedAwayMidCopyIsNotAnError() throws {
+        let url = tempDir("lp").appendingPathExtension("db")
+        let copy = tempDir("lp-copy").appendingPathExtension("db")
+        defer {
+            for base in [url, copy] { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: base.path + suffix) } }
+        }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        let setup = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE t (a); INSERT INTO t VALUES (1);"
+        #expect(sqlite3_exec(db, setup, nil, nil, nil) == SQLITE_OK)
+        var closed = false
+        // Checkpointed and gone, as when the last connection closes (Apple's SQLite keeps the
+        // file by default, so it is deleted here).
+        try LaunchpadImporter.copyDatabase(at: url, to: copy) {
+            guard !closed else { return }
+            closed = true
+            sqlite3_close(db)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+        }
+        #expect(!FileManager.default.fileExists(atPath: url.path + "-wal"))
+        #expect(!FileManager.default.fileExists(atPath: copy.path + "-wal"))
     }
 
     @Test func survivesParentCycles() throws {

@@ -344,7 +344,31 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
     }
 }
 
+@Suite struct FollowMovesTests {
+    @Test func appsOnPagesInFoldersAndRecentlyPrunedFollowTheirMoves() {
+        let (a, b, c, d) = (app("A"), app("B"), app("C"), app("D"))
+        var g = Grid(pages: [Page(items: [.app(a), .folder(Folder(name: "F", apps: [b, c]))])])
+        g.recentlyPruned = [PrunedApp(app: d, prunedAt: Date(), pageID: g.pages[0].id, index: 2)]
+        let moves = [a.path: "/Users/x/A.app", c.path: "/Volumes/X/C.app", d.path: "/Users/x/D.app"]
+        g.followMoves(moves)
+        #expect(g.allApps.map(\.path) == ["/Users/x/A.app", b.path, "/Volumes/X/C.app"])
+        #expect(g.allApps.map(\.id) == [a.id, b.id, c.id], "the same tiles")
+        #expect(g.recentlyPruned.map(\.app.path) == ["/Users/x/D.app"])
+    }
+}
+
 @Suite struct GridStoreTests {
+    @Test func aFileWithNoReadableEntryIsBrokenNotEmpty() {
+        let json = #"{"version": 1, "pages": [{"items": [{"type": "app", "app": {"name": "No path"}}, {"type": "nope"}]}]}"#
+        #expect {
+            try GridStore.decode(Data(json.utf8))
+        } throws: { error in
+            if case GridFileError.invalid = error { true } else { false }
+        }
+        let empty = #"{"version": 1, "pages": [{"items": []}]}"#
+        #expect((try? GridStore.decode(Data(empty.utf8)))?.allApps.isEmpty == true, "an empty layout is still one")
+    }
+
     @Test func jsonRoundTrip() throws {
         var g = Grid(rows: 4, columns: 6, pages: [Page(title: "Work", items: [.app(app("A")), .app(app("B"))])])
         g.group([g.pages[0].items[1].id], name: "Folder")
@@ -369,6 +393,28 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         } throws: { error in
             if case GridFileError.unsupportedVersion(2) = error { true } else { false }
         }
+    }
+
+    @Test func aVersionThatIsNotAWholeNumberIsNeverReadAsOne() {
+        func error(_ version: String) -> GridFileError? {
+            let json = #"{"version": \#(version), "rows": 5, "columns": 7, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app"}}]}]}"#
+            do { _ = try GridStore.decode(Data(json.utf8)); return nil } catch { return error as? GridFileError }
+        }
+        for newer in [#""2.1""#, "1.5", "1e40"] {
+            guard case .unsupportedVersion = error(newer) else { Issue.record("\(newer) isn't newer"); continue }
+        }
+        for broken in [#"{"major": 2}"#, #""one""#, "0.5", "[1]"] {
+            guard case .invalid = error(broken) else { Issue.record("\(broken) isn't invalid"); continue }
+        }
+        #expect(error("null") == nil, "an empty version is version 1")
+        #expect(error("1.0") == nil)
+    }
+
+    @Test func anUnreadableRemovedAppIsSkippedNotTheWholeFile() throws {
+        let json = #"{"version": 1, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app"}}]}], "removedBundleIDs": ["com.test.x", 3]}"#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(grid.removedBundleIDs == ["com.test.x"])
+        #expect(skipped == 1)
     }
 
     @Test func rejectsOutOfRangeSize() {
@@ -516,6 +562,22 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("Wi-Fi Explorer", query: " - ") == nil)
         #expect(Search.score("Почта", query: "пт") == nil, "two Cyrillic letters aren't a subsequence either")
         #expect(Search.score("Почта", query: "пчт") != nil)
+    }
+
+    @Test func initialsSkipCapitalsInsideEarlierWordsAndApostrophes() {
+        #expect(Search.score("QuickTime Player", query: "qp") == 600)
+        #expect(Search.score("QuickTime Player", query: "qtp") == 600, "the humps still count")
+        #expect(Search.score("iPhone Mirroring", query: "im") == 600)
+        #expect(Search.score("Don't Sleep", query: "ds") == 600)
+        #expect(Search.score("Don’t Sleep", query: "ds") == 600, "a curly apostrophe too")
+        #expect(Search.score("Visual Studio Code", query: "vsc") == 600)
+    }
+
+    @Test func oneHangulSyllableIsNotEnoughForAFuzzyMatch() {
+        #expect(Search.score("학습 노트", query: "한") == nil)
+        #expect(Search.score("카카오톡", query: "칵") == nil)
+        #expect(Search.score("카카오톡", query: "카톡") == nil, "two syllables are two letters, as in Latin")
+        #expect(Search.score("카카오톡", query: "카오톡") != nil)
     }
 
     @Test func aHangulSyllableStillBeingTypedMatches() {

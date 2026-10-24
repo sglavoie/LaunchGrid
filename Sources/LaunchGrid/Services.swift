@@ -621,6 +621,17 @@ enum FileAccess {
         return restore(prefs: prefs)
     }
 
+    /// `follow` for each of `paths`, apps a scan found gone, that has a bookmark in use: one
+    /// added with Browse and moved while LaunchGrid ran is followed rather than pruned.
+    static func followVanished(_ paths: some Sequence<String>, prefs: Preferences) -> [String: String] {
+        guard Sandbox.isActive else { return [:] }
+        var moves: [String: String] = [:]
+        for path in paths where granted[path] != nil {
+            moves.merge(follow(path, prefs: prefs)) { found, _ in found }
+        }
+        return moves
+    }
+
     /// Points the settings naming `old` (an extra scan folder, the background picture) at `new`.
     static func migrate(_ prefs: Preferences, from old: String, to new: String) {
         if prefs.extraFolders.contains(old) {

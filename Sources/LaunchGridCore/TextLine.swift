@@ -78,7 +78,7 @@ public struct TextLine: Equatable, Sendable {
 
     /// Whether `chars[k]` belongs to a word: a letter or digit, or an apostrophe between
     /// letters, so "don't" is one word, as macOS treats it.
-    private static func isWord(_ chars: [Character], _ k: Int) -> Bool {
+    static func isWord(_ chars: [Character], _ k: Int) -> Bool {
         let c = chars[k]
         if c.isLetter || c.isNumber { return true }
         guard c == "'" || c == "’", k > 0, k + 1 < chars.count else { return false }

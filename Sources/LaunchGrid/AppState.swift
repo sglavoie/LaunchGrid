@@ -54,6 +54,10 @@ final class AppState {
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
     /// Real paths of apps the scan found through a symlink, to the paths it lists them at.
     @ObservationIgnored private var pathAliases: [String: String] = [:]
+    /// Paths of apps any scan this run found, and those found before the latest scan: a tile
+    /// whose app is gone doesn't become a copy that was there beside it all along.
+    @ObservationIgnored private var everInstalled: Set<String> = []
+    @ObservationIgnored private var installedBefore: Set<String> = []
     /// Apps on the grid from outside the scan folders, read off the main thread with each
     /// scan. `outsideChecked` holds every path looked at, found or not, and `outsideExisting`
     /// those with something on disk (an app, or a bundle that couldn't be read).
@@ -93,6 +97,9 @@ final class AppState {
         didSet {
             queryCaret = query.count
             if query != oldValue { focusIndex = query.isEmpty ? nil : 0 }
+            // However the search ended (a page jump, a reveal, hiding), the folder it started
+            // in is no longer one to go back to.
+            if query.isEmpty { folderBeforeSearch = nil }
         }
     }
     /// Caret in the search, in characters. Setting `query` puts it at the end.
@@ -501,10 +508,15 @@ final class AppState {
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         pathAliases = aliases
+        installedBefore = everInstalled
+        everInstalled.formUnion(apps.map(\.path))
         let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { isOutside($0) })
         outsideApps = outside.apps
         outsideChecked = outside.checked
         outsideExisting = outside.existing
+        // Apps added with Browse that moved since they were read: their bookmarks know where
+        // to, so they are followed before reconciling would prune them as gone.
+        followMovedApps(FileAccess.followVanished(outside.checked.subtracting(outside.existing), prefs: prefs))
         let disk = disk ?? DiskState.read(roots: prefs.scanRoots.map(\.path), unlisted: unlisted)
         if self.disk != disk { self.disk = disk }
         if unlistedFolders != unlisted { unlistedFolders = unlisted }
@@ -622,7 +634,8 @@ final class AppState {
         var g = grid
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
                                           isReachable: { !unchecked.contains($0) && reachable($0) },
-                                          pathExists: knownToExist, aliases: pathAliases)
+                                          pathExists: knownToExist, aliases: pathAliases,
+                                          wasInstalledBefore: installedBefore.contains)
         guard g != grid else { return }
         if !report.isEmpty {
             NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
@@ -656,7 +669,9 @@ final class AppState {
         bundleID != nil && bundleID == ownBundleID
     }
 
-    var missingApps: [InstalledApp] { Reconciler.missingApps(in: grid, installed: installed) }
+    var missingApps: [InstalledApp] {
+        Reconciler.missingApps(in: grid, installed: installed, wasInstalledBefore: installedBefore.contains)
+    }
 
     /// Installed apps kept off the grid by an exclusion. Not the size of `removedBundleIDs`,
     /// which also remembers apps deleted since, and may hold a bundle ID and a path for one app.
@@ -763,9 +778,9 @@ final class AppState {
     /// Clears the search (Esc, emptying it, a click on the background), reopening the folder
     /// it started in.
     func endSearch() {
+        let folder = folderBeforeSearch
         query = ""
-        guard let folder = folderBeforeSearch else { return }
-        folderBeforeSearch = nil
+        guard let folder else { return }
         guard grid.folder(folder.id) != nil else { return }
         openFolder(folder.id)
         let pages = FolderLayout.pageCount(apps: openFolder?.apps.count ?? 0, grid: grid)
@@ -1158,9 +1173,12 @@ final class LayoutWriter: @unchecked Sendable {
     let queue = DispatchQueue(label: "com.sglavoie.launchgrid.save", qos: .utility)
     /// When a save last refreshed the backup; only read and written on `queue`.
     private var lastBackup: Date?
+    /// The clock for `backupInterval`, for tests.
+    private let now: @Sendable () -> Date
 
-    init(store: GridStore) {
+    init(store: GridStore, now: @escaping @Sendable () -> Date = { Date() }) {
         self.store = store
+        self.now = now
     }
 
     /// Saves now, after any save still under way; the error, if it failed.
@@ -1181,9 +1199,9 @@ final class LayoutWriter: @unchecked Sendable {
         #if !APP_STORE
         if let debugDelay { Thread.sleep(forTimeInterval: debugDelay) }
         #endif
-        let refreshBackup = lastBackup.map { Date().timeIntervalSince($0) >= Self.backupInterval } ?? true
+        let refreshBackup = lastBackup.map { now().timeIntervalSince($0) >= Self.backupInterval } ?? true
         do {
-            if try store.save(grid, refreshingBackup: refreshBackup) { lastBackup = Date() }
+            if try store.save(grid, refreshingBackup: refreshBackup) { lastBackup = now() }
             return nil
         } catch {
             return error

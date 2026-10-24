@@ -34,6 +34,9 @@ public enum Reconciler {
     ///     return to their old slot (even with `autoAdd` off) when they show up again.
     ///   - aliases: `AppScanner.ScanResult.aliases`. A ref at an app's real path takes the
     ///     path the scan lists it at, so it isn't added a second time.
+    ///   - wasInstalledBefore: whether an app was already at this path before the latest scan.
+    ///     A ref whose app is gone follows a copy with another name (its app renamed) only when
+    ///     that copy is new: Xcode deleted doesn't make its tile Xcode-beta, there all along.
     public static func reconcile(
         _ grid: inout Grid,
         installed: [InstalledApp],
@@ -42,6 +45,7 @@ public enum Reconciler {
         isReachable: (String) -> Bool = { _ in true },
         pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
         aliases: [String: String] = [:],
+        wasInstalledBefore: (String) -> Bool = { _ in false },
         now: Date = Date()
     ) -> ReconcileReport {
         var report = ReconcileReport()
@@ -74,7 +78,7 @@ public enum Reconciler {
                let other = likelyMove(of: ref, among: byBundle[id]?.filter {
                    !gridPaths.contains($0.path) && !seen.contains($0.path)
                        && !removed.contains($0.key) && !removed.contains($0.path)
-               } ?? []) {
+               } ?? [], wasInstalledBefore: wasInstalledBefore) {
                 return (other, true)
             }
             // Another app now lives at this path (e.g. an update changed the bundle ID): adopt
@@ -208,17 +212,20 @@ public enum Reconciler {
     }
 
     /// Of the copies of a moved app (same bundle ID), the one it most likely moved to: the
-    /// one with its file name, then the one with its name, then the first.
-    static func likelyMove(of ref: AppRef, among candidates: [InstalledApp]) -> InstalledApp? {
+    /// one with its file name, then the one with its name, then the first that is new (the
+    /// app renamed), not one that was there beside it all along.
+    static func likelyMove(of ref: AppRef, among candidates: [InstalledApp],
+                           wasInstalledBefore: (String) -> Bool = { _ in false }) -> InstalledApp? {
         let file = (ref.path as NSString).lastPathComponent
         return candidates.first { ($0.path as NSString).lastPathComponent == file }
             ?? candidates.first { $0.name == ref.name }
-            ?? candidates.first
+            ?? candidates.first { !wasInstalledBefore($0.path) }
     }
 
     /// Installed apps that are not on the grid, for "Add Missing Apps…". A copy sharing its
     /// bundle ID with one on the grid (Xcode-beta beside Xcode) counts as missing.
-    public static func missingApps(in grid: Grid, installed: [InstalledApp]) -> [InstalledApp] {
+    public static func missingApps(in grid: Grid, installed: [InstalledApp],
+                                   wasInstalledBefore: (String) -> Bool = { _ in false }) -> [InstalledApp] {
         let paths = Set(grid.allApps.map(\.path))
         let installedPaths = Set(installed.map(\.path))
         // A ref pointing nowhere installed is its app, moved: it stands for one copy with its
@@ -228,7 +235,7 @@ public enum Reconciler {
         var claimed = Set<String>()
         for ref in grid.allApps where !installedPaths.contains(ref.path) {
             let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) }
-            if let copy = likelyMove(of: ref, among: free) { claimed.insert(copy.path) }
+            if let copy = likelyMove(of: ref, among: free, wasInstalledBefore: wasInstalledBefore) { claimed.insert(copy.path) }
         }
         return offGrid
             .filter { !claimed.contains($0.path) }

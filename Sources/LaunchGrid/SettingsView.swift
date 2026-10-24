@@ -56,7 +56,7 @@ struct LibraryActions: @unchecked Sendable {
     /// Each asks before replacing a grid with apps on it; `done` gets the outcome to show.
     var importAppGrid: (_ done: (@MainActor (String) -> Void)?) -> Void
     var importLaunchpad: (_ done: (@MainActor (String) -> Void)?) -> Void
-    var loadFile: () -> Void
+    var loadFile: (_ done: (@MainActor (String) -> Void)?) -> Void
     /// Where the layout was saved; nil when cancelled or failed (already reported).
     var saveFile: () -> URL?
     var addMissing: () -> Void
@@ -346,6 +346,9 @@ struct LayoutSettings: View {
     @State private var rows = 5
     @State private var columns = 7
     @State private var confirm = false
+    @State private var confirmSort = false
+    /// Confirms a sort here, where the grid isn't in view.
+    @State private var sortStatus: String?
 
     var body: some View {
         @Bindable var prefs = state.prefs
@@ -385,8 +388,21 @@ struct LayoutSettings: View {
                     Text("Mixed with apps").tag(FolderPlacement.mixed)
                 }
                 HStack {
+                    if let sortStatus {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                .accessibilityHidden(true)
+                            Text(sortStatus)
+                        }
+                        .font(.caption)
+                    }
                     Spacer()
-                    Button("Sort Everything") { state.sortEverything() }
+                    Button("Sort Everything…") { confirmSort = true }
+                }
+                .task(id: sortStatus) {
+                    guard sortStatus != nil else { return }
+                    try? await Task.sleep(for: .seconds(4))
+                    if !Task.isCancelled { sortStatus = nil }
                 }
                 Text("Sort Everything re-flows every page and clears page titles. ⌘Z in the grid undoes it.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -396,6 +412,15 @@ struct LayoutSettings: View {
         .onAppear { rows = grid.rows; columns = grid.columns }
         // Undo, a load or an import can resize the grid while this tab is open.
         .onChange(of: [grid.rows, grid.columns]) { rows = state.grid.rows; columns = state.grid.columns }
+        // The grid, where ⌘Z would undo it, is hidden behind Settings: ask first.
+        .confirmationDialog("Sort every page?", isPresented: $confirmSort) {
+            Button("Sort Everything", role: .destructive) {
+                state.sortEverything()
+                sortStatus = String(localized: "Sorted — ⌘Z in the grid undoes it")
+            }
+        } message: {
+            Text("Apps and folders are sorted by name and fill each page before the next. Page titles are cleared. You can undo this from the grid with ⌘Z.")
+        }
         .confirmationDialog("Re-flow the grid?", isPresented: $confirm) {
             Button("Resize to \(rows) × \(columns)") { apply() }
         } message: {
@@ -416,7 +441,7 @@ struct LibrarySettings: View {
     @State private var libraryStatus: String?
     /// The grid file last saved from here, to confirm it and show it in Finder.
     @State private var savedFile: URL?
-    /// What the last import from here brought in.
+    /// What the last load or import from here brought in.
     @State private var importStatus: String?
 
     var body: some View {
@@ -503,7 +528,7 @@ struct LibrarySettings: View {
             Section("Grid file") {
                 HStack {
                     Button("Save Grid File…") { if let url = actions.saveFile() { savedFile = url } }
-                    Button("Load Grid File…") { actions.loadFile() }
+                    Button("Load Grid File…") { actions.loadFile { importStatus = $0 } }
                 }
                 if let savedFile {
                     HStack(spacing: 6) {
@@ -749,7 +774,7 @@ struct FirstRunView: View {
                     actions.importLaunchpad(nil)
                 }
             }
-            option("Load a grid file…", "A file saved from LaunchGrid, or an AppGrid .agrid file.", "doc") { actions.loadFile() }
+            option("Load a grid file…", "A file saved from LaunchGrid, or an AppGrid .agrid file.", "doc") { actions.loadFile(nil) }
             Divider()
             // Only the icons that are on (the Dock icon is off by default), and the shortcut
             // only when one is registered: it may be off, or taken by another app.

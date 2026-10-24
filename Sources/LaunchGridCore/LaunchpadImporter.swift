@@ -238,7 +238,8 @@ public enum LaunchpadImporter {
     /// fails its checksum), but one reset by a checkpoint between the two copies no longer
     /// matches the database copied before it. A reset changes the log header's checkpoint
     /// sequence and salts, so the copy is retried until the header held still throughout.
-    static func copyDatabase(at url: URL, to tmp: URL, attempts: Int = 5) throws {
+    /// `betweenCopies` runs after the database is copied and before its log is, for tests.
+    static func copyDatabase(at url: URL, to tmp: URL, attempts: Int = 5, betweenCopies: () -> Void = {}) throws {
         let fm = FileManager.default
         let wal = url.path + "-wal"
         let tmpWAL = tmp.path + "-wal"
@@ -246,6 +247,7 @@ public enum LaunchpadImporter {
             for path in [tmp.path, tmpWAL] { try? fm.removeItem(atPath: path) }
             let before = walHeader(wal)
             try fm.copyItem(at: url, to: tmp)
+            betweenCopies()
             if fm.fileExists(atPath: wal) {
                 do { try fm.copyItem(atPath: wal, toPath: tmpWAL) }
                 // Checkpointed away since: the header check below sees that and tries again.

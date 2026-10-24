@@ -188,12 +188,29 @@ final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
         }
     }
 
-    /// The path and the file it names now: a picture replaced at the same path (a new file
-    /// saved over it) is a new picture. Not by modification date, which would need a reason
-    /// in the privacy manifest. Reads the disk, so not on the main thread.
+    /// The path, the file it names now, and its size and a hash of its first and last bytes: a
+    /// picture replaced at the same path (a new file saved over it) is a new picture, and so is
+    /// one copied over it in place, which keeps the file. Not by modification date, which would
+    /// need a reason in the privacy manifest. Reads the disk, so not on the main thread.
     static func identity(of url: URL) -> String {
-        let file = (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier
-        return "\(url.path)|\(file.map { String(describing: $0) } ?? "")"
+        let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey, .fileSizeKey])
+        let file = values?.fileResourceIdentifier.map { String(describing: $0) } ?? ""
+        return "\(url.path)|\(file)|\(values?.fileSize ?? -1)|\(contentHash(of: url))"
+    }
+
+    /// A hash of the first and last 64 KB, enough to tell two pictures of the same size apart
+    /// (a camera's pictures start alike) without reading a large one whole.
+    private static func contentHash(of url: URL) -> Int {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? handle.close() }
+        let chunk = 64 * 1024
+        var hasher = Hasher()
+        hasher.combine((try? handle.read(upToCount: chunk)) ?? Data())
+        if let end = try? handle.seekToEnd(), end > UInt64(chunk) {
+            try? handle.seek(toOffset: max(end - UInt64(chunk), UInt64(chunk)))
+            hasher.combine((try? handle.read(upToCount: chunk)) ?? Data())
+        }
+        return hasher.finalize()
     }
 
     /// What a picture is rendered for: the blur radius in points, and the size (in points,
