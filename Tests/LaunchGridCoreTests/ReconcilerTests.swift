@@ -383,6 +383,22 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.pages[1].items[0].folder?.apps.map(\.name) == ["B"])
     }
 
+    @Test func pagesEmptiedTogetherComeBackInPlaceWhateverTheOrder() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        let names = ["A", "X", "Y", "C"]
+        for returning in [["X", "Y"], ["Y", "X"]] {
+            var g = Grid(rows: 1, columns: 1, pages: names.map { Page(items: [.app(app($0))]) })
+            _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("C")], autoAdd: false, now: t0)
+            #expect(g.pages.map(titles) == [["A"], ["C"]])
+            var back = ["A", "C"]
+            for (i, name) in returning.enumerated() {
+                back.append(name)
+                _ = Reconciler.reconcile(&g, installed: back.map { installed($0) }, autoAdd: false, now: t0 + Double(i + 1))
+            }
+            #expect(g.pages.map(titles) == names.map { [$0] }, "returning \(returning)")
+        }
+    }
+
     @Test func aPageEmptiedLaterStillComesBackForAnAppPrunedEarlier() {
         let t0 = Date(timeIntervalSinceReferenceDate: 0)
         var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))]), Page(title: "P", items: [.app(app("B")), .app(app("C"))])])

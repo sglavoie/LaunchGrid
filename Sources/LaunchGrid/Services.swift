@@ -18,11 +18,12 @@ enum Launcher {
     }
 
     /// Opens the app at its stored path, falling back to its bundle ID when it's gone from
-    /// there. Returns the path that was actually launched.
+    /// there. Returns the path that was actually launched, and the app running from it.
+    /// - Parameter activates: false opens it behind the grid, which stays up to open more.
     @MainActor
-    static func launch(_ app: AppRef) async throws -> String {
+    static func launch(_ app: AppRef, activates: Bool = true) async throws -> (path: String, running: NSRunningApplication) {
         let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
+        config.activates = activates
         // Looked at off the main thread, so a stalled volume doesn't hang the app.
         let path = app.path
         let (exists, unmounted) = await Task.detached {
@@ -31,8 +32,7 @@ enum Launcher {
         // The app is still there and failed to open (damaged, refused by Gatekeeper, cancelled):
         // that's the answer, not a reason to open another copy with its bundle ID.
         if exists {
-            _ = try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: config)
-            return app.path
+            return (app.path, try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: config))
         }
         // An app on a volume that isn't mounted hasn't gone anywhere: say so, rather than open
         // another copy with its bundle ID (Xcode for Xcode-beta).
@@ -40,10 +40,21 @@ enum Launcher {
         // Retry elsewhere only if Launch Services knows another copy, and not one in the Trash.
         if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
            url.path != app.path, !isInTrash(url.path) {
-            _ = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
-            return url.path
+            return (url.path, try await NSWorkspace.shared.openApplication(at: url, configuration: config))
         }
         throw NotFound()
+    }
+
+    /// Brings an app opened behind the grid to the front. Through Launch Services, as opening
+    /// it again: an inactive app asking another to activate may be refused.
+    @MainActor
+    static func bringForward(_ app: NSRunningApplication) {
+        guard !app.isTerminated, let url = app.bundleURL else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if let error { NSLog("LaunchGrid: could not bring \(url.path) forward: \(error)") }
+        }
     }
 
     /// Whether `path` is inside a Trash: the home one (~/.Trash) or a volume's (.Trashes).
@@ -598,6 +609,16 @@ enum FileAccess {
         }
         d.set(saved, forKey: key)
         return moves
+    }
+
+    /// Resolves the bookmark kept for `path` again, after it was seen to move while in use
+    /// (launching it opened a copy elsewhere): access held for the old path doesn't follow
+    /// the move, and the bookmark must be filed under the new path, or the next save forgets
+    /// it as no longer used. Returns the moves found, as `restore` does.
+    static func follow(_ path: String, prefs: Preferences) -> [String: String] {
+        guard Sandbox.isActive, let url = granted.removeValue(forKey: path) else { return [:] }
+        url.stopAccessingSecurityScopedResource()
+        return restore(prefs: prefs)
     }
 
     /// Points the settings naming `old` (an extra scan folder, the background picture) at `new`.

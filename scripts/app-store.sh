@@ -34,9 +34,16 @@ if [ "$UPLOAD" = 1 ]; then
     fi
 fi
 
-# The build number is the commit count, so uncommitted changes would ship under a used number.
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Commit or stash your changes first." >&2
+# shellcheck source=scripts/release-checks.sh
+. scripts/release-checks.sh
+require_clean_tree
+require_gh
+require_pushed_head
+# One version, one build: the App Store build of a version already released on GitHub has to
+# come from that release's commit, or two different binaries would share its number.
+RELEASED="$(released_commit)"
+if [ -n "$RELEASED" ] && [ "$RELEASED" != "$(git rev-parse HEAD)" ]; then
+    echo "v$VERSION was released from another commit; bump VERSION in scripts/bundle.sh and commit first." >&2
     exit 1
 fi
 if [ ! -f "$PROFILE" ]; then

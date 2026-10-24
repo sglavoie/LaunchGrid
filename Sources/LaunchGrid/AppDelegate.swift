@@ -118,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
         state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
+        state.onLaunchedBehind = { [weak self] in self?.overlay.launchedBehind = $0 }
         state.onError = { [weak self] title, detail in self?.showError(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
@@ -135,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         if let notice = state.recoveryNotice {
             state.recoveryNotice = nil
-            DispatchQueue.main.async { self.showRecoveryNotice(notice.message, file: notice.file) }
+            DispatchQueue.main.async { self.showRecoveryNotice(notice.title, notice.message, file: notice.file) }
         }
 
         // The hand-over from a second launch is for the installed copy, not a scratch one.
@@ -216,20 +217,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         openLayout(url)
     }
 
+    /// Loads a layout file, from Finder or the Load Grid File panel, asking before it replaces
+    /// a grid that has apps on it.
     private func openLayout(_ url: URL) {
         overlay.hide(deactivate: false)
         NSApp.activate()
         // Read first: a file that can't be loaded shouldn't ask to replace anything.
         guard let layout = readLayout(at: url) else { return }
-        if !state.grid.allApps.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = String(localized: "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?")
-            alert.informativeText = String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")
-            alert.addButton(withTitle: String(localized: "Replace"))
-            alert.addButton(withTitle: String(localized: "Cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        switch layout {
+        case .database:
+            // Asks once the database is read, and only when apps in it were found.
+            importDatabase(url, from: url.lastPathComponent)
+        case .grid(let grid):
+            if !state.grid.allApps.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Replace your layout with “\(url.deletingPathExtension().lastPathComponent)”?")
+                alert.informativeText = String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")
+                alert.addButton(withTitle: String(localized: "Replace"))
+                alert.addButton(withTitle: String(localized: "Cancel"))
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid))
+            state.showToast(String(localized: "Loaded \(url.lastPathComponent)"))
+            closeFirstRunIfDone()
         }
-        load(layout, from: url)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -619,7 +630,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     #if !APP_STORE
     /// For the debug scripts: imports `url` as Settings' Import buttons do, asking first.
     func debugImport(_ url: URL, from source: String) {
-        importDatabase(url, from: source, confirming: true) { print("imported: \($0)"); fflush(stdout) }
+        importDatabase(url, from: source) { print("imported: \($0)"); fflush(stdout) }
     }
     #endif
 
@@ -630,12 +641,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// `done` gets what happened, for Settings to show beside its buttons.
     func importAppGrid(done: (@MainActor (String) -> Void)?) {
         guard let url = LaunchpadImporter.appGridDatabaseURL, allowReading(url, from: "AppGrid") else { return }
-        importDatabase(url, from: "AppGrid", confirming: true, done: done)
+        importDatabase(url, from: "AppGrid", done: done)
     }
 
     func importLaunchpad(done: (@MainActor (String) -> Void)?) {
         guard let url = LaunchpadImporter.launchpadDatabaseURL, allowReading(url, from: "Launchpad") else { return }
-        importDatabase(url, from: "Launchpad", confirming: true, done: done)
+        importDatabase(url, from: "Launchpad", done: done)
     }
 
     /// Inside the sandbox, a database outside it can only be read once the person picks its
@@ -659,9 +670,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return true
     }
 
-    /// - Parameter confirming: asks before replacing a grid that has apps on it, as loading a
-    ///   grid file does (which asked already when it is the one importing).
-    private func importDatabase(_ url: URL, from source: String, confirming: Bool = false,
+    /// Asks before replacing a grid that has apps on it, as loading a grid file does, once the
+    /// database is read: there may be nothing in it to import.
+    private func importDatabase(_ url: URL, from source: String,
                                 done: (@MainActor (String) -> Void)? = nil) {
         let rows = state.grid.rows, columns = state.grid.columns
         let installed = state.installed.map(\.path)
@@ -682,7 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     showError(String(localized: "Nothing to import"), String(localized: "No apps in the \(source) layout could be found on this Mac."))
                     return
                 }
-                if confirming && !state.grid.allApps.isEmpty {
+                if !state.grid.allApps.isEmpty {
                     overlay.hide(deactivate: false)
                     NSApp.activate()
                     let alert = NSAlert()
@@ -741,8 +752,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.allowedContentTypes = [.launchGridLayout, .json]
             + ["agrid", "db", "sqlite", "sqlite3"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url, let layout = readLayout(at: url) else { return }
-        load(layout, from: url)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openLayout(url)
     }
 
     /// What a file opened as a layout holds.
@@ -764,25 +775,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
 
-    private func load(_ layout: OpenedLayout, from url: URL) {
-        switch layout {
-        case .database:
-            importDatabase(url, from: url.lastPathComponent)
-        case .grid(let grid):
-            state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid))
-            state.showToast(String(localized: "Loaded \(url.lastPathComponent)"))
-            closeFirstRunIfDone()
-        }
-    }
-
     private func closeFirstRunIfDone() {
         if state.hasGridFile { windows["firstRun"]?.close() }
     }
 
-    private func showRecoveryNotice(_ message: String, file: URL) {
+    private func showRecoveryNotice(_ title: String, _ message: String, file: URL) {
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = String(localized: "Your layout was restored from the previous save")
+        alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: String(localized: "OK"))
         alert.addButton(withTitle: String(localized: "Show in Finder"))

@@ -28,6 +28,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var lastWheelFlip = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
     private var visibilityGeneration = 0
+    /// The last app opened behind the grid while it stayed up ("Hide after opening an app"
+    /// off), brought forward when the grid hides.
+    var launchedBehind: NSRunningApplication?
+    /// A window frame waiting to be saved once a move stops.
+    private var frameSaveTask: Task<Void, Never>?
 
     var isVisible: Bool { panel?.isVisible == true && state.isShown }
     var window: NSWindow? { panel }
@@ -40,6 +45,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.placePanel() }
+        }
+        // The panel joins every Space, so it follows a switch unless asked to hide.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isVisible, self.state.prefs.hideOnSpaceChange else { return }
+                self.hide(deactivate: false)
+            }
         }
         installMonitors()
         textInput.onInsert = { [weak self] in self?.insertIntoSearch($0) }
@@ -64,6 +76,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textInput)
+        launchedBehind = nil
         state.didShow()
     }
 
@@ -71,6 +84,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     ///   isn't reported twice.
     func hide(deactivate: Bool = true, saving: Bool = true) {
         guard let panel, panel.isVisible else { return }
+        // While it's still visible, which saving the frame checks.
+        if frameSaveTask != nil { saveWindowFrame() }
         textInput.discardComposition()
         state.isShown = false
         // Written off the main thread, so the fade doesn't wait for the disk. A failure is told
@@ -94,9 +109,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 self.state.didHide()
                 progress.gone = true
                 if progress.saved == false { self.state.reportLastSaveFailure() }
-                // Hand focus back to the previous app unless another of our windows is up.
+                // Hand focus back to the previous app unless another of our windows is up, or
+                // to the last app opened behind the grid while it stayed up.
                 let others = NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }
-                if deactivate && NSApp.isActive && !others { NSApp.hide(nil) }
+                if deactivate, !others, let app = self.launchedBehind {
+                    Launcher.bringForward(app)
+                } else if deactivate && NSApp.isActive && !others {
+                    NSApp.hide(nil)
+                }
+                self.launchedBehind = nil
             }
         })
     }
@@ -209,8 +230,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     // MARK: NSWindowDelegate
 
-    func windowDidResize(_ notification: Notification) { saveWindowFrame() }
-    func windowDidMove(_ notification: Notification) { saveWindowFrame() }
+    // Saved once a resize or move comes to rest, not at each of its many steps.
+    func windowDidResize(_ notification: Notification) {
+        if panel?.inLiveResize != true { scheduleFrameSave() }
+    }
+    func windowDidEndLiveResize(_ notification: Notification) { saveWindowFrame() }
+    func windowDidMove(_ notification: Notification) { scheduleFrameSave() }
+
+    private func scheduleFrameSave() {
+        frameSaveTask?.cancel()
+        frameSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            self?.saveWindowFrame()
+        }
+    }
 
     /// A window dragged to another display takes that display's background with it.
     func windowDidChangeScreen(_ notification: Notification) {
@@ -240,6 +274,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func saveWindowFrame() {
+        frameSaveTask?.cancel()
+        frameSaveTask = nil
         guard !placing, state.prefs.windowMode == .window, let panel, panel.isVisible, let screen = panel.screen else { return }
         var frames = state.prefs.windowFrames
         frames[screen.frameKey] = NSStringFromRect(panel.frame)
@@ -394,7 +430,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "e": state.editing.toggle()
             // Search results hide the page; selecting it unseen would let ⌫ remove it.
             case "a": if state.query.isEmpty { selectAll() }
-            case "f": state.query = ""
+            case "f": state.endSearch()
             case "g": state.groupSelection()
             case "n":
                 // The new page is shown, so nothing may stay in front of it.
@@ -639,8 +675,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Like ⌘-click, without entering edit mode: clicks still open apps.
     private func selectAll() {
-        state.editing = true
         if let f = state.openFolder {
             state.selection = Set(f.apps.map(\.id))
         } else {

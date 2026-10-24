@@ -6,8 +6,10 @@ public enum Search {
     /// A query of several words also counts as a word start when each of its words starts
     /// a different word of the name, in any order ("word micro" finds "Microsoft Word"), and
     /// as initials when its words, in order, start words or spell their initials ("vs code").
-    /// Separators don't count towards a prefix, so "wifi" finds "Wi-Fi Explorer" and
-    /// "visual-" finds "Visual Studio Code" as if typed without them.
+    /// Separators other than spaces don't count towards a prefix, so "wifi" finds "Wi-Fi Explorer"
+    /// and "visual-" finds "Visual Studio Code" as if typed without them. A space typed in the
+    /// query may be skipped ("wi fi" finds "WiFiman"), but one in the name may not: "apps" isn't
+    /// a prefix of "App Store".
     /// Returns nil when there is no match.
     public static func score(_ name: String, query: String) -> Int? {
         let q = normalize(query)
@@ -19,7 +21,10 @@ public enum Search {
         let isSeparator: (Character) -> Bool = { !$0.isLetter && !$0.isNumber }
         let words = n.split(whereSeparator: isSeparator).map(String.init)
         let queryWords = q.split(whereSeparator: isSeparator)
-        if !queryWords.isEmpty, words.joined().hasPrefix(queryWords.joined()) { return 900 - min(n.count, 99) }
+        let (nameKey, queryKey) = (spacedWords(n), spacedWords(q))
+        if !queryKey.isEmpty, nameKey.hasPrefix(queryKey) || nameKey.hasPrefix(queryKey.filter { $0 != " " }) {
+            return 900 - min(n.count, 99)
+        }
         if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
         if acronym(of: name).hasPrefix(q) { return 600 }
@@ -44,8 +49,19 @@ public enum Search {
         .map(\.0)
     }
 
+    /// `s` with separators other than spaces dropped and each run of spaces made one:
+    /// "Wi-Fi  Explorer" → "wifi explorer".
+    private static func spacedWords(_ s: String) -> String {
+        s.split(whereSeparator: \.isWhitespace)
+            .map { $0.filter { $0.isLetter || $0.isNumber } }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     static func normalize(_ s: String) -> String {
-        var s = s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        // Composed first: a name in decomposed form (from an HFS+ disk or a zip) keeps
+        // conjoining Hangul letters that no typed query would equal.
+        var s = s.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
         // Letters the folding leaves alone, written as their plain-letter spelling.
         if s.unicodeScalars.contains(where: { letterSpellings[$0] != nil }) {
             s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap { letterSpellings[$0].map { Array($0.unicodeScalars) } ?? [$0] }))

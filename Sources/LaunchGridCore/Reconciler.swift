@@ -122,6 +122,9 @@ public enum Reconciler {
             return all.suffix(neighbourMemory).map(\.element.1)
         }
 
+        let pageIDs = grid.pages.map(\.id)
+        func pagesBefore(_ p: Int) -> [UUID] { Array(pageIDs[..<p].suffix(neighbourMemory)) }
+
         for p in grid.pages.indices {
             let pageID = grid.pages[p].id
             let items = grid.pages[p].items
@@ -132,6 +135,7 @@ public enum Reconciler {
                         pruned[k].pageEmptied = true
                         pruned[k].pageIndex = p
                         pruned[k].pageTitle = grid.pages[p].title
+                        pruned[k].pageBefore = pagesBefore(p)
                     }
                 }
             }
@@ -173,6 +177,7 @@ public enum Reconciler {
             if let id = entry.folderID, emptiedFolders.contains(id) { entry.folderEmptied = true }
             if let (p, page) = emptied.first(where: { $0.element.id == entry.pageID }) {
                 (entry.pageEmptied, entry.pageIndex, entry.pageTitle) = (true, p, page.title)
+                entry.pageBefore = pagesBefore(p)
             }
             guard let (found, _) = match(for: entry.app) else {
                 memory.append(entry)
@@ -354,7 +359,8 @@ extension Grid {
             insert([item], page: p, at: Self.slot(after: entry.before, fallback: entry.index, in: pages[p].items.map(\.id)))
         } else if entry.pageEmptied == true {
             let page = Page(id: entry.pageID, title: entry.pageTitle, items: [item])
-            pages.insert(page, at: min(max(0, entry.pageIndex ?? pages.count), pages.count))
+            let at = Self.slot(after: entry.pageBefore, fallback: entry.pageIndex ?? pages.count, in: pages.map(\.id))
+            pages.insert(page, at: min(max(0, at), pages.count))
         } else {
             appendToFirstFree([item])
         }

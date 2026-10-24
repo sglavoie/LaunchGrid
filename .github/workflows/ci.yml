@@ -50,14 +50,23 @@ jobs:
         with:
           # Full history: the bundle's build number is `git rev-list --count HEAD`.
           fetch-depth: 0
-      - name: Cache build products
-        uses: actions/cache@v4
+      - name: Select Xcode
+        # Pinned, so an image update doesn't change the compiler unannounced; bump it on purpose.
+        env:
+          XCODE: /Applications/Xcode_26.6.app
+        run: |
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+          swift --version
+          echo "XCODE_BUILD=$(xcodebuild -version | sed -n 's/^Build version //p')" >> "$GITHUB_ENV"
+      - name: Restore build products
+        uses: actions/cache/restore@v4
         with:
           path: .build
           # An exact hit only when nothing changed; otherwise the latest cache makes the build incremental.
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ hashFiles('Sources/**/*.swift', 'Tests/**/*.swift') }}
+          key: spm-${{ runner.os }}-${{ env.XCODE_BUILD }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ hashFiles('Sources/**/*.swift', 'Tests/**/*.swift') }}
           restore-keys: |
-            spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+            spm-${{ runner.os }}-${{ env.XCODE_BUILD }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
       - name: Build
         run: swift build
       - name: Test
@@ -67,7 +76,27 @@ jobs:
         run: swift test --scratch-path .build/app-store -Xswiftc -DAPP_STORE
       - name: Bundle
         # Universal, as the downloadable release is.
-        run: UNIVERSAL=1 scripts/bundle.sh release
+        run: |
+          UNIVERSAL=1 scripts/bundle.sh release
+          plutil -lint build/LaunchGrid.app/Contents/Info.plist scripts/PrivacyInfo.xcprivacy scripts/LaunchGrid.entitlements
+          codesign --verify --strict --verbose=2 build/LaunchGrid.app
+      - name: Bundle the Mac App Store variant
+        # Signed ad hoc with a stand-in profile: checks the variant's own Info.plist keys and
+        # sandbox signing, which otherwise first run on the day of a submission.
+        run: |
+          touch "$RUNNER_TEMP/stand-in.provisionprofile"
+          APP_STORE=1 SANDBOX=1 PROVISIONING_PROFILE="$RUNNER_TEMP/stand-in.provisionprofile" scripts/bundle.sh release
+          plutil -lint build/LaunchGrid.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :DTXcode' build/LaunchGrid.app/Contents/Info.plist
+          codesign --verify --strict --verbose=2 build/LaunchGrid.app
+          codesign -d --entitlements - build/LaunchGrid.app | grep -q com.apple.security.app-sandbox
+      - name: Save build products
+        # Only from main: a cache saved by every pull request push would evict the useful ones.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ env.XCODE_BUILD }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ hashFiles('Sources/**/*.swift', 'Tests/**/*.swift') }}
 
   shellcheck:
     needs: changes

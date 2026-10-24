@@ -114,7 +114,12 @@ struct GeneralSettings: View {
             Section("Behaviour") {
                 Toggle("Add newly installed apps automatically", isOn: $prefs.autoAddApps)
                 Toggle("Hide after opening an app", isOn: $prefs.hideAfterLaunch)
+                if !prefs.hideAfterLaunch {
+                    Text("Apps open behind the grid, so you can open several; the last one comes forward when the grid hides.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Hide when clicking an empty area", isOn: $prefs.hideOnEmptyClick)
+                Toggle("Hide when switching Spaces", isOn: $prefs.hideOnSpaceChange)
             }
         }
         .formStyle(.grouped)
@@ -152,6 +157,8 @@ struct HotkeyRecorder: View {
                     recording ? stop() : start()
                 }
                 .frame(minWidth: 140)
+                // Nothing to record for while the shortcut is off.
+                .disabled(!prefs.hotkeyEnabled && !recording)
             }
         }
         // Closing Settings mid-recording must not leave the monitor up and the shortcut off.
@@ -161,14 +168,14 @@ struct HotkeyRecorder: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
             if recording, note.object as? NSWindow === window { stop() }
         }
-        if let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
+        if prefs.hotkeyEnabled, let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
             let system = KeyCombo.conflictIsSystemSetting(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
             WarningCaption(Text(!system ? "Also used for \(conflict). Pick another shortcut to keep it working."
                   : KeyCombo.readsSystemShortcuts
                   ? "Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another."
                   : "macOS uses this for \(conflict) unless that shortcut is off in System Settings › Keyboard › Keyboard Shortcuts. If it's on, turn it off or pick another."))
         }
-        if let problem = state.hotkeyProblem, !recording {
+        if prefs.hotkeyEnabled, let problem = state.hotkeyProblem, !recording {
             Label(problem, systemImage: "exclamationmark.octagon")
                 .font(.caption).foregroundStyle(.red)
         }
@@ -277,6 +284,11 @@ struct AppearanceSettings: View {
                     }
                 } else {
                     ValueSlider(title: "Dimming", value: $prefs.backgroundOpacity, range: 0...0.9, valueText: percent(prefs.backgroundOpacity))
+                    // The blur (material) is always dark; these show what's behind them.
+                    if prefs.background != .material && prefs.backgroundOpacity < 0.15 {
+                        Text("With little dimming, white text can be hard to read over a light picture or window.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             Section("Icons") {

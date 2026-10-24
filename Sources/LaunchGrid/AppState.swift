@@ -22,7 +22,8 @@ struct DiskState: Equatable, Sendable {
 }
 
 struct TextEditRequest: Identifiable {
-    enum Target { case item(UUID), pageTitle(Int) }
+    /// By ID, not index: a rescan can remove pages while the edit is open.
+    enum Target { case item(UUID), pageTitle(UUID) }
     let id = UUID()
     var target: Target
     var title: String
@@ -73,8 +74,9 @@ final class AppState {
     private(set) var hasGridFile: Bool
     /// Set when the saved layout could not be loaded at launch and was moved aside.
     private(set) var loadProblem: (message: String, backup: URL)?
-    /// Set when an unreadable layout was replaced by the previous save, to tell the person once.
-    @ObservationIgnored var recoveryNotice: (message: String, file: URL)?
+    /// Set when an unreadable layout was replaced by the previous save, or entries of it had to
+    /// be left out, to tell the person once.
+    @ObservationIgnored var recoveryNotice: (title: String, message: String, file: URL)?
 
     @ObservationIgnored private var undoStack: [Grid] = []
     @ObservationIgnored private var redoStack: [Grid] = []
@@ -119,6 +121,9 @@ final class AppState {
     /// The same for the open folder's page.
     var folderSwipeOffset: CGFloat = 0
     var isShown = false
+    /// Counts the times the overlay was shown, for what refreshes on each show but not on
+    /// hiding (the background picture).
+    private(set) var showCount = 0
     /// The display the overlay is on, whose wallpaper the background shows.
     var screenID: CGDirectDisplayID = 0
     /// Why the global shortcut could not be registered, shown in Settings.
@@ -134,6 +139,8 @@ final class AppState {
     @ObservationIgnored var onHide: () -> Void = {}
     /// Hides without handing focus back, so the app being launched can take it.
     @ObservationIgnored var onHideForLaunch: () -> Void = {}
+    /// An app opened behind the grid, which stayed up: it comes forward when the grid hides.
+    @ObservationIgnored var onLaunchedBehind: (NSRunningApplication) -> Void = { _ in }
     @ObservationIgnored var onError: (_ title: String, _ detail: String) -> Void = { _, _ in }
     @ObservationIgnored var onOpenSettings: () -> Void = {}
     @ObservationIgnored var onAddMissing: () -> Void = {}
@@ -157,9 +164,10 @@ final class AppState {
         self.prefs = prefs
         self.store = store
         var loaded: Grid?
+        var skipped = 0
         if store.exists {
             do {
-                loaded = try store.load()
+                (loaded, skipped) = try store.loadCountingSkipped()
             } catch {
                 // Keep the file for inspection (or for the newer version) and start fresh.
                 let newer = if case GridFileError.unsupportedVersion = error { true } else { false }
@@ -176,6 +184,7 @@ final class AppState {
                         NSLog("LaunchGrid: restored the previous save from \(store.backupURL.path)")
                         loaded = previous
                         recoveryNotice = (
+                            String(localized: "Your layout was restored from the previous save"),
                             String(localized: "Your saved layout could not be read, so LaunchGrid restored an earlier save. Changes from the last few minutes may be missing; the unreadable file was kept as \(backup.lastPathComponent)."),
                             backup)
                     } else {
@@ -200,9 +209,33 @@ final class AppState {
         // is still to be made.
         hasGridFile = loaded.map { !$0.allApps.isEmpty } ?? false
         grid = loaded ?? Grid()
+        if skipped > 0 { keepPartlyReadFile(skipped: skipped) }
         // The unreadable file is gone: write the restored layout back before anything else
         // can go wrong, or the next launch would find no layout at all.
         if recoveryNotice != nil { scheduleSave() }
+    }
+
+    /// Some entries of the saved layout couldn't be read and were left out: a copy of the
+    /// file as it was is kept aside, as saves and backups will soon replace it with the rest.
+    private func keepPartlyReadFile(skipped: Int) {
+        let file = store.fileURL
+        let copy = file.deletingPathExtension()
+            .appendingPathExtension("partial-\(Int(Date().timeIntervalSince1970)).json")
+        do {
+            try FileManager.default.copyItem(at: file, to: copy)
+            NSLog("LaunchGrid: \(skipped) entries of the grid could not be read; kept a copy at \(copy.path)")
+            recoveryNotice = (
+                String(localized: "Part of your layout could not be read"),
+                String(localized: "\(skipped) entries in your saved layout could not be read and were left out. The file as it was is kept as \(copy.lastPathComponent)."),
+                copy)
+        } catch {
+            // Without a copy, saving would lose the entries for good.
+            NSLog("LaunchGrid: \(skipped) entries of the grid could not be read nor the file copied (\(error)); not saving over it")
+            savesBlocked = true
+            loadProblem = (
+                String(localized: "\(skipped) entries in your saved layout could not be read, and the file couldn't be copied aside, so LaunchGrid won't save over it. Move \(store.url.lastPathComponent) elsewhere and your changes will be saved."),
+                store.url)
+        }
     }
 
     // MARK: Mutations
@@ -297,7 +330,9 @@ final class AppState {
     /// What to tell the person about the last failed save, for `reportLastSaveFailure()`.
     @ObservationIgnored private var lastSaveFailureDetail: String?
     /// Writes the saves in order, off the main thread unless one has to be done now.
-    @ObservationIgnored private lazy var writer = LayoutWriter(store: store)
+    @ObservationIgnored private(set) lazy var writer = LayoutWriter(store: store)
+    /// Counts the writes handed to `writer`, so a write knows whether a later one is queued.
+    @ObservationIgnored private var lastWriteSerial = 0
 
     /// Saves the grid now, unless it is unchanged since the last save; false when that failed.
     /// Waits for the disk, so it is for quitting; `saveInBackground` doesn't hold up the screen.
@@ -305,7 +340,9 @@ final class AppState {
     func saveNow(reportingFailure: Bool = true) -> Bool {
         guard let generation = prepareSave(reportingFailure: reportingFailure) else { return lastSaveError == nil }
         let grid = grid
-        return finishSave(generation, grid: grid, error: writer.save(grid), reportingFailure: reportingFailure)
+        lastWriteSerial &+= 1
+        let serial = lastWriteSerial
+        return finishSave(generation, serial: serial, grid: grid, error: writer.save(grid), reportingFailure: reportingFailure)
     }
 
     /// `saveNow` with the writing done off the main thread; `done` gets whether it worked.
@@ -315,10 +352,14 @@ final class AppState {
             return
         }
         let grid = grid
+        lastWriteSerial &+= 1
+        let serial = lastWriteSerial
         writer.saveInBackground(grid) { [weak self] error in
             Task { @MainActor in
                 guard let self else { return }
-                done?(self.finishSave(generation, grid: grid, error: error, reportingFailure: reportingFailure))
+                // Not inside `done?(…)`: with no `done`, that would skip recording the save.
+                let saved = self.finishSave(generation, serial: serial, grid: grid, error: error, reportingFailure: reportingFailure)
+                done?(saved)
             }
         }
     }
@@ -348,11 +389,19 @@ final class AppState {
         return gridGeneration
     }
 
-    /// Records how the save of `generation` went; true when it worked.
-    private func finishSave(_ generation: Int, grid saved: Grid, error: Error?, reportingFailure: Bool) -> Bool {
+    /// Records how the save of `generation`, the writer's `serial`th write, went; true when it
+    /// worked or no longer matters.
+    private func finishSave(_ generation: Int, serial: Int, grid saved: Grid, error: Error?, reportingFailure: Bool) -> Bool {
         // A later save, made at once when quitting, already wrote a newer grid.
         if generation &- savedGeneration < 0 { return true }
         if let error {
+            // A write of this grid or a newer one is queued after it (hiding while a save was
+            // under way queues the same grid twice): that one tells how saving went. Or an
+            // earlier write already saved this very grid, so the file is up to date.
+            if serial != lastWriteSerial || (generation == savedGeneration && store.exists) {
+                NSLog("LaunchGrid: a save failed but another covers it: \(error)")
+                return true
+            }
             NSLog("LaunchGrid: save failed: \(error)")
             lastSaveError = error
             let detail = String(localized: "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
@@ -730,11 +779,14 @@ final class AppState {
     // MARK: Actions
 
     func launch(_ app: AppRef) {
-        // Get out of the way at once, as Launchpad does; a slow app can take seconds.
-        if prefs.hideAfterLaunch { onHideForLaunch() }
+        // Get out of the way at once, as Launchpad does; a slow app can take seconds. Staying
+        // up, the grid opens it behind itself and keeps the keyboard, to open more.
+        let hides = prefs.hideAfterLaunch
+        if hides { onHideForLaunch() }
         Task {
             do {
-                let path = try await Launcher.launch(app)
+                let (path, running) = try await Launcher.launch(app, activates: hides)
+                if !hides { onLaunchedBehind(running) }
                 // Off the main thread: a stalled volume mustn't hang the app.
                 let gone = path == app.path ? false
                     : await Task.detached { !FileManager.default.fileExists(atPath: app.path) }.value
@@ -769,7 +821,8 @@ final class AppState {
     /// Records where a moved app now lives. Not an undo step: like `reconcile()`, it mirrors the disk.
     func rememberPath(_ path: String, of id: UUID) {
         guard let old = grid.item(id)?.app?.path, old != path else { return }
-        followMovedApps([old: path])
+        // Its bookmark, if added with Browse, follows it too (and may find other moves).
+        followMovedApps(FileAccess.follow(old, prefs: prefs).merging([old: path]) { found, _ in found })
     }
 
     /// Follows apps that moved, old path to new (as found by their sandbox bookmarks), in the
@@ -913,9 +966,22 @@ final class AppState {
         showToast(count == 1 ? String(localized: "Removed — ⌘Z to undo") : String(localized: "Removed \(count) items — ⌘Z to undo"))
     }
 
+    /// Moves to the page at `page`, or a new one past the last.
     func moveToPage(_ ids: [UUID], page: Int) {
+        moveToPage(ids, pageID: grid.pages.indices.contains(page) ? grid.pages[page].id : nil)
+    }
+
+    /// Moves to the page with `pageID`, or a new one when it's nil. By ID, as a menu holding
+    /// it can outlive pages a rescan removes; when that page is gone, nothing moves.
+    func moveToPage(_ ids: [UUID], pageID: UUID?) {
         apply { g in
-            if page >= g.pages.count { g.addPage() }
+            let page: Int
+            if let pageID {
+                guard let p = g.pages.firstIndex(where: { $0.id == pageID }) else { return }
+                page = p
+            } else {
+                page = g.addPage()
+            }
             let count = g.pages[page].items.filter { !ids.contains($0.id) }.count
             g.removingEmptiedPages { $0.move(ids, toPage: page, at: count) }
         }
@@ -974,7 +1040,7 @@ final class AppState {
 
     func beginPageTitleEdit(_ page: Int) {
         guard grid.pages.indices.contains(page) else { return }
-        textEdit = TextEditRequest(target: .pageTitle(page), title: String(localized: "Page Title"), text: grid.pages[page].title ?? "")
+        textEdit = TextEditRequest(target: .pageTitle(grid.pages[page].id), title: String(localized: "Page Title"), text: grid.pages[page].title ?? "")
     }
 
     func commitTextEdit(_ text: String) {
@@ -982,7 +1048,10 @@ final class AppState {
         textEdit = nil
         switch edit.target {
         case .item(let id): apply { $0.rename(id, to: text) }
-        case .pageTitle(let p): apply { $0.setPageTitle(p, text) }
+        case .pageTitle(let id):
+            // The page may have gone meanwhile (its last app uninstalled): no other takes the title.
+            guard let p = grid.pages.firstIndex(where: { $0.id == id }) else { return }
+            apply { $0.setPageTitle(p, text) }
         }
     }
 
@@ -1016,6 +1085,7 @@ final class AppState {
     /// Called when the overlay appears.
     func didShow() {
         isShown = true
+        showCount &+= 1
         guard toast != nil, toastTask == nil else { return }
         if Date().timeIntervalSince(toastPostedAt) > 60 {
             toast = nil
@@ -1084,7 +1154,8 @@ final class LayoutWriter: @unchecked Sendable {
     static let backupInterval: TimeInterval = 10 * 60
 
     let store: GridStore
-    private let queue = DispatchQueue(label: "com.sglavoie.launchgrid.save", qos: .utility)
+    /// Not private, so tests can line work up between two saves.
+    let queue = DispatchQueue(label: "com.sglavoie.launchgrid.save", qos: .utility)
     /// When a save last refreshed the backup; only read and written on `queue`.
     private var lastBackup: Date?
 

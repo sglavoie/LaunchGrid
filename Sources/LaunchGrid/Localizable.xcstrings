@@ -97,6 +97,70 @@
         }
       }
     },
+    "%lld entries in your saved layout could not be read and were left out. The file as it was is kept as %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@n@ in your saved layout could not be read and left out. The file as it was is kept as %2$@."
+          },
+          "substitutions": {
+            "n": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg entry"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg entries"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld entries in your saved layout could not be read, and the file couldn't be copied aside, so LaunchGrid won't save over it. Move %@ elsewhere and your changes will be saved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@n@ in your saved layout could not be read, and the file couldn't be copied aside, so LaunchGrid won't save over it. Move %2$@ elsewhere and your changes will be saved."
+          },
+          "substitutions": {
+            "n": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg entry"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg entries"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld more matches — keep typing to narrow the search": {
       "localizations": {
         "en": {

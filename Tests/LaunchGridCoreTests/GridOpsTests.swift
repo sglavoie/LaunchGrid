@@ -526,6 +526,14 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("카카오톡", query: "하") == nil)
     }
 
+    @Test func aHangulNameInDecomposedFormMatches() {
+        let decomposed = "한글".decomposedStringWithCanonicalMapping
+        #expect(decomposed.unicodeScalars.count > 2)
+        #expect(Search.score(decomposed, query: "한") != nil)
+        #expect(Search.score(decomposed, query: "하") != nil)
+        #expect(Search.score(decomposed, query: "한글") == 1000)
+    }
+
     @Test func initialsAndWordsTogether() {
         let code = app("Visual Studio Code")
         #expect(Search.score(code.name, query: "vs code") == 600, "as initials, not a fuzzy match")
@@ -569,6 +577,15 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.results(in: apps, query: "wifi").map(\.name) == ["WiFiman", "Wi-Fi Explorer", "Kiwifier"])
         #expect(Search.results(in: apps, query: "visual-").map(\.name) == ["Visual Studio Code"])
         #expect(Search.results(in: apps, query: "code.").map(\.name) == ["Visual Studio Code"])
+        #expect(Search.results(in: apps, query: "wi fi").map(\.name) == ["WiFiman", "Wi-Fi Explorer"])
+    }
+
+    @Test func aPrefixDoesNotRunAcrossASpaceInTheName() {
+        #expect(Search.score("App Store", query: "apps").map { $0 < 500 } ?? true)
+        #expect(Search.score("Visual Studio Code", query: "visuals").map { $0 < 500 } ?? true)
+        #expect(Search.score("Visual  Studio Code", query: "visual studio")! > 800, "runs of spaces count as one")
+        let apps = ["Notes", "Note Station", "Notes Manager Pro"].map { app($0) }
+        #expect(Search.results(in: apps, query: "notes").map(\.name) == ["Notes", "Notes Manager Pro", "Note Station"])
     }
 
     @Test func eachQueryWordStartsADifferentWord() {

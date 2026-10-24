@@ -158,11 +158,14 @@ public struct PrunedApp: Codable, Equatable, Sendable {
     /// back after the nearest one still there, so neighbours that never return don't shift it.
     public var before: [UUID]?
     public var folderBefore: [UUID]?
+    /// IDs of the pages before its emptied page, nearest last, so that page comes back after
+    /// the nearest one still there, even when pages pruned with it return in another order.
+    public var pageBefore: [UUID]?
 
     public init(app: AppRef, prunedAt: Date, pageID: UUID, index: Int,
                 folderID: UUID? = nil, folderName: String? = nil, folderIndex: Int? = nil,
                 folderEmptied: Bool? = nil, pageEmptied: Bool? = nil, pageIndex: Int? = nil, pageTitle: String? = nil,
-                before: [UUID]? = nil, folderBefore: [UUID]? = nil) {
+                before: [UUID]? = nil, folderBefore: [UUID]? = nil, pageBefore: [UUID]? = nil) {
         self.app = app
         self.prunedAt = prunedAt
         self.pageID = pageID
@@ -176,6 +179,7 @@ public struct PrunedApp: Codable, Equatable, Sendable {
         self.pageTitle = pageTitle
         self.before = before
         self.folderBefore = folderBefore
+        self.pageBefore = pageBefore
     }
 }
 

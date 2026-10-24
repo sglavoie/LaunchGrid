@@ -38,6 +38,11 @@ public struct GridStore: Sendable {
         try GridStore.decode(Data(contentsOf: url))
     }
 
+    /// `load()`, also telling how many entries (apps, folders, pages) couldn't be read and were left out.
+    public func loadCountingSkipped() throws -> (grid: Grid, skipped: Int) {
+        try GridStore.decodeCountingSkipped(Data(contentsOf: url))
+    }
+
     public func loadBackup() throws -> Grid {
         try GridStore.decode(Data(contentsOf: backupURL))
     }
@@ -141,6 +146,11 @@ public struct GridStore: Sendable {
 
     /// Decodes, migrates and validates a grid.
     public static func decode(_ data: Data) throws -> Grid {
+        try decodeCountingSkipped(data).grid
+    }
+
+    /// `decode(_:)`, also telling how many entries couldn't be read and were left out.
+    public static func decodeCountingSkipped(_ data: Data) throws -> (grid: Grid, skipped: Int) {
         /// The version, also when written as text ("2"), so a newer file is told apart from a broken one.
         struct Header: Decodable {
             var version: Int?
@@ -174,7 +184,7 @@ public struct GridStore: Sendable {
         grid.version = Grid.currentVersion
         freshenRepeatedIDs(in: &grid)
         grid.normalize()
-        return grid
+        return (grid, skipped.count)
     }
 
     /// Gives a fresh ID to each page and item (app or folder, inside folders too) whose ID an

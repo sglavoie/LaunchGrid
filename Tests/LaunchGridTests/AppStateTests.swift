@@ -141,6 +141,17 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
     }
 
+    @Test func aPartlyReadableLayoutIsCopiedAsideAndExplained() throws {
+        let original = #"{"version": 1, "rows": 2, "columns": 2, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app", "name": "A"}}, {"type": "app", "app": {"name": "No path"}}, {"type": "app", "app": {"name": "Nor this"}}]}], "removedBundleIDs": []}"#
+        let state = try load(original)
+        #expect(state.grid.allApps.map(\.title) == ["A"])
+        #expect(state.loadProblem == nil)
+        let notice = try #require(state.recoveryNotice)
+        #expect(notice.message.hasPrefix("2 entries"))
+        #expect(notice.file.lastPathComponent.hasPrefix("grid.partial-"))
+        #expect(try String(contentsOf: notice.file, encoding: .utf8) == original, "the file as it was")
+    }
+
     @Test func savesKeepThePreviousOneToRestoreFromWhenTheLastIsUnreadable() throws {
         let first = makeState(["A"])
         first.saveNow()
@@ -269,6 +280,25 @@ func installed(_ name: String) -> InstalledApp {
         state.moveToPage([last], page: 0)
         #expect(state.grid.pages[0].items.last?.id == last)
         #expect(state.grid.pages[1].items.map(\.title) == ["App35"], "the item it displaced")
+    }
+
+    @Test func pageTargetsFollowThePageNotItsPlace() {
+        let state = makeState(["A", "B", "C"])
+        state.apply { g in
+            g.pages = g.allApps.map { Page(items: [.app($0)]) }
+        }
+        state.beginPageTitleEdit(2)
+        let menuPage = state.grid.pages[2].id
+        let a = state.grid.pages[0].items[0].id
+        state.apply { $0.pages.remove(at: 1) } // as a rescan can, with the edit and a menu open
+        state.commitTextEdit("Late")
+        #expect(state.grid.pages.map(\.title) == [nil, "Late"], "the page it was opened for")
+
+        state.apply { $0.pages.remove(at: 1) }
+        state.moveToPage([a], pageID: menuPage)
+        #expect(state.grid.pages.map { $0.items.map(\.title) } == [["A"]], "that page is gone: nothing moves")
+        state.moveToPage([a], pageID: nil)
+        #expect(state.grid.pages.map { $0.items.map(\.title) } == [["A"]], "onto a new page, emptying the old")
     }
 
     @Test func groupingNeedsTwoItems() {
@@ -627,6 +657,47 @@ func installed(_ name: String) -> InstalledApp {
         state.apply { $0.rename(a.id, to: "Again") }
         state.saveNow(reportingFailure: false) // what quitting does
         #expect(try savedTitles(state) == ["Again"])
+    }
+
+    @Test func aDelayedSaveIsRecordedAndItsFailureReported() async throws {
+        let state = makeState(["A"])
+        state.saveNow()
+        var errors = 0
+        state.onError = { _, _ in errors += 1 }
+        let a = try #require(state.grid.allApps.first)
+        let folder = state.store.url.deletingLastPathComponent().path
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder) }
+        state.apply { $0.rename(a.id, to: "Renamed") }
+        state.saveInBackground() // as the delayed save after a change does: no completion
+        for _ in 0..<50 where errors == 0 { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(errors == 1)
+        #expect(state.lastSaveError != nil)
+    }
+
+    @Test func aFailedSaveCoveredByALaterOneOfTheSameGridIsNotReported() async throws {
+        let state = makeState(["A"])
+        state.saveNow()
+        var errors = 0
+        state.onError = { _, _ in errors += 1 }
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Renamed") }
+        let folder = state.store.url.deletingLastPathComponent().path
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder) }
+        // As hiding does while the delayed save is under way: the same grid queued twice, the
+        // first write failing and the second one working.
+        var results: [Bool] = []
+        state.saveInBackground { results.append($0) }
+        state.writer.queue.async { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder) }
+        state.saveInBackground { results.append($0) }
+        for _ in 0..<50 where results.count < 2 { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(results == [true, true])
+        #expect(errors == 0)
+        #expect(state.lastSaveError == nil)
+        #expect(try savedTitles(state) == ["Renamed"])
     }
 
     @Test func backgroundSavesLandInOrderWithOnesMadeAtOnce() async throws {

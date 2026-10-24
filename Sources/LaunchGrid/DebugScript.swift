@@ -13,6 +13,8 @@ enum DebugScript {
     private static var watchingMenus = false
     /// Where a held drag ("hold", "fhold", "panhold") is, for "release".
     private static var heldAt: (point: CGPoint, window: NSWindow)?
+    /// The menu "menuhold" built, for "menurun".
+    private static var heldMenu: [MenuEntry] = []
 
     static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate) {
         let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -106,6 +108,9 @@ enum DebugScript {
                     // As if Finder opened the file. Async, so the script goes on while an alert is up.
                     let url = URL(fileURLWithPath: arg)
                     DispatchQueue.main.async { delegate.application(NSApp, open: [url]) }
+                case "loadfile":
+                    // Load Grid File… (menu bar or Settings), its panel and any alert driven from outside.
+                    DispatchQueue.main.async { delegate.loadGridFile() }
                 case "alert":
                     // Prints the texts of the modal window up (an alert), then presses the button titled `arg`, if any.
                     guard let window = NSApp.modalWindow, let view = window.contentView else {
@@ -193,7 +198,7 @@ enum DebugScript {
                     // As if the Space changed.
                     NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
                 case "renders":
-                    print("renders: blurs=\(ImageBlurCache.shared.renders) evicted=\(ImageBlurCache.shared.evictions) heldMB=\(ImageBlurCache.shared.heldBytes >> 20) wallpaperLookups=\(BackgroundView.wallpaperLookups)")
+                    print("renders: blurs=\(ImageBlurCache.shared.renders) evicted=\(ImageBlurCache.shared.evictions) heldMB=\(ImageBlurCache.shared.heldBytes >> 20) wallpaperLookups=\(BackgroundView.wallpaperLookups) itemMenus=\(MenuEntry.builds)")
                     fflush(stdout)
                 case "keys":
                     // Comma-separated virtual key codes or literal characters, each optionally after
@@ -359,7 +364,7 @@ enum DebugScript {
                 case "statusmenu": print("statusmenu: \(delegate.makeMenu().items.map(\.title).filter { !$0.isEmpty })"); fflush(stdout)
                 case "rebuildaction": delegate.libraryActions.rebuild(arg == "alpha" ? .alphabetical : .byCategory)
                 case "about": delegate.showAbout()
-                case "frames": print("frames: \(state.prefs.windowFrames.count) saved, \(state.prefs.windowFrames)"); fflush(stdout)
+                case "frames": print("frames: \(state.prefs.windowFrames.count) saved (\(Preferences.windowFrameWrites) writes), \(state.prefs.windowFrames)"); fflush(stdout)
                 case "framesfill":
                     // Saved frames for N displays that aren't connected, as years of docks and projectors leave.
                     for i in 0..<(Int(arg) ?? 0) { state.prefs.windowFrames["display-FAKE-\(i)"] = "{{0, 0}, {800, 600}}" }
@@ -404,6 +409,26 @@ enum DebugScript {
                 case "wait": try? await Task.sleep(for: .seconds(Double(arg) ?? 1))
                 case "snap": snapshot(name: arg.isEmpty ? "snap" : arg, dir: dir)
                 case "dump": print(String(data: (try? GridStore.encode(state.grid)) ?? Data(), encoding: .utf8) ?? "")
+                case "titleedit":
+                    // Opens the rename card for the current page's title, as clicking the title does.
+                    state.beginPageTitleEdit(state.currentPage)
+                case "menuhold":
+                    // Builds the first item's right-click menu now, for "menurun" to choose from later,
+                    // as a menu left open while a rescan changes the pages.
+                    if let first = state.currentItems.first { heldMenu = MenuEntry.item(first, state: state) }
+                case "menurun":
+                    // Chooses the entry titled `arg` (in a submenu too) of the menu "menuhold" built.
+                    func find(_ entries: [MenuEntry]) -> (@MainActor () -> Void)? {
+                        for e in entries {
+                            switch e.kind {
+                            case .action(let run) where e.title == arg: return run
+                            case .submenu(let sub): if let run = find(sub) { return run }
+                            default: break
+                            }
+                        }
+                        return nil
+                    }
+                    if let run = find(heldMenu) { run() } else { print("menurun: no \(arg)"); fflush(stdout) }
                 case "pagetitle":
                     // Titles the current page, as the rename card does.
                     let p = state.currentPage

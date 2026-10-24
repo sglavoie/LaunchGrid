@@ -13,16 +13,14 @@ OUT_DIR="build/release"
 APP="$OUT_DIR/LaunchGrid.app"
 ZIP="$OUT_DIR/LaunchGrid.zip"
 
-# The build number is the commit count, so uncommitted changes would ship under a used number.
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Commit or stash your changes first." >&2
-    exit 1
-fi
-
+# shellcheck source=scripts/release-checks.sh
+. scripts/release-checks.sh
+require_clean_tree
+require_gh
+require_pushed_head
 # Building and notarising takes minutes, and publish.sh would then refuse a version that is
-# already released. Skipped without gh, which publish.sh needs anyway.
-VERSION="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' scripts/bundle.sh)"
-if command -v gh >/dev/null 2>&1 && gh release view "v$VERSION" >/dev/null 2>&1; then
+# already released.
+if [ -n "$(released_commit)" ]; then
     echo "Release v$VERSION already exists; bump VERSION in scripts/bundle.sh and commit first." >&2
     exit 1
 fi
@@ -72,8 +70,9 @@ until xcrun stapler staple "$APP"; do
     sleep 30
 done
 rm -f "$ZIP"
-(cd "$OUT_DIR" && ditto -c -k --keepParent LaunchGrid.app LaunchGrid.zip)
+# Before zipping: a zip is only left behind for publish.sh once Gatekeeper accepts the app.
 spctl --assess --type execute --verbose "$APP"
+(cd "$OUT_DIR" && ditto -c -k --keepParent LaunchGrid.app LaunchGrid.zip)
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 echo "Built $ZIP (version $VERSION, commit $(cut -c1-7 "$OUT_DIR/COMMIT")); publish it with: just publish"

@@ -123,18 +123,29 @@ struct ToastLayer: View {
         .onChange(of: state.toast) { _, toast in
             if let toast { AccessibilityNotification.Announcement(toast).post() }
         }
+        // Nor the grid opening: the app isn't made active, so nothing else tells it.
+        .onChange(of: state.showCount) {
+            guard let page = pageDescription else { return }
+            AccessibilityNotification.Announcement(String(localized: "LaunchGrid, \(page)")).post()
+        }
         // Nor a page flip with nothing focused (Tab, a swipe), nor edit mode turning on or off.
-        .onChange(of: state.currentPage) { _, page in
-            guard state.isShown, state.grid.pages.indices.contains(page) else { return }
-            let count = state.grid.pages.count
-            let text = state.grid.pages[page].title.map { String(localized: "Page \(page + 1) of \(count), \($0)") }
-                ?? String(localized: "Page \(page + 1) of \(count)")
-            AccessibilityNotification.Announcement(text).post()
+        .onChange(of: state.currentPage) {
+            guard state.isShown, let page = pageDescription else { return }
+            AccessibilityNotification.Announcement(page).post()
         }
         .onChange(of: state.editing) { _, editing in
             guard state.isShown else { return }
             AccessibilityNotification.Announcement(editing ? String(localized: "Editing layout") : String(localized: "Done editing")).post()
         }
+    }
+
+    /// "Page 2 of 3", with its title if it has one.
+    private var pageDescription: String? {
+        let page = state.currentPage
+        guard state.grid.pages.indices.contains(page) else { return nil }
+        let count = state.grid.pages.count
+        return state.grid.pages[page].title.map { String(localized: "Page \(page + 1) of \(count), \($0)") }
+            ?? String(localized: "Page \(page + 1) of \(count)")
     }
 }
 
@@ -168,6 +179,7 @@ struct TopBar: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.white.opacity(0.85))
+                        .modifier(Legible())
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
@@ -186,6 +198,7 @@ struct TopBar: View {
 struct SearchField: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
+    @AccessibilityFocusState private var voiceOverFocus: Bool
 
     var body: some View {
         let high = contrast == .increased
@@ -218,7 +231,9 @@ struct SearchField: View {
         .font(.system(size: 14))
         .padding(.horizontal, 10)
         .frame(width: 240, height: 28)
+        // Dark under the light fill, so the white text reads over a light background too.
         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        .background(.black.opacity(high ? 0.55 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(high ? 0.5 : 0.12)))
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
             SearchComposition.shared.fieldFrame = $0
@@ -227,6 +242,27 @@ struct SearchField: View {
         .accessibilityAddTraits(.isSearchField)
         .accessibilityLabel("Search, type to filter apps")
         .accessibilityValue(state.query)
+        // Where VoiceOver starts when the grid opens, as typing goes there.
+        .accessibilityFocused($voiceOverFocus)
+        .onChange(of: state.showCount) { voiceOverFocus = true }
+    }
+}
+
+/// White text over the background: a shadow, and with Increase Contrast a dark backing, so it
+/// reads over a light wallpaper or picture too.
+struct Legible: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let high = contrast == .increased
+        // A tight shadow outlines each letter; a wider, fainter one darkens around the text.
+        content
+            .shadow(color: .black.opacity(high ? 0.9 : 0.6), radius: 1, y: 0.5)
+            .shadow(color: .black.opacity(high ? 0.6 : 0.35), radius: 3)
+            .padding(.horizontal, high ? 4 : 0)
+            .background {
+                if high { Capsule().fill(.black.opacity(0.6)) }
+            }
     }
 }
 
@@ -258,6 +294,8 @@ struct PillButtonStyle: ButtonStyle {
                 .padding(.horizontal, 14).padding(.vertical, 5)
                 .foregroundStyle(.white)
                 .background(prominent ? Color.accentColor : .white.opacity(high ? 0.32 : 0.18), in: Capsule())
+                // Dark under the light fill, so the button shows over a light background too.
+                .background(prominent ? Color.clear : .black.opacity(high ? 0.5 : 0.25), in: Capsule())
                 .overlay { if high { Capsule().strokeBorder(.white.opacity(0.6)) } }
                 .opacity(configuration.isPressed ? 0.7 : 1)
         }
@@ -277,6 +315,7 @@ struct PageTitle: View {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white.opacity(high ? 1 : 0.9))
+                    .modifier(Legible())
                     // One line: a second would spill over the search field or the icons.
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -285,7 +324,8 @@ struct PageTitle: View {
             } else if state.editing && state.query.isEmpty && state.grid.pages.indices.contains(page) {
                 Text("Add Page Title")
                     .font(.system(size: 15))
-                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.4))
+                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.5))
+                    .modifier(Legible())
                     .accessibilityAddTraits(.isButton)
             }
         }
@@ -501,15 +541,10 @@ struct ItemView: View {
                 Text(item.title)
                     .font(.system(size: max(11, min(13, iconSize * 0.14))))
                     .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(contrast == .increased ? 0.9 : 0.5), radius: 2, y: 1)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: iconSize * 1.5)
-                    // Increase Contrast backs the label, so it reads over any wallpaper.
-                    .padding(.horizontal, contrast == .increased ? 4 : 0)
-                    .background {
-                        if contrast == .increased { Capsule().fill(.black.opacity(0.6)) }
-                    }
+                    .modifier(Legible())
             }
         }
         .padding(6)
@@ -673,6 +708,9 @@ struct PageDots: View {
                     Circle()
                         .fill(.white.opacity(p == state.currentPage ? 0.95 : contrast == .increased ? 0.6 : 0.35))
                         .frame(width: 8, height: 8)
+                        // A dark edge, so the dots show on a light background too.
+                        .overlay(Circle().strokeBorder(.black.opacity(contrast == .increased ? 0.6 : 0.25), lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.35), radius: 1.5)
                         .padding(4)
                         .contentShape(Circle().inset(by: -4))
                         .onTapGesture { state.goToPage(p) }
@@ -693,6 +731,7 @@ struct PageDots: View {
                     }
                         .font(.callout)
                         .foregroundStyle(.white.opacity(contrast == .increased ? 0.9 : 0.6))
+                        .modifier(Legible())
                 }
             }
         }
@@ -715,7 +754,8 @@ struct SearchResultsView: View {
                 if results.isEmpty {
                     Text("No Results")
                         .font(.title2.weight(.medium))
-                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.85 : 0.5))
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.85 : 0.6))
+                        .modifier(Legible())
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, app in
@@ -966,20 +1006,21 @@ struct TextEditCard: View {
 
 /// One line of a grid menu. The menus are described once, so a right-click (SwiftUI) and
 /// ⌃Return (AppKit, which macOS 14 can't host SwiftUI menus in) show the same thing.
-struct MenuEntry: Identifiable {
+struct MenuEntry {
     enum Kind {
         case action(@MainActor () -> Void)
         case submenu([MenuEntry])
         case divider
     }
 
-    let id = UUID()
     var title = ""
     var kind: Kind
     var enabled = true
     var destructive = false
 
-    // Computed, so each divider gets its own ID.
+    /// How many item menus were built, for the debug scripts.
+    nonisolated(unsafe) static var builds = 0
+
     static var divider: MenuEntry { MenuEntry(kind: .divider) }
 
     static func button(_ title: String, enabled: Bool = true, destructive: Bool = false,
@@ -994,6 +1035,7 @@ struct MenuEntry: Identifiable {
     /// The right-click item menu for `item`.
     @MainActor
     static func item(_ item: GridItem, state: AppState) -> [MenuEntry] {
+        builds += 1
         let targets = state.targets(for: item.id)
         let multi = targets.count > 1
         var entries: [MenuEntry] = []
@@ -1011,12 +1053,12 @@ struct MenuEntry: Identifiable {
             entries.append(.button(String(localized: "Rename…")) { state.beginRename(item.id) })
         }
         entries.append(.divider)
-        let pages = state.grid.pages.indices.map { p in
-            MenuEntry.button(state.grid.pages[p].title.map { String(localized: "\(p + 1) — \($0)", comment: "Move to Page: a page's number and title") } ?? String(localized: "Page \(p + 1)")) {
-                state.moveToPage(targets, page: p)
+        let pages = state.grid.pages.enumerated().map { p, page in
+            MenuEntry.button(page.title.map { String(localized: "\(p + 1) — \($0)", comment: "Move to Page: a page's number and title") } ?? String(localized: "Page \(p + 1)")) {
+                state.moveToPage(targets, pageID: page.id)
             }
         }
-        let newPage = MenuEntry.button(String(localized: "New Page")) { state.moveToPage(targets, page: state.grid.pages.count) }
+        let newPage = MenuEntry.button(String(localized: "New Page")) { state.moveToPage(targets, pageID: nil) }
         entries.append(.submenu(multi ? String(localized: "Move \(targets.count) Items to Page") : String(localized: "Move to Page"),
                                 pages + [.divider, newPage]))
         if multi {
@@ -1109,7 +1151,8 @@ struct MenuEntries: View {
     let entries: [MenuEntry]
 
     var body: some View {
-        ForEach(entries) { entry in
+        // By position, so a menu built again unchanged keeps its identity.
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
             switch entry.kind {
             case .divider:
                 Divider()

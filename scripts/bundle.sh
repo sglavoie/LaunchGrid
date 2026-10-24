@@ -8,6 +8,12 @@ cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 APP="build/LaunchGrid.app"
 VERSION="1.0.0"
+# The deployment target set in Package.swift, so the two can't disagree.
+MIN_MACOS="$(sed -n 's/.*\.macOS(\.v\([0-9][0-9]*\)).*/\1.0/p' Package.swift)"
+if [ -z "$MIN_MACOS" ]; then
+    echo "Couldn't read the macOS deployment target from Package.swift." >&2
+    exit 1
+fi
 
 # UNIVERSAL=1 builds for both Apple silicon and Intel, as the downloadable release does.
 set -- -c "$CONFIG"
@@ -45,6 +51,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleName</key><string>LaunchGrid</string>
     <key>CFBundleDisplayName</key><string>LaunchGrid</string>
@@ -54,7 +61,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$(git rev-list --count HEAD 2>/dev/null || echo 1)</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
     <key>LSUIElement</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>

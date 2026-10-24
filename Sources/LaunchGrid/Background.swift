@@ -15,9 +15,10 @@ struct BackgroundView: View {
 
     var body: some View {
         let prefs = state.prefs
-        // Pictures are looked up again on each show and Space switch: each Space can have its
-        // own wallpaper, and either picture may have been changed since.
-        let refresh = "\(state.isShown)|\(spaceChanges)"
+        // Pictures are looked up again on each show (not on hiding, while the panel fades
+        // out) and Space switch: each Space can have its own wallpaper, and either picture
+        // may have been changed since.
+        let refresh = "\(state.showCount)|\(spaceChanges)"
         ZStack {
             switch prefs.background {
             case .material:

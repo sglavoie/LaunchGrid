@@ -43,7 +43,7 @@ On first launch, a welcome window lets you choose which installed apps to includ
 |---|---|
 | Show / hide | **⌥Space** (change in Settings), the menu-bar icon, or the Dock icon |
 | Launch | Click, or arrow keys + Return |
-| Search | Just type. Results rank prefix > word start > initials ("vsc") > substring > fuzzy. Return opens the first result |
+| Search | Just type. Results rank prefix > word start > initials ("vsc") > substring > fuzzy. Return opens the first result; ⌘F clears the search to start again |
 | Pages | Swipe, scroll (up and down too), ←/→, Tab, Page Up/Down, Home/End (first and last page), ⌘1…9, click the page dots |
 | Esc | Clears search → closes folder (focus returns to it) → leaves edit mode → clears the selection → hides |
 | Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. Clicking selects instead of launching; clicking a search result (or Return) shows it where it is, its folder open, with keyboard focus on it. ✕ removes an item; with the keyboard, Return renames the focused item (or the open folder), ⌫ removes it and ⌥ + arrow keys move it (with the rest of the selection) one slot, onto the next or previous page past either end |
@@ -55,14 +55,14 @@ On first launch, a welcome window lets you choose which installed apps to includ
 
 **Settings:**
 
-- **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons (the menu-bar one monochrome or in the logo's colours), auto-add new apps (at the end of the grid, as Launchpad adds them), hide behaviour.
+- **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons (the menu-bar one monochrome or in the logo's colours), auto-add new apps (at the end of the grid, as Launchpad adds them), and when to hide: after opening an app (off: apps open behind the grid and the last one comes forward when it hides), on a click in an empty area, or on switching Spaces.
 - **Appearance:** Full Screen, Full Screen with Dock (the Dock and menu bar stay in view), or a resizable Window (with frames saved per display). Backgrounds: blurred desktop, wallpaper, Liquid Glass, solid colour or custom image. Icon size and labels.
 - **Layout:** grid rows × columns. Resizing keeps every page as it is when they all still fit; otherwise it re-flows every item in order, filling each page before the next, and asks first when items would change page; each page takes the title of the page its first item came from. Folder placement when sorting; Sort Everything also clears page titles.
 - **Library:** choose which apps to include or exclude, add missing apps (also ones from anywhere via Browse), extra scan folders (flagged when missing or unreadable, as are unreadable folders inside the scan folders), save/load `.launchgrid` files (double-clicking one in Finder loads it too; `.appgrid` files from earlier builds still load), import from AppGrid or Launchpad, rebuild, regenerate icons.
 
 ## Where things live
 
-- Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change; an earlier save is kept beside it as `grid.json.bak`, refreshed at the first save of each run and then at most every 10 minutes, so a change you regret doesn't overwrite it straight away. An unreadable file (or one from a newer version) is moved aside, never overwritten. An unreadable one is replaced by the backup when that can be read, with an alert saying so; otherwise the welcome window says where it went. If it can't be moved, nothing is saved until you move it yourself. A save that fails when you quit asks before quitting. Apps excluded in the welcome window are saved before the layout is made.
+- Layout: `~/Library/Application Support/LaunchGrid/grid.json`. This is pretty-printed, versioned JSON written atomically about 0.5 s after each change; an earlier save is kept beside it as `grid.json.bak`, refreshed at the first save of each run and then at most every 10 minutes, so a change you regret doesn't overwrite it straight away. An unreadable file (or one from a newer version) is moved aside, never overwritten. An unreadable one is replaced by the backup when that can be read, with an alert saying so; otherwise the welcome window says where it went. If it can't be moved, nothing is saved until you move it yourself. A file with only some entries that can't be read loads without them, and a copy of it as it was is kept beside it (`grid.partial-….json`), with an alert saying so. A save that fails when you quit asks before quitting. Apps excluded in the welcome window are saved before the layout is made.
 - Settings: `defaults read com.sglavoie.launchgrid`.
 - Removed and excluded apps are remembered in the grid's `removedBundleIDs` (by path for a copy that shares its bundle ID, like Xcode-beta), so scans and rebuilds don't re-add them; *Choose Apps…* or *Add Missing Apps…* brings them back.
 

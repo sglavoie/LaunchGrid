@@ -71,12 +71,16 @@ final class Preferences {
     var autoAddApps: Bool { didSet { d.set(autoAddApps, forKey: "autoAddApps") } }
     var hideAfterLaunch: Bool { didSet { d.set(hideAfterLaunch, forKey: "hideAfterLaunch") } }
     var hideOnEmptyClick: Bool { didSet { d.set(hideOnEmptyClick, forKey: "hideOnEmptyClick") } }
+    /// Hide when switching to another Space, as Launchpad does, rather than follow along.
+    var hideOnSpaceChange: Bool { didSet { d.set(hideOnSpaceChange, forKey: "hideOnSpaceChange") } }
     var iconScale: Double { didSet { d.set(iconScale, forKey: "iconScale") } }
     var showLabels: Bool { didSet { d.set(showLabels, forKey: "showLabels") } }
     var folderPlacement: FolderPlacement { didSet { d.set(folderPlacement.rawValue, forKey: "folderPlacement") } }
     var extraFolders: [String] { didSet { d.set(extraFolders, forKey: "extraFolders") } }
     /// Window-mode frames keyed by screen (name + display ID).
-    var windowFrames: [String: String] { didSet { d.set(windowFrames, forKey: "windowFrames") } }
+    var windowFrames: [String: String] { didSet { d.set(windowFrames, forKey: "windowFrames"); Self.windowFrameWrites += 1 } }
+    /// How many times the window frames were written, for the debug scripts.
+    nonisolated(unsafe) static var windowFrameWrites = 0
 
     /// - Parameter defaults: where settings are read and written; tests pass a throwaway suite.
     init(defaults: UserDefaults = Preferences.appDefaults) {
@@ -96,6 +100,7 @@ final class Preferences {
             "autoAddApps": true,
             "hideAfterLaunch": true,
             "hideOnEmptyClick": true,
+            "hideOnSpaceChange": false,
             "iconScale": 1.0,
             "showLabels": true,
             "folderPlacement": FolderPlacement.first.rawValue,
@@ -116,6 +121,7 @@ final class Preferences {
         autoAddApps = d.bool(forKey: "autoAddApps")
         hideAfterLaunch = d.bool(forKey: "hideAfterLaunch")
         hideOnEmptyClick = d.bool(forKey: "hideOnEmptyClick")
+        hideOnSpaceChange = d.bool(forKey: "hideOnSpaceChange")
         iconScale = d.double(forKey: "iconScale")
         showLabels = d.bool(forKey: "showLabels")
         folderPlacement = FolderPlacement(rawValue: d.string(forKey: "folderPlacement") ?? "") ?? .first
