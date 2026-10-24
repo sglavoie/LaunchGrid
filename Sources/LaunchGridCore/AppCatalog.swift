@@ -29,10 +29,15 @@ public enum AppScanner {
         /// controls, a stalled network volume or a lapsed sandbox bookmark. Their apps went
         /// unseen, which says nothing about whether they are still there.
         public var unlisted: [String]
+        /// The real paths of the apps found through a symlink, each mapped to the path the scan
+        /// lists it at: /System/Cryptexes/…/Safari.app to /Applications/Safari.app. An open
+        /// panel gives the first, so this tells it is an app already found.
+        public var aliases: [String: String]
 
-        public init(apps: [InstalledApp], unlisted: [String] = []) {
+        public init(apps: [InstalledApp], unlisted: [String] = [], aliases: [String: String] = [:]) {
             self.apps = apps
             self.unlisted = unlisted
+            self.aliases = aliases
         }
     }
 
@@ -45,12 +50,14 @@ public enum AppScanner {
         var results: [InstalledApp] = []
         var paths = Set<String>()
         var unlisted: [String] = []
+        var aliases: [String: String] = [:]
 
         /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
         func consider(_ url: URL, realPath: String) {
             guard paths.insert(realPath).inserted, let info = infoDictionary(ofBundleAt: url),
                   info["LSDefaultSystemHidden"] as? Bool != true else { return }
             results.append(read(appAt: url, info: info))
+            if realPath != url.path { aliases[realPath] = url.path }
         }
 
         func walk(_ dir: URL, depth: Int) {
@@ -78,7 +85,7 @@ public enum AppScanner {
         }
 
         for root in roots { walk(root, depth: 1) }
-        return ScanResult(apps: results, unlisted: unlisted)
+        return ScanResult(apps: results, unlisted: unlisted, aliases: aliases)
     }
 
     static let scanKeys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .contentTypeKey, .isPackageKey, .isHiddenKey]

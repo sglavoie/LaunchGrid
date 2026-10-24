@@ -404,6 +404,46 @@ enum DebugScript {
                 case "wait": try? await Task.sleep(for: .seconds(Double(arg) ?? 1))
                 case "snap": snapshot(name: arg.isEmpty ? "snap" : arg, dir: dir)
                 case "dump": print(String(data: (try? GridStore.encode(state.grid)) ?? Data(), encoding: .utf8) ?? "")
+                case "pagetitle":
+                    // Titles the current page, as the rename card does.
+                    let p = state.currentPage
+                    state.apply { $0.setPageTitle(p, arg) }
+                case "foldername":
+                    // Renames the open folder (or the first folder on the page).
+                    if let id = state.openFolder?.id ?? state.currentItems.first(where: { $0.folder != nil })?.id {
+                        state.apply { $0.rename(id, to: arg) }
+                    }
+                case "importdb":
+                    // "importdb:/path/db": imports it as from AppGrid, asking before replacing; async,
+                    // so the script goes on while the alert is up.
+                    let url = URL(fileURLWithPath: arg)
+                    DispatchQueue.main.async { delegate.debugImport(url, from: "AppGrid") }
+                case "statusmenu-attach":
+                    // "on": the menu-bar icon keeps its menu, as while VoiceOver runs.
+                    delegate.attachesStatusMenu = arg == "on"
+                    delegate.applyMenuBarIcon()
+                case "rescan":
+                    // A real scan, as Rescan Now does; the script waits for it.
+                    await withCheckedContinuation { done in state.rescan { done.resume() } }
+                    print("rescan: \(state.installed.count) apps")
+                    fflush(stdout)
+                case "apps":
+                    // Every app on the grid whose name contains `arg`, with its path.
+                    print("apps: \(state.grid.allApps.filter { $0.name.localizedCaseInsensitiveContains(arg) }.map(\.path))")
+                    fflush(stdout)
+                case "followmove":
+                    // "followmove:/old/A.app>/new/A.app", as when a bookmark finds a moved app.
+                    let n = arg.components(separatedBy: ">")
+                    if n.count == 2 { state.followMovedApps([n[0]: n[1]]) }
+                case "volumes":
+                    let listed = (try? FileManager.default.contentsOfDirectory(atPath: "/Volumes"))?.sorted()
+                    print("volumes: \(Volume.mountedNames().map { $0.sorted() } ?? []) listing=\(listed.map { "\($0)" } ?? "denied")")
+                    fflush(stdout)
+                case "savedfile":
+                    // What is on disk now, not in memory.
+                    let saved = try? state.store.load()
+                    print("savedfile: pages=\(saved.map { $0.pages.compactMap(\.title) }.map { "\($0)" } ?? "unreadable") apps=\(saved?.allApps.count ?? 0)")
+                    fflush(stdout)
                 case "quit": NSApp.terminate(nil)
                 default: NSLog("LaunchGrid debug: unknown step \(step)")
                 }

@@ -74,6 +74,22 @@ enum Volume: Sendable {
         let there = mounted.map { $0.contains(parts[2]) } ?? FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
         return there ? nil : parts[2]
     }
+
+    /// The names in /Volumes of the volumes mounted. Asked of the system, which works in the
+    /// sandbox too, and added to what listing the folder gives; nil when neither can tell.
+    static func mountedNames() -> Set<String>? {
+        let fm = FileManager.default
+        let listed = (try? fm.contentsOfDirectory(atPath: "/Volumes")).map(Set.init)
+        guard let urls = fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: []) else { return listed }
+        var names = Set(urls.map { ($0.path as NSString).pathComponents }
+            .filter { $0.count == 3 && $0[1] == "Volumes" }
+            .map { $0[2] })
+        // The startup disk is mounted at /, and in /Volumes only as a link to it.
+        if let root = urls.first(where: { $0.path == "/" }), let name = try? root.resourceValues(forKeys: [.volumeNameKey]).volumeName {
+            names.insert(name)
+        }
+        return names.union(listed ?? [])
+    }
 }
 
 // MARK: - Icons
@@ -645,13 +661,31 @@ enum FileAccess {
 
 @MainActor
 enum LoginItem {
+    private static var status: SMAppService.Status {
+        #if !APP_STORE
+        // For the debug scripts, which can't get a login item approved or refused.
+        if ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_LOGIN_STATUS"] == "requiresApproval" { return .requiresApproval }
+        #endif
+        return SMAppService.mainApp.status
+    }
+
     /// On, or registered and waiting for the user's approval in System Settings.
     static var isRequested: Bool {
-        [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+        [.enabled, .requiresApproval].contains(status)
+    }
+
+    /// Registered, but waiting for the user to allow it in System Settings.
+    static var needsApproval: Bool {
+        status == .requiresApproval
+    }
+
+    /// System Settings › General › Login Items, where a login item waiting for approval is allowed.
+    static func openApprovalSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 
     static var statusDescription: String {
-        switch SMAppService.mainApp.status {
+        switch status {
         case .enabled: String(localized: "Enabled")
         case .notRegistered: String(localized: "Off")
         case .requiresApproval: String(localized: "Needs approval in System Settings › General › Login Items")

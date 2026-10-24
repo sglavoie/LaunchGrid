@@ -20,8 +20,13 @@ MainActor.assumeIsolated {
     }
 
     // Single instance: hand over to the running copy and quit. A scratch run keeps its own
-    // data, so it runs beside the installed copy.
-    if !Preferences.isScratch && !AppDelegate.otherInstances.isEmpty {
+    // data, so it runs beside the installed copy, but not beside another using that data.
+    let locked = AppDelegate.acquireInstanceLock()
+    if Preferences.isScratch && !locked {
+        print("LaunchGrid: another scratch run uses \(AppDelegate.storeURL.deletingLastPathComponent().path)")
+        exit(0)
+    }
+    if !Preferences.isScratch && (!locked || !AppDelegate.otherInstances.isEmpty) {
         DistributedNotificationCenter.default().postNotificationName(
             AppDelegate.showNotification, object: nil, userInfo: nil, deliverImmediately: true)
         exit(0)

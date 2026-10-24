@@ -44,7 +44,7 @@ On first launch, a welcome window lets you choose which installed apps to includ
 | Show / hide | **⌥Space** (change in Settings), the menu-bar icon, or the Dock icon |
 | Launch | Click, or arrow keys + Return |
 | Search | Just type. Results rank prefix > word start > initials ("vsc") > substring > fuzzy. Return opens the first result |
-| Pages | Swipe, scroll, ←/→, Tab, Page Up/Down, Home/End (first and last page), ⌘1…9, click the page dots |
+| Pages | Swipe, scroll (up and down too), ←/→, Tab, Page Up/Down, Home/End (first and last page), ⌘1…9, click the page dots |
 | Esc | Clears search → closes folder (focus returns to it) → leaves edit mode → clears the selection → hides |
 | Edit mode | ⌘E, long-press an icon, or ⋯ › Edit Layout. Clicking selects instead of launching; clicking a search result (or Return) shows it where it is, its folder open, with keyboard focus on it. ✕ removes an item; with the keyboard, Return renames the focused item (or the open folder), ⌫ removes it and ⌥ + arrow keys move it (with the rest of the selection) one slot, onto the next or previous page past either end |
 | Select | ⌘-click / ⇧-click, ⌘A, or Space on the focused item. Then drag them together, **Group** (⌘G), **Remove** (⌫), or Move to Page |
@@ -55,8 +55,8 @@ On first launch, a welcome window lets you choose which installed apps to includ
 
 **Settings:**
 
-- **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons (monochrome or in the logo's colours), auto-add new apps (at the end of the grid, as Launchpad adds them), hide behaviour.
-- **Appearance:** Full Screen, Full Screen Behind Dock, or a resizable Window (with frames saved per display). Backgrounds: blurred desktop, wallpaper, Liquid Glass, solid colour or custom image. Icon size and labels.
+- **General:** shortcut recorder with a conflict warning, open at login, Dock and menu-bar icons (the menu-bar one monochrome or in the logo's colours), auto-add new apps (at the end of the grid, as Launchpad adds them), hide behaviour.
+- **Appearance:** Full Screen, Full Screen with Dock (the Dock and menu bar stay in view), or a resizable Window (with frames saved per display). Backgrounds: blurred desktop, wallpaper, Liquid Glass, solid colour or custom image. Icon size and labels.
 - **Layout:** grid rows × columns. Resizing keeps every page as it is when they all still fit; otherwise it re-flows every item in order, filling each page before the next, and asks first when items would change page; each page takes the title of the page its first item came from. Folder placement when sorting; Sort Everything also clears page titles.
 - **Library:** choose which apps to include or exclude, add missing apps (also ones from anywhere via Browse), extra scan folders (flagged when missing or unreadable, as are unreadable folders inside the scan folders), save/load `.launchgrid` files (double-clicking one in Finder loads it too; `.appgrid` files from earlier builds still load), import from AppGrid or Launchpad, rebuild, regenerate icons.
 

@@ -32,6 +32,8 @@ public enum Reconciler {
     ///     another path, or is pruned, only when its own app is gone from where it was.
     ///   - now: the clock for `Grid.recentlyPruned`; apps pruned within `restoreWindow` of it
     ///     return to their old slot (even with `autoAdd` off) when they show up again.
+    ///   - aliases: `AppScanner.ScanResult.aliases`. A ref at an app's real path takes the
+    ///     path the scan lists it at, so it isn't added a second time.
     public static func reconcile(
         _ grid: inout Grid,
         installed: [InstalledApp],
@@ -39,6 +41,7 @@ public enum Reconciler {
         pruneMissing: Bool = true,
         isReachable: (String) -> Bool = { _ in true },
         pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        aliases: [String: String] = [:],
         now: Date = Date()
     ) -> ReconcileReport {
         var report = ReconcileReport()
@@ -53,6 +56,8 @@ public enum Reconciler {
         var pruned: [PrunedApp] = []
         // Folders this pass emptied, so older memory entries from them recreate them too.
         var emptiedFolders = Set<UUID>()
+        // Pages this pass emptied, which go as Launchpad's do; a returning app brings its back.
+        var emptiedPages = Set<UUID>()
         // A copy, so `match` reads no part of `grid` while the loops below write to it.
         let removed = grid.removedBundleIDs
 
@@ -60,8 +65,11 @@ public enum Reconciler {
         /// is gone from there, not merely out of reach) an unclaimed, unexcluded one with its
         /// bundle ID.
         func match(for ref: AppRef) -> (app: InstalledApp, moved: Bool)? {
-            let atPath = byPath[ref.path]
-            if let atPath, ref.bundleID == nil || atPath.bundleID == ref.bundleID { return (atPath, false) }
+            let atPath = byPath[ref.path] ?? aliases[ref.path].flatMap { byPath[$0] }
+            // An app whose bundle ID can't be read now (a damaged Info.plist) is still the one there.
+            if let atPath, ref.bundleID == nil || atPath.bundleID == nil || atPath.bundleID == ref.bundleID {
+                return (atPath, false)
+            }
             if let id = ref.bundleID, atPath != nil || (isReachable(ref.path) && !pathExists(ref.path)),
                let other = likelyMove(of: ref, among: byBundle[id]?.filter {
                    !gridPaths.contains($0.path) && !seen.contains($0.path)
@@ -117,6 +125,16 @@ public enum Reconciler {
         for p in grid.pages.indices {
             let pageID = grid.pages[p].id
             let items = grid.pages[p].items
+            defer {
+                if !items.isEmpty && grid.pages[p].items.isEmpty {
+                    emptiedPages.insert(pageID)
+                    for k in pruned.indices where pruned[k].pageID == pageID {
+                        pruned[k].pageEmptied = true
+                        pruned[k].pageIndex = p
+                        pruned[k].pageTitle = grid.pages[p].title
+                    }
+                }
+            }
             let itemIDs = items.map(\.id)
             grid.pages[p].items = items.enumerated().compactMap { i, item in
                 func before() -> [UUID] {
@@ -144,12 +162,18 @@ public enum Reconciler {
             }
         }
 
+        let emptied = grid.pages.enumerated().filter { emptiedPages.contains($0.element.id) }
+        grid.pages.removeAll { emptiedPages.contains($0.id) }
+
         // Bring back recently pruned apps that reappeared, then remember the newly pruned.
         var memory: [PrunedApp] = []
-        for var entry in grid.recentlyPruned where now.timeIntervalSince(entry.prunedAt) < restoreWindow {
+        for var entry in grid.recentlyPruned where (0..<restoreWindow).contains(now.timeIntervalSince(entry.prunedAt)) {
             guard !grid.isExcluded(key: entry.app.key, path: entry.app.path) else { continue }
-            // Its folder outlived it until this pass pruned the folder's last app.
+            // Its folder (or page) outlived it until this pass pruned the folder's last app.
             if let id = entry.folderID, emptiedFolders.contains(id) { entry.folderEmptied = true }
+            if let (p, page) = emptied.first(where: { $0.element.id == entry.pageID }) {
+                (entry.pageEmptied, entry.pageIndex, entry.pageTitle) = (true, p, page.title)
+            }
             guard let (found, _) = match(for: entry.app) else {
                 memory.append(entry)
                 continue
@@ -207,8 +231,12 @@ public enum Reconciler {
     }
 
     /// Adds apps explicitly, clearing them from the removed list. `installed` tells which
-    /// apps share a bundle ID, so including one copy keeps the others excluded.
-    public static func add(_ apps: [InstalledApp], to grid: inout Grid, installed: [InstalledApp] = []) {
+    /// apps share a bundle ID, so including one copy keeps the others excluded. An app picked
+    /// at its real path (`aliases`, from the scan) is added at the path the scan lists it at.
+    public static func add(_ apps: [InstalledApp], to grid: inout Grid, installed: [InstalledApp] = [],
+                           aliases: [String: String] = [:]) {
+        let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let apps = apps.map { app in aliases[app.path].flatMap { byPath[$0] } ?? app }
         var paths = Set(grid.allApps.map(\.path))
         // `insert` also drops an app listed twice in `apps`.
         let new = apps.filter { paths.insert($0.path).inserted }
@@ -302,7 +330,7 @@ extension Grid {
 }
 
 extension Grid {
-    /// Puts a pruned app back where it was, recreating its folder if pruning emptied it.
+    /// Puts a pruned app back where it was, recreating its folder and page if pruning emptied them.
     mutating func restore(_ entry: PrunedApp) {
         if let folderID = entry.folderID {
             if let loc = locate(folderID), loc.folderIndex == nil, case .folder(var f) = pages[loc.page].items[loc.index] {
@@ -324,6 +352,9 @@ extension Grid {
     private mutating func place(_ item: GridItem, _ entry: PrunedApp) {
         if let p = pages.firstIndex(where: { $0.id == entry.pageID }) {
             insert([item], page: p, at: Self.slot(after: entry.before, fallback: entry.index, in: pages[p].items.map(\.id)))
+        } else if entry.pageEmptied == true {
+            let page = Page(id: entry.pageID, title: entry.pageTitle, items: [item])
+            pages.insert(page, at: min(max(0, entry.pageIndex ?? pages.count), pages.count))
         } else {
             appendToFirstFree([item])
         }

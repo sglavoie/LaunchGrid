@@ -17,7 +17,7 @@ struct DiskState: Equatable, Sendable {
         let fm = FileManager.default
         return DiskState(missingRoots: roots.filter { !fm.fileExists(atPath: $0) },
                          unreadable: unlisted.filter { fm.fileExists(atPath: $0) },
-                         mountedVolumes: (try? fm.contentsOfDirectory(atPath: "/Volumes")).map(Set.init))
+                         mountedVolumes: Volume.mountedNames())
     }
 }
 
@@ -51,6 +51,8 @@ final class AppState {
     @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [AppRef])?
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
+    /// Real paths of apps the scan found through a symlink, to the paths it lists them at.
+    @ObservationIgnored private var pathAliases: [String: String] = [:]
     /// Apps on the grid from outside the scan folders, read off the main thread with each
     /// scan. `outsideChecked` holds every path looked at, found or not, and `outsideExisting`
     /// those with something on disk (an app, or a bundle that couldn't be read).
@@ -150,11 +152,6 @@ final class AppState {
     @ObservationIgnored var scanner: @Sendable ([URL]) -> AppScanner.ScanResult = { AppScanner.scanReporting(roots: $0) }
     /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
     @ObservationIgnored private var savesBlocked = false
-    /// When a save last refreshed the backup. The backup is refreshed at the first save of a
-    /// run and then at most every `backupInterval`, so a change to regret (an import, a sort)
-    /// doesn't reach it with the very next edit.
-    @ObservationIgnored private var lastBackup: Date?
-    static let backupInterval: TimeInterval = 10 * 60
 
     init(prefs: Preferences, store: GridStore) {
         self.prefs = prefs
@@ -166,10 +163,13 @@ final class AppState {
             } catch {
                 // Keep the file for inspection (or for the newer version) and start fresh.
                 let newer = if case GridFileError.unsupportedVersion = error { true } else { false }
-                let backup = store.url.deletingPathExtension()
+                // The file a symlink points at, set aside beside its backup: moving the link
+                // would lose both, and the next save would write a file over the link.
+                let file = store.fileURL
+                let backup = file.deletingPathExtension()
                     .appendingPathExtension("\(newer ? "newer" : "corrupt")-\(Int(Date().timeIntervalSince1970)).json")
                 do {
-                    try FileManager.default.moveItem(at: store.url, to: backup)
+                    try FileManager.default.moveItem(at: file, to: backup)
                     NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
                     if !newer, let previous = try? store.loadBackup() {
                         // An earlier save: at most about `backupInterval` behind.
@@ -286,7 +286,7 @@ final class AppState {
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
-            self?.saveNow()
+            self?.saveInBackground()
         }
     }
 
@@ -296,17 +296,43 @@ final class AppState {
     @ObservationIgnored private(set) var lastSaveError: Error?
     /// What to tell the person about the last failed save, for `reportLastSaveFailure()`.
     @ObservationIgnored private var lastSaveFailureDetail: String?
+    /// Writes the saves in order, off the main thread unless one has to be done now.
+    @ObservationIgnored private lazy var writer = LayoutWriter(store: store)
 
     /// Saves the grid now, unless it is unchanged since the last save; false when that failed.
+    /// Waits for the disk, so it is for quitting; `saveInBackground` doesn't hold up the screen.
     @discardableResult
     func saveNow(reportingFailure: Bool = true) -> Bool {
+        guard let generation = prepareSave(reportingFailure: reportingFailure) else { return lastSaveError == nil }
+        let grid = grid
+        return finishSave(generation, grid: grid, error: writer.save(grid), reportingFailure: reportingFailure)
+    }
+
+    /// `saveNow` with the writing done off the main thread; `done` gets whether it worked.
+    func saveInBackground(reportingFailure: Bool = true, done: (@MainActor (Bool) -> Void)? = nil) {
+        guard let generation = prepareSave(reportingFailure: reportingFailure) else {
+            done?(lastSaveError == nil)
+            return
+        }
+        let grid = grid
+        writer.saveInBackground(grid) { [weak self] error in
+            Task { @MainActor in
+                guard let self else { return }
+                done?(self.finishSave(generation, grid: grid, error: error, reportingFailure: reportingFailure))
+            }
+        }
+    }
+
+    /// The generation to save, or nil when there is nothing to write: the grid is unchanged
+    /// since the last save, or saving is blocked (which sets `lastSaveError`).
+    private func prepareSave(reportingFailure: Bool) -> Int? {
         lastSaveError = nil
         lastSaveFailureDetail = nil
         saveTask?.cancel()
-        if savedGeneration == gridGeneration && store.exists { return true }
+        if savedGeneration == gridGeneration && store.exists { return nil }
         // Before the first layout, exclusions chosen in the welcome window are still worth keeping,
         // and so is emptying them: the file on disk would otherwise keep the last one.
-        guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return true }
+        guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return nil }
         if savesBlocked {
             guard !store.exists else {
                 NSLog("LaunchGrid: not saving over the layout that couldn't be read")
@@ -315,21 +341,18 @@ final class AppState {
                 lastSaveError = CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: detail])
                 lastSaveFailureDetail = detail
                 if reportingFailure { reportSaveFailure(detail) }
-                return false
+                return nil
             }
             savesBlocked = false // moved out of the way since
         }
-        do {
-            let generation = gridGeneration
-            let refreshBackup = lastBackup.map { Date().timeIntervalSince($0) >= Self.backupInterval } ?? true
-            if try store.save(grid, refreshingBackup: refreshBackup) { lastBackup = Date() }
-            savedGeneration = generation
-            if !grid.allApps.isEmpty { hasGridFile = true }
-            saveFailureReported = false
-            // Before the first layout nothing is on the grid yet, so nothing is unused either.
-            if hasGridFile { onAppPathsInUse(appPathsInUse) }
-            return true
-        } catch {
+        return gridGeneration
+    }
+
+    /// Records how the save of `generation` went; true when it worked.
+    private func finishSave(_ generation: Int, grid saved: Grid, error: Error?, reportingFailure: Bool) -> Bool {
+        // A later save, made at once when quitting, already wrote a newer grid.
+        if generation &- savedGeneration < 0 { return true }
+        if let error {
             NSLog("LaunchGrid: save failed: \(error)")
             lastSaveError = error
             let detail = String(localized: "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
@@ -337,6 +360,12 @@ final class AppState {
             if reportingFailure { reportSaveFailure(detail) }
             return false
         }
+        savedGeneration = generation
+        if !saved.allApps.isEmpty { hasGridFile = true }
+        saveFailureReported = false
+        // Before the first layout nothing is on the grid yet, so nothing is unused either.
+        if hasGridFile { onAppPathsInUse(appPathsInUse) }
+        return true
     }
 
     /// Shows the layout file in Finder. Before the first layout (or after an unreadable one was
@@ -394,7 +423,7 @@ final class AppState {
             let (result, outside, disk) = await Task.detached(priority: .utility) {
                 let result = scanner(roots)
                 let scanned = Set(result.apps.map(\.path))
-                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0) }),
+                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0) && result.aliases[$0] == nil }),
                         DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted))
             }.value
             NSLog("LaunchGrid: scanned \(result.apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
@@ -402,7 +431,7 @@ final class AppState {
                 NSLog("LaunchGrid: could not list \(result.unlisted.joined(separator: ", ")); keeping their apps")
             }
             self.scanning = false
-            self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted, disk: disk)
+            self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted, aliases: result.aliases, disk: disk)
             completion?()
             if self.rescanQueued {
                 self.rescanQueued = false
@@ -415,14 +444,15 @@ final class AppState {
 
     /// Takes in a finished scan. `outside` holds what was read of the grid's apps outside the
     /// scan folders; any not covered are read in the background when reconciling. `unlisted` holds the folders
-    /// the scan couldn't list.
+    /// the scan couldn't list, and `aliases` the real paths of apps it found through a symlink.
     /// `outside` and `disk` are what the scan saw of the disk, read now when not given.
     func catalogScanned(_ apps: [InstalledApp], outside: OutsideRead? = nil,
-                        unlisted: [String] = [], disk: DiskState? = nil) {
+                        unlisted: [String] = [], aliases: [String: String] = [:], disk: DiskState? = nil) {
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
-        let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { installedByPath[$0] == nil })
+        pathAliases = aliases
+        let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { isOutside($0) })
         outsideApps = outside.apps
         outsideChecked = outside.checked
         outsideExisting = outside.existing
@@ -499,9 +529,10 @@ final class AppState {
         return Volume.unmountedVolume(for: path, mounted: mountedVolumes) == nil
     }
 
-    /// Whether a scan could have seen an app at `path`, as of the last scan.
+    /// Whether a scan could have seen an app at `path`, as of the last scan. Never looks at the
+    /// disk: when the mounted volumes couldn't be told, apps on any of them keep their tiles.
     private var isReachable: (String) -> Bool {
-        let unreachable = unreachableFolders, mounted = disk.mountedVolumes
+        let unreachable = unreachableFolders, mounted = disk.mountedVolumes ?? []
         return { Self.isReachable($0, unreachableFolders: unreachable, mountedVolumes: mounted) }
     }
 
@@ -532,7 +563,7 @@ final class AppState {
         // Apps added from outside the scanned folders stay as long as they exist on disk,
         // and recently pruned ones there can still return to their slot. The scan read them;
         // only ones that reached the grid since are read here.
-        let candidates = outsideCandidates().filter { installedByPath[$0] == nil }
+        let candidates = outsideCandidates().filter { isOutside($0) }
         // Ones that reached the grid since (an undo, an app added with Browse) are read off the
         // main thread; until then they count as out of reach, so they keep their tiles.
         let unchecked = Set(candidates.filter { !outsideChecked.contains($0) })
@@ -542,7 +573,7 @@ final class AppState {
         var g = grid
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
                                           isReachable: { !unchecked.contains($0) && reachable($0) },
-                                          pathExists: knownToExist)
+                                          pathExists: knownToExist, aliases: pathAliases)
         guard g != grid else { return }
         if !report.isEmpty {
             NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
@@ -567,6 +598,11 @@ final class AppState {
         }
     }
 
+    /// Whether `path` is outside what the scan found, under its own path or its real one.
+    private func isOutside(_ path: String) -> Bool {
+        installedByPath[path] == nil && pathAliases[path] == nil
+    }
+
     private func isSelf(_ bundleID: String?) -> Bool {
         bundleID != nil && bundleID == ownBundleID
     }
@@ -582,7 +618,8 @@ final class AppState {
 
     func addApps(_ apps: [InstalledApp]) {
         let installed = self.installed
-        apply { Reconciler.add(apps, to: &$0, installed: installed) }
+        let aliases = pathAliases
+        apply { Reconciler.add(apps, to: &$0, installed: installed, aliases: aliases) }
         showToast(apps.count == 1 ? String(localized: "Added \(apps[0].name)") : String(localized: "Added \(apps.count) apps"))
     }
 
@@ -606,7 +643,7 @@ final class AppState {
     /// The grid's apps from outside the scan folders, as last read from disk (with their
     /// category), or as the grid knows them when not read yet.
     private var outsideGridApps: [InstalledApp] {
-        grid.allApps.filter { installedByPath[$0.path] == nil }
+        grid.allApps.filter { isOutside($0.path) }
             .map { outsideApps[$0.path] ?? InstalledApp(bundleID: $0.bundleID, path: $0.path, name: $0.name) }
     }
 
@@ -731,33 +768,22 @@ final class AppState {
 
     /// Records where a moved app now lives. Not an undo step: like `reconcile()`, it mirrors the disk.
     func rememberPath(_ path: String, of id: UUID) {
-        guard let loc = grid.locate(id) else { return }
-        var g = grid
-        if case .folder(var f) = g.pages[loc.page].items[loc.index], let fi = loc.folderIndex {
-            f.apps[fi].path = path
-            g.pages[loc.page].items[loc.index] = .folder(f)
-        } else if case .app(var a) = g.pages[loc.page].items[loc.index] {
-            a.path = path
-            g.pages[loc.page].items[loc.index] = .app(a)
-        }
-        grid = g
-        afterChange()
+        guard let old = grid.item(id)?.app?.path, old != path else { return }
+        followMovedApps([old: path])
     }
 
-    /// Follows apps that moved, old path to new, as found by their sandbox bookmarks. Not an
+    /// Follows apps that moved, old path to new (as found by their sandbox bookmarks), in the
+    /// undo and redo history too: undoing must not bring back a place the app has left. Not an
     /// undo step: it mirrors the disk.
     func followMovedApps(_ moves: [String: String]) {
         guard !moves.isEmpty else { return }
-        for app in grid.allApps {
-            if let path = moves[app.path] { rememberPath(path, of: app.id) }
-        }
-        // One pruned meanwhile (the scan didn't find it at its new place) can still return
-        // to its slot from there, and its bookmark stays in use.
+        for i in undoStack.indices { undoStack[i].followMoves(moves) }
+        for i in redoStack.indices { redoStack[i].followMoves(moves) }
         var g = grid
-        for i in g.recentlyPruned.indices {
-            if let path = moves[g.recentlyPruned[i].app.path] { g.recentlyPruned[i].app.path = path }
-        }
-        if g != grid { grid = g }
+        g.followMoves(moves)
+        guard g != grid else { return }
+        grid = g
+        afterChange()
     }
 
     /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode
@@ -1046,6 +1072,50 @@ final class AppState {
             withAnimation(Self.pageAnimation, body)
         } else {
             body()
+        }
+    }
+}
+
+/// Writes the layout on one serial queue, so saves land in the order they were made: one
+/// made at once (when quitting) waits for those under way instead of racing them.
+final class LayoutWriter: @unchecked Sendable {
+    /// The backup is refreshed at the first save of a run and then at most this often, so a
+    /// change to regret (an import, a sort) doesn't reach it with the very next edit.
+    static let backupInterval: TimeInterval = 10 * 60
+
+    let store: GridStore
+    private let queue = DispatchQueue(label: "com.sglavoie.launchgrid.save", qos: .utility)
+    /// When a save last refreshed the backup; only read and written on `queue`.
+    private var lastBackup: Date?
+
+    init(store: GridStore) {
+        self.store = store
+    }
+
+    /// Saves now, after any save still under way; the error, if it failed.
+    func save(_ grid: Grid) -> Error? {
+        queue.sync { write(grid) }
+    }
+
+    func saveInBackground(_ grid: Grid, done: @escaping @Sendable (Error?) -> Void) {
+        queue.async { done(self.write(grid)) }
+    }
+
+    #if !APP_STORE
+    /// Seconds each save waits before writing, so the debug scripts can see one under way.
+    private let debugDelay = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SAVE_DELAY"].flatMap(Double.init)
+    #endif
+
+    private func write(_ grid: Grid) -> Error? {
+        #if !APP_STORE
+        if let debugDelay { Thread.sleep(forTimeInterval: debugDelay) }
+        #endif
+        let refreshBackup = lastBackup.map { Date().timeIntervalSince($0) >= Self.backupInterval } ?? true
+        do {
+            if try store.save(grid, refreshingBackup: refreshBackup) { lastBackup = Date() }
+            return nil
+        } catch {
+            return error
         }
     }
 }

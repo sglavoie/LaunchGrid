@@ -9,7 +9,7 @@ enum WindowMode: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .fullScreen: String(localized: "Full Screen")
-        case .behindDock: String(localized: "Full Screen Behind Dock")
+        case .behindDock: String(localized: "Full Screen with Dock")
         case .window: String(localized: "Window")
         }
     }

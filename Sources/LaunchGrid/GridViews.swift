@@ -200,10 +200,14 @@ struct SearchField: View {
                 let line = state.searchLine
                 // The caret floats over the join, so moving it doesn't push the text apart.
                 // What an input method is still composing sits at the caret, underlined.
+                // Too long to fit, the start gives way first: what was just typed stays in view.
                 HStack(spacing: 0) {
                     Text(line.beforeCaret)
+                        .truncationMode(.head)
+                        .layoutPriority(1)
                     Text(marked).underline()
                         .overlay(alignment: .trailing) { Caret().offset(x: 1.5) }
+                        .layoutPriority(2)
                     Text(line.afterCaret)
                 }
                 .foregroundStyle(.white)
@@ -273,6 +277,9 @@ struct PageTitle: View {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white.opacity(high ? 1 : 0.9))
+                    // One line: a second would spill over the search field or the icons.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .accessibilityAddTraits([.isHeader, .isButton])
                     .accessibilityHint("Renames the page")
             } else if state.editing && state.query.isEmpty && state.grid.pages.indices.contains(page) {
@@ -418,7 +425,7 @@ struct ItemCell: View {
             LongPressGesture(minimumDuration: 0.7).onEnded { _ in
                 guard !state.drag.active, !state.editing else { return }
                 swallowTap = true
-                withAnimation { state.editing = true }
+                withAnimation(AppState.dragMotion(.default)) { state.editing = true }
                 Task {
                     while NSEvent.pressedMouseButtons & 1 != 0 { try? await Task.sleep(for: .milliseconds(50)) }
                     // Leave time for the release's tap to arrive and be swallowed.
@@ -761,6 +768,9 @@ struct FolderPanel: View {
                 Text(folder.name)
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: max(gridSize.width, 240))
                     .onTapGesture { state.beginRename(folder.id) }
                     .help("Click to rename")
                     .accessibilityAddTraits(.isButton)
@@ -878,7 +888,7 @@ struct FolderItemCell: View {
                 LongPressGesture(minimumDuration: 0.7).onEnded { _ in
                     guard !state.drag.active, !state.editing else { return }
                     swallowTap = true
-                    withAnimation { state.editing = true }
+                    withAnimation(AppState.dragMotion(.default)) { state.editing = true }
                     Task {
                         while NSEvent.pressedMouseButtons & 1 != 0 { try? await Task.sleep(for: .milliseconds(50)) }
                         try? await Task.sleep(for: .milliseconds(150))

@@ -82,9 +82,9 @@ extension GridItem: Codable {
     private enum CodingKeys: String, CodingKey { case type, app, folder }
     private enum Kind: String, Codable { case app, folder }
 
-    /// An unknown `type` fails the whole file (`GridStore` reports it as invalid), so a new
-    /// item kind needs a `Grid.currentVersion` bump: older builds then say the file is from a
-    /// newer version instead of calling it corrupt.
+    /// An unknown `type` fails the item, which is skipped like any other unreadable entry, so a
+    /// new item kind needs a `Grid.currentVersion` bump: older builds then say the file is from
+    /// a newer version instead of dropping what they can't read.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Kind.self, forKey: .type) {
@@ -150,6 +150,10 @@ public struct PrunedApp: Codable, Equatable, Sendable {
     public var folderIndex: Int?
     /// The prune itself emptied the folder; otherwise a vanished folder was the user's doing.
     public var folderEmptied: Bool?
+    /// The prune emptied its page, which went too; it comes back at `pageIndex` with `pageTitle`.
+    public var pageEmptied: Bool?
+    public var pageIndex: Int?
+    public var pageTitle: String?
     /// IDs of the items just before it on its page (and in its folder), nearest last. It goes
     /// back after the nearest one still there, so neighbours that never return don't shift it.
     public var before: [UUID]?
@@ -157,7 +161,8 @@ public struct PrunedApp: Codable, Equatable, Sendable {
 
     public init(app: AppRef, prunedAt: Date, pageID: UUID, index: Int,
                 folderID: UUID? = nil, folderName: String? = nil, folderIndex: Int? = nil,
-                folderEmptied: Bool? = nil, before: [UUID]? = nil, folderBefore: [UUID]? = nil) {
+                folderEmptied: Bool? = nil, pageEmptied: Bool? = nil, pageIndex: Int? = nil, pageTitle: String? = nil,
+                before: [UUID]? = nil, folderBefore: [UUID]? = nil) {
         self.app = app
         self.prunedAt = prunedAt
         self.pageID = pageID
@@ -166,6 +171,9 @@ public struct PrunedApp: Codable, Equatable, Sendable {
         self.folderName = folderName
         self.folderIndex = folderIndex
         self.folderEmptied = folderEmptied
+        self.pageEmptied = pageEmptied
+        self.pageIndex = pageIndex
+        self.pageTitle = pageTitle
         self.before = before
         self.folderBefore = folderBefore
     }
@@ -206,7 +214,7 @@ public struct InstalledApp: Equatable, Hashable, Sendable {
 }
 
 // Lenient decoding: missing optional keys fall back to defaults so hand-edited
-// or older files still load.
+// or older files still load, and an entry that can't be read is skipped, not the whole file.
 extension Grid {
     private enum CodingKeys: String, CodingKey { case version, rows, columns, pages, removedBundleIDs, recentlyPruned }
 
@@ -215,7 +223,7 @@ extension Grid {
         self.init(
             rows: try c.decodeIfPresent(Int.self, forKey: .rows) ?? 5,
             columns: try c.decodeIfPresent(Int.self, forKey: .columns) ?? 7,
-            pages: try c.decodeIfPresent([Page].self, forKey: .pages) ?? [],
+            pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
             removedBundleIDs: try c.decodeIfPresent(Set<String>.self, forKey: .removedBundleIDs) ?? [],
             // Disposable: an unreadable list is dropped rather than failing the whole file.
             recentlyPruned: (try? c.decodeIfPresent([PrunedApp].self, forKey: .recentlyPruned)) ?? []
@@ -244,7 +252,7 @@ extension Page {
         self.init(
             id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
             title: try c.decodeIfPresent(String.self, forKey: .title),
-            items: try c.decodeIfPresent([GridItem].self, forKey: .items) ?? []
+            items: try c.decodeLossily(GridItem.self, forKey: .items) ?? []
         )
     }
 }
@@ -272,7 +280,39 @@ extension Folder {
         self.init(
             id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
             name: try c.decodeIfPresent(String.self, forKey: .name) ?? String(localized: "Folder"),
-            apps: try c.decodeIfPresent([AppRef].self, forKey: .apps) ?? []
+            apps: try c.decodeLossily(AppRef.self, forKey: .apps) ?? []
         )
     }
+}
+
+extension KeyedDecodingContainer {
+    /// The array's elements that decode; the others are skipped and logged, so one bad entry
+    /// (an app without a path) doesn't make the whole layout unreadable.
+    func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> [T]? {
+        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        var c = try nestedUnkeyedContainer(forKey: key)
+        let decoder = try superDecoder(forKey: key)
+        var out: [T] = []
+        while !c.isAtEnd {
+            do {
+                out.append(try c.decode(T.self))
+            } catch {
+                NSLog("LaunchGrid: skipped an unreadable \(T.self) in the layout: \(error)")
+                (decoder.userInfo[SkippedEntries.key] as? SkippedEntries)?.count += 1
+                _ = try c.decode(SkippedEntry.self) // a failed decode doesn't move past the entry
+            }
+        }
+        return out
+    }
+}
+
+/// Decodes any value without reading it, to move past an entry that failed.
+private struct SkippedEntry: Decodable {
+    init(from decoder: Decoder) {}
+}
+
+/// Counts the entries `decodeLossily` skipped, when passed in the decoder's `userInfo`.
+final class SkippedEntries: @unchecked Sendable {
+    static let key = CodingUserInfoKey(rawValue: "skippedEntries")!
+    var count = 0
 }

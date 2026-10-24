@@ -8,13 +8,22 @@ extension UTType {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     static let showNotification = Notification.Name("com.sglavoie.launchgrid.show")
 
     let prefs = Preferences()
     private(set) var state: AppState!
     private var overlay: OverlayController!
     private var statusItem: NSStatusItem?
+    /// The menu-bar icon's menu while VoiceOver runs, filled each time it opens.
+    private lazy var voiceOverMenu: NSMenu = {
+        let menu = NSMenu()
+        menu.delegate = self
+        return menu
+    }()
+    private var voiceOverObservation: NSKeyValueObservation?
+    /// Set by the debug scripts to act as if VoiceOver were on.
+    var attachesStatusMenu = false
     private var watcher: FolderWatcher?
     private var rescanDebounce: Task<Void, Never>?
     private var periodicRescan: Timer?
@@ -28,6 +37,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let id = Bundle.main.bundleIdentifier else { return [] }
         return NSRunningApplication.runningApplications(withBundleIdentifier: id)
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !$0.isTerminated && !isScratch($0) }
+    }
+
+    /// Held for as long as this copy runs; the system lets it go when the process ends,
+    /// crashed or not.
+    nonisolated(unsafe) private static var instanceLock: Int32 = -1
+
+    /// Takes the lock beside the layout that only one copy can hold, so two started at the
+    /// same moment (the login item and a click) can't both miss the other in `otherInstances`
+    /// and both answer the shortcut and save. False when another copy holds it.
+    static func acquireInstanceLock(in folder: URL = storeURL.deletingLastPathComponent()) -> Bool {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let fd = open(folder.appendingPathComponent(".instance.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        // A folder that can't be written to says nothing about other copies.
+        guard fd >= 0 else { return true }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            return false
+        }
+        instanceLock = fd
+        return true
     }
 
     private static func isScratch(_ app: NSRunningApplication) -> Bool {
@@ -72,10 +101,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return abs(written - start) < 0.001
     }
 
+    /// The layout: in a scratch run's own folder, or in Application Support.
+    nonisolated static let storeURL = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"]
+        .map { URL(fileURLWithPath: $0).appendingPathComponent("grid.json") } ?? GridStore.defaultURL
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let storeURL = ProcessInfo.processInfo.environment["LAUNCHGRID_DATA_DIR"]
-            .map { URL(fileURLWithPath: $0).appendingPathComponent("grid.json") } ?? GridStore.defaultURL
-        state = AppState(prefs: prefs, store: GridStore(url: storeURL))
+        state = AppState(prefs: prefs, store: GridStore(url: Self.storeURL))
         // Before the first scan, so it sees the folders and apps the bookmarks reach.
         state.followMovedApps(FileAccess.restore(prefs: prefs))
         // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
@@ -94,6 +125,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         buildMainMenu()
         applyDockPolicy()
         applyMenuBarIcon()
+        voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled) { [weak self] _, _ in
+            Task { @MainActor in self?.applyMenuBarIcon() }
+        }
         HotkeyService.shared.onTrigger = { [weak self] in self?.overlay.toggle() }
         if !applyHotkey() {
             // After launch finishes, so the alert doesn't hold up the first scan.
@@ -201,7 +235,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // The last changes would be lost on the way out: say so, so they can be kept open.
         guard let state, !state.saveNow(reportingFailure: false) else { return .terminateNow }
-        overlay.hide(deactivate: false)
+        // Saving again on the way out would fail again, and tell it a second time.
+        overlay.hide(deactivate: false, saving: false)
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = String(localized: "Your latest layout changes couldn't be saved")
@@ -288,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(prefs.showInDock ? .regular : .accessory)
     }
 
-    private func applyMenuBarIcon() {
+    func applyMenuBarIcon() {
         guard prefs.showInMenuBar else {
             if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
             statusItem = nil
@@ -299,8 +334,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             item.button?.target = self
             item.button?.action = #selector(statusItemClicked(_:))
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // The menu is otherwise only a right-click away, out of reach of VoiceOver and the keyboard.
+            item.button?.setAccessibilityCustomActions([
+                NSAccessibilityCustomAction(name: String(localized: "Show Menu")) { [weak self] in
+                    self?.showStatusMenu()
+                    return true
+                },
+            ])
             statusItem = item
         }
+        // With VoiceOver, pressing the icon (or VoiceOver's own show-menu command) opens the
+        // menu, whose first item shows the grid.
+        statusItem?.menu = NSWorkspace.shared.isVoiceOverEnabled || attachesStatusMenu ? voiceOverMenu : nil
         statusItem?.button?.image = switch prefs.menuBarIconStyle {
         case .monochrome: NSImage(systemSymbolName: "square.grid.3x3.fill", accessibilityDescription: "LaunchGrid")
         case .colour: Self.colourMenuBarIcon
@@ -337,12 +382,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
-            guard let statusItem else { return }
-            statusItem.menu = makeMenu()
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil
+            showStatusMenu()
         } else {
             overlay.toggle()
+        }
+    }
+
+    /// Opens the menu-bar icon's menu below it.
+    private func showStatusMenu() {
+        guard let statusItem, statusItem.menu == nil else {
+            statusItem?.button?.performClick(nil)
+            return
+        }
+        statusItem.menu = makeMenu()
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === voiceOverMenu else { return }
+        menu.removeAllItems()
+        for item in makeMenu().items {
+            item.menu?.removeItem(item)
+            menu.addItem(item)
         }
     }
 
@@ -358,10 +420,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile), keyEquivalent: "").target = self
         let importMenu = NSMenu()
-        let appGrid = importMenu.addItem(withTitle: String(localized: "From AppGrid"), action: #selector(importAppGrid), keyEquivalent: "")
+        let appGrid = importMenu.addItem(withTitle: String(localized: "From AppGrid…"), action: #selector(importAppGrid as () -> Void), keyEquivalent: "")
         appGrid.target = self
         appGrid.isEnabled = LaunchpadImporter.appGridDatabaseURL != nil
-        let launchpad = importMenu.addItem(withTitle: String(localized: "From Launchpad"), action: #selector(importLaunchpad), keyEquivalent: "")
+        let launchpad = importMenu.addItem(withTitle: String(localized: "From Launchpad…"), action: #selector(importLaunchpad as () -> Void), keyEquivalent: "")
         launchpad.target = self
         launchpad.isEnabled = LaunchpadImporter.launchpadDatabaseURL != nil
         importMenu.autoenablesItems = false
@@ -438,8 +500,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.state.build(style: style)
                 self?.closeFirstRunIfDone()
             },
-            importAppGrid: { [weak self] in self?.importAppGrid() },
-            importLaunchpad: { [weak self] in self?.importLaunchpad() },
+            importAppGrid: { [weak self] done in self?.importAppGrid(done: done) },
+            importLaunchpad: { [weak self] done in self?.importLaunchpad(done: done) },
             loadFile: { [weak self] in self?.loadGridFile() },
             saveFile: { [weak self] in self?.saveGridFile() },
             addMissing: { [weak self] in self?.showAddMissing() },
@@ -554,14 +616,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Import / export
 
-    @objc func importAppGrid() {
+    #if !APP_STORE
+    /// For the debug scripts: imports `url` as Settings' Import buttons do, asking first.
+    func debugImport(_ url: URL, from source: String) {
+        importDatabase(url, from: source, confirming: true) { print("imported: \($0)"); fflush(stdout) }
+    }
+    #endif
+
+    @objc func importAppGrid() { importAppGrid(done: nil) }
+
+    @objc func importLaunchpad() { importLaunchpad(done: nil) }
+
+    /// `done` gets what happened, for Settings to show beside its buttons.
+    func importAppGrid(done: (@MainActor (String) -> Void)?) {
         guard let url = LaunchpadImporter.appGridDatabaseURL, allowReading(url, from: "AppGrid") else { return }
-        importDatabase(url, from: "AppGrid")
+        importDatabase(url, from: "AppGrid", confirming: true, done: done)
     }
 
-    @objc func importLaunchpad() {
+    func importLaunchpad(done: (@MainActor (String) -> Void)?) {
         guard let url = LaunchpadImporter.launchpadDatabaseURL, allowReading(url, from: "Launchpad") else { return }
-        importDatabase(url, from: "Launchpad")
+        importDatabase(url, from: "Launchpad", confirming: true, done: done)
     }
 
     /// Inside the sandbox, a database outside it can only be read once the person picks its
@@ -585,7 +659,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return true
     }
 
-    private func importDatabase(_ url: URL, from source: String) {
+    /// - Parameter confirming: asks before replacing a grid that has apps on it, as loading a
+    ///   grid file does (which asked already when it is the one importing).
+    private func importDatabase(_ url: URL, from source: String, confirming: Bool = false,
+                                done: (@MainActor (String) -> Void)? = nil) {
         let rows = state.grid.rows, columns = state.grid.columns
         let installed = state.installed.map(\.path)
         Task {
@@ -605,6 +682,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     showError(String(localized: "Nothing to import"), String(localized: "No apps in the \(source) layout could be found on this Mac."))
                     return
                 }
+                if confirming && !state.grid.allApps.isEmpty {
+                    overlay.hide(deactivate: false)
+                    NSApp.activate()
+                    let alert = NSAlert()
+                    alert.messageText = String(localized: "Replace your layout with the one from \(source)?")
+                    alert.informativeText = String(localized: "Your current pages and folders will be replaced by the \(result.imported) apps found in the \(source) layout. ⌘Z in the grid undoes it.")
+                    alert.addButton(withTitle: String(localized: "Replace"))
+                    alert.addButton(withTitle: String(localized: "Cancel"))
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                }
                 state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid))
                 // Whole sentences, so a translation can order them its own way.
                 let (n, skipped, twice) = (result.imported, result.skipped.count, result.duplicates.count)
@@ -615,6 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 case (true, true): String(localized: "Imported \(n) apps from \(source); skipped \(skipped) not installed and \(twice) listed twice")
                 }
                 state.showToast(message)
+                done?(message)
                 closeFirstRunIfDone()
             }
         }

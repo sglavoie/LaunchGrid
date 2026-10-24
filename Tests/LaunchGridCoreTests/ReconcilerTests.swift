@@ -354,13 +354,80 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         g.restore(PrunedApp(app: app("B"), prunedAt: Date(), pageID: UUID(), index: 0))
         #expect(g.pages.map(titles) == [["A", "C"], ["D", "B"]])
 
-        // Through the reconciler: the user deleted the page meanwhile.
+        // Through the reconciler: the user emptied and deleted the page meanwhile.
         let t0 = Date(timeIntervalSinceReferenceDate: 0)
-        var h = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))]), Page(items: [.app(app("B"))])])
-        _ = Reconciler.reconcile(&h, installed: [installed("A")], autoAdd: false, now: t0)
+        var h = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A"))]), Page(items: [.app(app("B")), .app(app("X"))])])
+        _ = Reconciler.reconcile(&h, installed: [installed("A"), installed("X")], autoAdd: false, now: t0)
+        h.move([h.pages[1].items[0].id], toPage: 0, at: 1)
         h.removeEmptyPages()
-        _ = Reconciler.reconcile(&h, installed: [installed("A"), installed("B")], autoAdd: false, now: t0 + 5)
-        #expect(h.pages.map(titles) == [["A", "B"]])
+        _ = Reconciler.reconcile(&h, installed: ["A", "B", "X"].map { installed($0) }, autoAdd: false, now: t0 + 5)
+        #expect(h.pages.map(titles) == [["A", "X", "B"]])
+    }
+
+    @Test func aPageThePruneEmptiesGoesAndComesBackWithItsApps() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        var g = Grid(rows: 1, columns: 2, pages: [
+            Page(items: [.app(app("A"))]),
+            Page(title: "Games", items: [.app(app("B"))]),
+            Page(items: [.app(app("C"))]),
+            Page(title: "Made by hand"),
+        ])
+        g.group([g.pages[1].items[0].id], name: "F")
+        _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("C")], autoAdd: false, now: t0)
+        #expect(g.pages.map(titles) == [["A"], ["C"], []], "an empty page the user made stays")
+        #expect(g.recentlyPruned.first?.pageEmptied == true)
+
+        _ = Reconciler.reconcile(&g, installed: ["A", "B", "C"].map { installed($0) }, autoAdd: false, now: t0 + 5)
+        #expect(g.pages.map(titles) == [["A"], ["F"], ["C"], []])
+        #expect(g.pages[1].title == "Games")
+        #expect(g.pages[1].items[0].folder?.apps.map(\.name) == ["B"])
+    }
+
+    @Test func aPageEmptiedLaterStillComesBackForAnAppPrunedEarlier() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))]), Page(title: "P", items: [.app(app("B")), .app(app("C"))])])
+        _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("C")], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [installed("A")], autoAdd: false, now: t0 + 5)
+        #expect(g.pages.map(titles) == [["A"]])
+        _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("B")], autoAdd: false, now: t0 + 10)
+        #expect(g.pages.map(titles) == [["A"], ["B"]])
+        #expect(g.pages[1].title == "P")
+    }
+
+    @Test func aMemoryEntryFromTheFutureExpires() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A"))])])
+        g.recentlyPruned = [PrunedApp(app: app("B"), prunedAt: t0 + 365 * 86400, pageID: g.pages[0].id, index: 0)]
+        _ = Reconciler.reconcile(&g, installed: [installed("A")], autoAdd: false, now: t0)
+        #expect(g.recentlyPruned.isEmpty)
+        _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("B")], autoAdd: false, now: t0 + 5)
+        #expect(g.allApps.map(\.name) == ["A"])
+    }
+
+    @Test func anAppAtItsRealPathTakesThePathTheScanListsItAt() {
+        let scanned = installed("Safari", path: "/Applications/Safari.app")
+        let real = "/System/Cryptexes/App/System/Applications/Safari.app"
+        let aliases = [real: scanned.path]
+        // Browse gives the real path; the scan, the link in /Applications.
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A"))])])
+        Reconciler.add([installed("Safari", path: real)], to: &g, installed: [installed("A"), scanned], aliases: aliases)
+        #expect(g.allApps.map(\.path) == ["/Applications/A.app", scanned.path])
+
+        // One added at its real path before, with apps added automatically: one Safari, not two.
+        var h = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A")), .app(AppRef(bundleID: scanned.bundleID, path: real, name: "Safari"))])])
+        _ = Reconciler.reconcile(&h, installed: [installed("A"), scanned], autoAdd: true, pathExists: { _ in true }, aliases: aliases)
+        #expect(h.allApps.map(\.path) == ["/Applications/A.app", scanned.path])
+    }
+
+    @Test func anAppWhoseBundleIDCantBeReadStaysItself() {
+        let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(xcode)])])
+        let now = [InstalledApp(bundleID: nil, path: xcode.path, name: "Xcode"),
+                   installed("Xcode-beta", id: "com.apple.dt.Xcode", path: "/Applications/Xcode-beta.app")]
+        let report = Reconciler.reconcile(&g, installed: now, autoAdd: false, pathExists: { _ in true })
+        #expect(report.moved.isEmpty)
+        #expect(g.allApps.map(\.path) == [xcode.path])
+        #expect(g.allApps.first?.bundleID == xcode.bundleID, "keeps the ID it had")
     }
 
     @Test func pruneMemoryKeepsTheNewestEntries() {
@@ -489,6 +556,21 @@ func tempDir(_ prefix: String) -> URL {
         #expect(lchflags(link.path, UInt32(UF_HIDDEN)) == 0)
         #expect(chflags(root.appendingPathComponent("Secret").path, UInt32(UF_HIDDEN)) == 0)
         #expect(AppScanner.scan(roots: [root]).map(\.bundleID) == ["t.safari"])
+    }
+
+    @Test func reportsTheRealPathOfAnAppFoundThroughASymlink() throws {
+        let fm = FileManager.default
+        let root = tempDir("scan")
+        let elsewhere = tempDir("scan-target")
+        defer { try? fm.removeItem(at: root); try? fm.removeItem(at: elsewhere) }
+        try makeFakeApp("Safari.app", id: "t.safari", in: elsewhere)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("Safari.app")
+        try fm.createSymbolicLink(at: link, withDestinationURL: elsewhere.appendingPathComponent("Safari.app"))
+        let result = AppScanner.scanReporting(roots: [root])
+        let real = elsewhere.appendingPathComponent("Safari.app").resolvingSymlinksInPath().path
+        #expect(result.apps.count == 1)
+        #expect(result.aliases[real] == result.apps.first?.path)
     }
 
     @Test func skipsAppsHiddenByDefaultButReadsThemByHand() throws {
@@ -636,6 +718,28 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.grid.allApps.map(\.path) == [link.path])
         let unknown = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7) { _ in real.path }
         #expect(unknown.grid.allApps.map(\.path) == [real.path], "an app the scan didn't find keeps its own path")
+    }
+
+    @Test func copiesSharingABundleIDAreToldApartByTheirBookmarks() throws {
+        // Apple's table has no custom_path: Launch Services alone would give Xcode twice.
+        let dir = tempDir("import")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Xcode.app", id: "com.apple.dt.Xcode", in: dir)
+        try makeFakeApp("Xcode-beta.app", id: "com.apple.dt.Xcode", in: dir)
+        let xcode = dir.appendingPathComponent("Xcode.app"), beta = dir.appendingPathComponent("Xcode-beta.app")
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0), Row(id: 12, type: 4, parent: 10, ordering: 1)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "Xcode", bundleID: "com.apple.dt.Xcode", bookmark: try xcode.bookmarkData()),
+                    12: LaunchpadImporter.AppRow(title: "Xcode-beta", bundleID: "com.apple.dt.Xcode", bookmark: try beta.bookmarkData())]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7) { _ in xcode.path }
+        #expect(r.duplicates.isEmpty)
+        #expect(r.grid.allApps.map { ($0.path as NSString).lastPathComponent } == ["Xcode.app", "Xcode-beta.app"])
+
+        // A bookmark to an app deleted since falls back to the bundle ID.
+        let gone = [11: LaunchpadImporter.AppRow(title: "Xcode", bundleID: "com.apple.dt.Xcode", bookmark: Data("junk".utf8))]
+        let fallback = LaunchpadImporter.build(items: Array(items.prefix(3)), apps: gone, groupTitles: [:], rows: 5, columns: 7) { _ in xcode.path }
+        #expect(fallback.grid.allApps.map(\.path) == [xcode.path])
     }
 
     @Test func readsChangesStillInTheWriteAheadLog() throws {

@@ -125,8 +125,8 @@ extension AppState {
     static let edgeDwell: TimeInterval = 0.6
     static let reorderDwell: TimeInterval = 0.18
 
-    /// Drag motion (lifts, gap shifts, merge highlights); none with Reduce Motion, so
-    /// icons change place without sliding.
+    /// Drag motion (lifts, gap shifts, merge highlights) and the long-press into edit mode; none
+    /// with Reduce Motion, so icons change place without sliding.
     static func dragMotion(_ animation: Animation) -> Animation? {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : animation
     }
@@ -325,7 +325,7 @@ extension AppState {
         }
         guard let cell = pageLayout.cellIndex(at: local) else {
             drag.candidate = nil
-            if drag.mergeTarget != nil { withAnimation(.easeOut(duration: 0.15)) { drag.mergeTarget = nil } }
+            if drag.mergeTarget != nil { withAnimation(Self.dragMotion(.easeOut(duration: 0.15))) { drag.mergeTarget = nil } }
             return
         }
         let remaining = remainingItems(page: currentPage)
@@ -344,12 +344,12 @@ extension AppState {
             if drag.candidate != shown.id {
                 drag.candidate = shown.id
                 drag.candidateSince = Date()
-                if drag.mergeTarget != nil { withAnimation(.easeOut(duration: 0.15)) { drag.mergeTarget = nil } }
+                if drag.mergeTarget != nil { withAnimation(Self.dragMotion(.easeOut(duration: 0.15))) { drag.mergeTarget = nil } }
             }
             return
         }
         drag.candidate = nil
-        if drag.mergeTarget != nil { withAnimation(.easeOut(duration: 0.15)) { drag.mergeTarget = nil } }
+        if drag.mergeTarget != nil { withAnimation(Self.dragMotion(.easeOut(duration: 0.15))) { drag.mergeTarget = nil } }
         let newGap = min(cell, remaining.count)
         if newGap == drag.gap {
             drag.pendingGap = nil

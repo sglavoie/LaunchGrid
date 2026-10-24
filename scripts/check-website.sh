@@ -9,15 +9,20 @@ missing=0
 REFS="$(mktemp)" PAGES="$(mktemp)"
 trap 'rm -f "$REFS" "$PAGES"' EXIT
 
-# A root-relative path's file: "/support/" is /support/index.html.
+# A root-relative path's file: "/support/" is /support/index.html. A relative one is looked for
+# beside the file that refers to it, the second argument.
 file_for() {
-    path=".${1%%[?#]*}"
+    case "$1" in
+        /*) path=".${1%%[?#]*}" ;;
+        *) path="$(dirname "$2")/${1%%[?#]*}" ;;
+    esac
     case "$path" in */) path="${path}index.html" ;; esac
     printf '%s\n' "$path"
 }
 
 # Pages: src, href and poster attributes, and every candidate of a srcset ("url [descriptor]",
-# separated by commas). Root-relative references and same-page #fragments are checked.
+# separated by commas). Local references, root-relative or relative, and same-page #fragments are
+# checked; other sites' (a scheme or //) aren't.
 find . -name '*.html' >"$PAGES"
 while IFS= read -r page; do
     {
@@ -26,9 +31,9 @@ while IFS= read -r page; do
     } >"$REFS" || true
     while IFS= read -r ref; do
         case "$ref" in
-            /*) target="$(file_for "$ref")" ;;
+            "" | //* | *:*) continue ;;
             "#"*) target="$page" ;;
-            *) continue ;;
+            *) target="$(file_for "$ref" "$page")" ;;
         esac
         if [ ! -f "$target" ]; then
             echo "Missing: $ref (in $page)" >&2
@@ -52,13 +57,17 @@ while IFS= read -r page; do
 done <"$PAGES"
 
 # The stylesheets' url()s.
-find . -name '*.css' -exec grep -hoE 'url\("/[^"]*"\)' {} + | sed -E 's/^url\("//; s/"\)$//' >"$REFS" || true
-while IFS= read -r ref; do
-    if [ ! -f "$(file_for "$ref")" ]; then
-        echo "Missing: $ref (in a stylesheet)" >&2
-        missing=1
-    fi
-done <"$REFS"
+find . -name '*.css' >"$PAGES"
+while IFS= read -r sheet; do
+    grep -oE 'url\("[^"]*"\)' "$sheet" | sed -E 's/^url\("//; s/"\)$//' >"$REFS" || true
+    while IFS= read -r ref; do
+        case "$ref" in "" | //* | *:*) continue ;; esac
+        if [ ! -f "$(file_for "$ref" "$sheet")" ]; then
+            echo "Missing: $ref (in $sheet)" >&2
+            missing=1
+        fi
+    done <"$REFS"
+done <"$PAGES"
 
 [ "$missing" = 0 ] && echo "Every local file and #fragment the website refers to exists."
 exit "$missing"

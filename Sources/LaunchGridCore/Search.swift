@@ -4,7 +4,8 @@ public enum Search {
     /// Match score for `name` against `query`: prefix > word start > initials > substring >
     /// subsequence, whatever the name's length. Tiers don't overlap; length ranks within one.
     /// A query of several words also counts as a word start when each of its words starts
-    /// a different word of the name, in any order ("word micro" finds "Microsoft Word").
+    /// a different word of the name, in any order ("word micro" finds "Microsoft Word"), and
+    /// as initials when its words, in order, start words or spell their initials ("vs code").
     /// Separators don't count towards a prefix, so "wifi" finds "Wi-Fi Explorer" and
     /// "visual-" finds "Visual Studio Code" as if typed without them.
     /// Returns nil when there is no match.
@@ -22,9 +23,10 @@ public enum Search {
         if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
         if acronym(of: name).hasPrefix(q) { return 600 }
+        if queryWords.count > 1, startsWordsOrInitials(queryWords, of: words) { return 600 }
         if n.contains(q) { return 500 - min(n.count, 99) }
         // Two characters say more in a script without an alphabet ("网音" for 网易云音乐).
-        let minimum = q.allSatisfy(\.isASCII) ? 3 : 2
+        let minimum = query.contains(where: TextLine.isUnspaced) ? 2 : 3
         if q.count >= minimum, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
         return nil
     }
@@ -48,12 +50,31 @@ public enum Search {
         if s.unicodeScalars.contains(where: { letterSpellings[$0] != nil }) {
             s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap { letterSpellings[$0].map { Array($0.unicodeScalars) } ?? [$0] }))
         }
+        // Hangul syllables as their letters, so a syllable still being typed ("하") finds "한글".
+        if s.unicodeScalars.contains(where: { hangulSyllables.contains($0.value) }) {
+            s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap(hangulLetters)))
+        }
         // Hiragana as katakana, so "かめら" finds "カメラ".
         if s.unicodeScalars.contains(where: { (0x3041...0x3096).contains($0.value) }) {
             s = s.applyingTransform(.hiraganaToKatakana, reverse: false) ?? s
         }
         return s.trimmingCharacters(in: .whitespaces)
     }
+
+    private static let hangulSyllables: ClosedRange<UInt32> = 0xAC00...0xD7A3
+
+    /// A syllable's letters as compatibility jamo, which unlike the conjoining ones its
+    /// canonical decomposition gives are characters of their own, so a prefix can end mid-syllable.
+    private static func hangulLetters(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
+        guard hangulSyllables.contains(scalar.value) else { return [scalar] }
+        let s = Int(scalar.value - hangulSyllables.lowerBound)
+        let (lead, vowel, tail) = (s / 588, s % 588 / 28, s % 28)
+        return [leadLetters[lead], vowelLetters[vowel]] + (tail > 0 ? [tailLetters[tail - 1]] : [])
+    }
+
+    private static let leadLetters = Array("ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ".unicodeScalars)
+    private static let vowelLetters = Array("ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ".unicodeScalars)
+    private static let tailLetters = Array("ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ".unicodeScalars)
 
     /// After case folding, so lowercase only.
     private static let letterSpellings: [Unicode.Scalar: String] = [
@@ -89,6 +110,21 @@ public enum Search {
             return false
         }
         return assign(0)
+    }
+
+    /// Whether the query words, in order, each start a word of the name or spell the initials
+    /// of a run of its words ("vs code" for "Visual Studio Code"); words in between may be skipped.
+    static func startsWordsOrInitials(_ queryWords: [Substring], of words: [String]) -> Bool {
+        func match(_ i: Int, _ j: Int) -> Bool {
+            guard i < queryWords.count else { return true }
+            guard j < words.count else { return false }
+            let w = queryWords[i]
+            if words[j].hasPrefix(w), match(i + 1, j + 1) { return true }
+            if w.count > 1, j + w.count <= words.count,
+               zip(w, words[j...]).allSatisfy({ $0 == $1.first }), match(i + 1, j + w.count) { return true }
+            return match(i, j + 1)
+        }
+        return match(0, 0)
     }
 
     static func isSubsequence(_ q: String, of s: String) -> Bool {

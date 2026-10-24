@@ -262,6 +262,29 @@ extension Grid {
         }
     }
 
+    /// Points each app at its new place, `moves` mapping old paths to new; recently pruned ones
+    /// too, so they can still return to their slot from there.
+    public mutating func followMoves(_ moves: [String: String]) {
+        guard !moves.isEmpty else { return }
+        func moved(_ a: AppRef) -> AppRef {
+            var a = a
+            if let path = moves[a.path] { a.path = path }
+            return a
+        }
+        for p in pages.indices {
+            for i in pages[p].items.indices {
+                switch pages[p].items[i] {
+                case .app(let a):
+                    pages[p].items[i] = .app(moved(a))
+                case .folder(var f):
+                    f.apps = f.apps.map(moved)
+                    pages[p].items[i] = .folder(f)
+                }
+            }
+        }
+        for i in recentlyPruned.indices { recentlyPruned[i].app = moved(recentlyPruned[i].app) }
+    }
+
     // MARK: Pages
 
     @discardableResult
@@ -272,7 +295,8 @@ extension Grid {
     }
 
     /// Deletes a page; its items move to the end of the previous page (or, for the first
-    /// page, to the start of the next one).
+    /// page, to the start of the next one). What doesn't fit there goes on an untitled page in
+    /// its place, unless the page after has room for it and no title it would end up under.
     public mutating func deletePage(_ index: Int) {
         guard pages.indices.contains(index) else { return }
         let items = pages.remove(at: index).items
@@ -287,7 +311,16 @@ extension Grid {
         } else {
             pages[target].items.append(contentsOf: items)
         }
-        spill(from: target)
+        guard pages[target].items.count > capacity else { return }
+        let overflow = Array(pages[target].items[capacity...])
+        pages[target].items.removeSubrange(capacity...)
+        let next = target + 1
+        if pages.indices.contains(next), pages[next].title == nil, pages[next].items.count + overflow.count <= capacity {
+            pages[next].items.insert(contentsOf: overflow, at: 0)
+        } else {
+            pages.insert(Page(items: overflow), at: next)
+            spill(from: next)
+        }
     }
 
     public mutating func setPageTitle(_ index: Int, _ title: String?) {
@@ -300,8 +333,9 @@ extension Grid {
 
     /// Changes the grid size. When every page still fits, the pages stay as they are, so a
     /// layout built by category keeps its pages. Otherwise every item re-flows, in order, so
-    /// each page is filled before the next one starts. Page `n` keeps the old page `n`'s ID,
-    /// and takes the title of the page its first item came from, so a title stays with what it names.
+    /// each page is filled before the next one starts; an empty page stays where it was, between
+    /// the items around it. Page `n` keeps the old page `n`'s ID, and takes the title of the page
+    /// its first item came from, so a title stays with what it names.
     public mutating func resize(rows: Int, columns: Int) {
         let rows = max(1, rows), columns = max(1, columns)
         guard pages.contains(where: { $0.items.count > rows * columns }) else {
@@ -314,13 +348,32 @@ extension Grid {
                                 uniquingKeysWith: { a, _ in a })
         self.rows = rows
         self.columns = columns
-        normalize()
-        // An empty page has no first item: its title stays by position, as before.
-        let old = pages
-        flow(pages.flatMap(\.items))
+        // Drops empty folders; spilling now would fill the empty pages kept below.
         for p in pages.indices {
-            pages[p].title = pages[p].items.first.map { titles[$0.id] ?? nil } ?? old[safe: p]?.title
+            pages[p].items.removeAll { if case .folder(let f) = $0 { return f.apps.isEmpty } else { return false } }
         }
+        // Each run of pages between empty ones re-flows on its own, keeping its pages' IDs.
+        var result: [Page] = []
+        var run: [Page] = []
+        func flush() {
+            guard !run.isEmpty else { return }
+            var part = self
+            part.pages = run
+            part.flow(run.flatMap(\.items))
+            for p in part.pages.indices { part.pages[p].title = part.pages[p].items.first.flatMap { titles[$0.id] ?? nil } }
+            result += part.pages
+            run = []
+        }
+        for page in pages {
+            if page.items.isEmpty {
+                flush()
+                result.append(page)
+            } else {
+                run.append(page)
+            }
+        }
+        flush()
+        pages = result
     }
 
     /// The grid as a resize would leave it, so the UI can warn before re-flowing.
@@ -380,8 +433,3 @@ extension Grid {
     }
 }
 
-extension Array {
-    fileprivate subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
-    }
-}

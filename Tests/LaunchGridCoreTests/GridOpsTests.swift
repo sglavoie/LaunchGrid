@@ -175,6 +175,17 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(\.title) == ["Work", "Games"])
     }
 
+    @Test func resizeKeepsEmptyPagesWhereTheyWere() {
+        var g = grid([["A", "B", "C"], [], ["D"], []])
+        g.setPageTitle(1, "Later")
+        g.setPageTitle(3, "Spare")
+        let spare = g.pages[1].id
+        g.resize(rows: 1, columns: 2)
+        #expect(g.pages.map(titles) == [["A", "B"], ["C"], [], ["D"], []])
+        #expect(g.pages.map(\.title) == [nil, nil, "Later", nil, "Spare"])
+        #expect(g.pages[2].id == spare)
+    }
+
     @Test func resizeKeepsLeadingPageIdentity() {
         var g = grid([["A", "B"], ["C"], ["D"]])
         g.setPageTitle(0, "First")
@@ -256,6 +267,19 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         var g = grid([["A", "B"], ["C", "D"]])
         g.deletePage(0)
         #expect(g.pages.map(titles) == [["A", "B", "C"], ["D"]])
+    }
+
+    @Test func deletingAPageKeepsLeftoversOffTheNextTitledPage() {
+        var g = grid([["A", "B"], ["C"], ["D", "E"]], columns: 2)
+        g.pages[0].title = "T1"
+        g.pages[2].title = "T3"
+        g.deletePage(1)
+        #expect(g.pages.map(titles) == [["A", "B"], ["C"], ["D", "E"]])
+        #expect(g.pages.map(\.title) == ["T1", nil, "T3"])
+
+        var h = grid([["A", "B"], ["C"], ["D"]], columns: 2)
+        h.deletePage(1)
+        #expect(h.pages.map(titles) == [["A", "B"], ["C", "D"]], "an untitled page with room takes them")
     }
 
     @Test func ungroupInPlace() {
@@ -450,6 +474,24 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(decoded.pages[1].id != id)
     }
 
+    @Test func anUnreadableEntrySkipsOnlyItself() throws {
+        let json = #"""
+        {"rows": 2, "columns": 2, "pages": [
+          {"items": [
+            {"type": "app", "app": {"path": "/Applications/A.app", "name": "A"}},
+            {"type": "app", "app": {"name": "No path"}},
+            {"type": "widget", "widget": {}},
+            {"type": "folder", "folder": {"name": "F", "apps": [{"name": "Broken"}, {"path": "/Applications/B.app"}]}}
+          ]},
+          "not a page",
+          {"items": [{"type": "app", "app": {"path": "/Applications/C.app"}}]}
+        ]}
+        """#
+        let g = try GridStore.decode(Data(json.utf8))
+        #expect(g.pages.map(titles) == [["A", "F"], ["C"]])
+        #expect(g.pages[0].items[1].folder?.apps.map(\.name) == ["B"])
+    }
+
     @Test func rejectsNewerVersion() {
         let data = #"{"version": 99, "rows": 5, "columns": 7, "pages": [], "removedBundleIDs": []}"#.data(using: .utf8)!
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }
@@ -472,6 +514,25 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("Æther", query: "aeth") != nil)
         #expect(Search.score("Wi-Fi Explorer", query: "-") == nil)
         #expect(Search.score("Wi-Fi Explorer", query: " - ") == nil)
+        #expect(Search.score("Почта", query: "пт") == nil, "two Cyrillic letters aren't a subsequence either")
+        #expect(Search.score("Почта", query: "пчт") != nil)
+    }
+
+    @Test func aHangulSyllableStillBeingTypedMatches() {
+        #expect(Search.score("한글", query: "하") != nil)
+        #expect(Search.score("한글", query: "한ㄱ") != nil)
+        #expect(Search.score("한글", query: "한글") == 1000)
+        #expect(Search.score("카카오톡", query: "톡") != nil)
+        #expect(Search.score("카카오톡", query: "하") == nil)
+    }
+
+    @Test func initialsAndWordsTogether() {
+        let code = app("Visual Studio Code")
+        #expect(Search.score(code.name, query: "vs code") == 600, "as initials, not a fuzzy match")
+        #expect(Search.score(code.name, query: "visual sc") == 600)
+        #expect(Search.score(code.name, query: "vs") == 600)
+        #expect(Search.score(code.name, query: "code vs") == nil || Search.score(code.name, query: "code vs")! < 600, "in order")
+        #expect(Search.score("Final Cut Pro", query: "fc pro") == 600)
     }
 
     @Test func ranking() {

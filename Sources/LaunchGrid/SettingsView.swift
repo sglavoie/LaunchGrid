@@ -31,11 +31,31 @@ struct SettingsView: View {
     }
 }
 
+/// A caption that warns. The orange triangle carries the colour; the text keeps the label
+/// colour, as orange text is hard to read on the light grouped form.
+struct WarningCaption: View {
+    let text: Text
+
+    init(_ text: Text) {
+        self.text = text
+    }
+
+    var body: some View {
+        Label {
+            text
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.caption)
+    }
+}
+
 /// Library operations implemented by the app delegate (they need panels and alerts).
 struct LibraryActions: @unchecked Sendable {
     var rebuild: (BuildStyle) -> Void
-    var importAppGrid: () -> Void
-    var importLaunchpad: () -> Void
+    /// Each asks before replacing a grid with apps on it; `done` gets the outcome to show.
+    var importAppGrid: (_ done: (@MainActor (String) -> Void)?) -> Void
+    var importLaunchpad: (_ done: (@MainActor (String) -> Void)?) -> Void
     var loadFile: () -> Void
     /// Where the layout was saved; nil when cancelled or failed (already reported).
     var saveFile: () -> URL?
@@ -55,6 +75,7 @@ struct GeneralSettings: View {
     @Environment(\.libraryActions) private var actions
     @State private var loginEnabled = LoginItem.isRequested
     @State private var loginStatus = LoginItem.statusDescription
+    @State private var loginNeedsApproval = LoginItem.needsApproval
     @State private var loginError: String?
 
     var body: some View {
@@ -69,10 +90,12 @@ struct GeneralSettings: View {
                 // The toggle shows what the system reports, so a failed change springs back.
                 Toggle("Open at login", isOn: Binding(get: { loginEnabled }, set: { on in
                     do { try LoginItem.set(on); loginError = nil } catch { loginError = error.localizedDescription }
-                    loginEnabled = LoginItem.isRequested
-                    loginStatus = LoginItem.statusDescription
+                    refreshLoginItem()
                 }))
                 LabeledContent("Login item status", value: loginStatus)
+                if loginNeedsApproval {
+                    Button("Open Login Items…") { LoginItem.openApprovalSettings() }
+                }
                 if let loginError { Text(loginError).foregroundStyle(.red).font(.caption) }
                 Toggle("Show in Dock", isOn: $prefs.showInDock)
                     .disabled(prefs.showInDock && !prefs.showInMenuBar)
@@ -104,6 +127,7 @@ struct GeneralSettings: View {
     private func refreshLoginItem() {
         loginEnabled = LoginItem.isRequested
         loginStatus = LoginItem.statusDescription
+        loginNeedsApproval = LoginItem.needsApproval
     }
 }
 
@@ -139,12 +163,10 @@ struct HotkeyRecorder: View {
         }
         if let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
             let system = KeyCombo.conflictIsSystemSetting(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
-            Label(!system ? "Also used for \(conflict). Pick another shortcut to keep it working."
+            WarningCaption(Text(!system ? "Also used for \(conflict). Pick another shortcut to keep it working."
                   : KeyCombo.readsSystemShortcuts
                   ? "Also used by macOS for \(conflict). Turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts, or pick another."
-                  : "macOS uses this for \(conflict) unless that shortcut is off in System Settings › Keyboard › Keyboard Shortcuts. If it's on, turn it off or pick another.",
-                  systemImage: "exclamationmark.triangle")
-                .font(.caption).foregroundStyle(.orange)
+                  : "macOS uses this for \(conflict) unless that shortcut is off in System Settings › Keyboard › Keyboard Shortcuts. If it's on, turn it off or pick another."))
         }
         if let problem = state.hotkeyProblem, !recording {
             Label(problem, systemImage: "exclamationmark.octagon")
@@ -326,12 +348,14 @@ struct LayoutSettings: View {
                 Stepper("Rows: \(rows)", value: $rows, in: min(2, grid.rows)...max(12, grid.rows))
                 Stepper("Columns: \(columns)", value: $columns, in: min(3, grid.columns)...max(16, grid.columns))
                 if rows != grid.rows || columns != grid.columns {
-                    Group {
-                        if after != grid.pages.count { Text("Items re-flow to fill each page in order: \(grid.pages.count) → \(after) pages.") }
-                        else if moves { Text("Items re-flow to fill each page in order, so some move to another page.") }
-                        else { Text("Every item stays on its page.") }
+                    let message = after != grid.pages.count ? Text("Items re-flow to fill each page in order: \(grid.pages.count) → \(after) pages.")
+                        : moves ? Text("Items re-flow to fill each page in order, so some move to another page.")
+                        : Text("Every item stays on its page.")
+                    if moves {
+                        WarningCaption(message)
+                    } else {
+                        message.font(.caption).foregroundStyle(.secondary)
                     }
-                        .font(.caption).foregroundStyle(moves ? .orange : .secondary)
                     HStack {
                         Spacer()
                         Button("Revert") { rows = grid.rows; columns = grid.columns }
@@ -380,6 +404,8 @@ struct LibrarySettings: View {
     @State private var libraryStatus: String?
     /// The grid file last saved from here, to confirm it and show it in Finder.
     @State private var savedFile: URL?
+    /// What the last import from here brought in.
+    @State private var importStatus: String?
 
     var body: some View {
         @Bindable var prefs = state.prefs
@@ -429,11 +455,9 @@ struct LibrarySettings: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(path).lineLimit(1).truncationMode(.middle)
                             if missing.contains(path) {
-                                Text("Not found. Its apps stay on the grid until it's back.")
-                                    .font(.caption).foregroundStyle(.orange)
+                                WarningCaption(Text("Not found. Its apps stay on the grid until it's back."))
                             } else if unreadable.contains(path) {
-                                Text("LaunchGrid couldn't read this folder. Check its permissions in Privacy & Security, or remove it and add it again.")
-                                    .font(.caption).foregroundStyle(.orange)
+                                WarningCaption(Text("LaunchGrid couldn't read this folder. Check its permissions in Privacy & Security, or remove it and add it again."))
                             }
                         }
                         Spacer()
@@ -443,6 +467,9 @@ struct LibrarySettings: View {
                             actions.foldersChanged()
                         } label: { Image(systemName: "minus.circle") }
                         .buttonStyle(.borderless)
+                        .help("Remove this folder")
+                        .accessibilityLabel(Text("Remove \((path as NSString).lastPathComponent)"))
+                        .accessibilityHint(Text(path))
                     }
                 }
                 Button("Add Folder…") {
@@ -458,8 +485,7 @@ struct LibrarySettings: View {
                 // Folders inside the scan folders, or the standard ones, that couldn't be read.
                 let others = unreadable.filter { !prefs.extraFolders.contains($0) }
                 if !others.isEmpty {
-                    Text("Couldn't be read, so new apps there won't appear: \(others.map { ($0 as NSString).abbreviatingWithTildeInPath }.formatted(.list(type: .and)))")
-                        .font(.caption).foregroundStyle(.orange)
+                    WarningCaption(Text("Couldn't be read, so new apps there won't appear: \(others.map { ($0 as NSString).abbreviatingWithTildeInPath }.formatted(.list(type: .and)))"))
                 }
             }
             Section("Grid file") {
@@ -478,10 +504,18 @@ struct LibrarySettings: View {
                     .font(.caption)
                 }
                 HStack {
-                    Button("Import from AppGrid") { actions.importAppGrid() }
+                    Button("Import from AppGrid…") { actions.importAppGrid { importStatus = $0 } }
                         .disabled(LaunchpadImporter.appGridDatabaseURL == nil)
-                    Button("Import from Launchpad") { actions.importLaunchpad() }
+                    Button("Import from Launchpad…") { actions.importLaunchpad { importStatus = $0 } }
                         .disabled(LaunchpadImporter.launchpadDatabaseURL == nil)
+                }
+                if let importStatus {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            .accessibilityHidden(true)
+                        Text(importStatus)
+                    }
+                    .font(.caption)
                 }
                 Button("Show Data Folder in Finder") { state.showDataFolder() }
                 Text("Loading or importing replaces the current layout; ⌘Z in the grid undoes it.")
@@ -695,12 +729,12 @@ struct FirstRunView: View {
             }
             if LaunchpadImporter.appGridDatabaseURL != nil {
                 option("Import from AppGrid", "Bring over your AppGrid pages and folders.", "square.and.arrow.down") {
-                    actions.importAppGrid()
+                    actions.importAppGrid(nil)
                 }
             }
             if LaunchpadImporter.launchpadDatabaseURL != nil {
                 option("Import from Launchpad", "Use the layout of the old macOS Launchpad.", "square.and.arrow.down.on.square") {
-                    actions.importLaunchpad()
+                    actions.importLaunchpad(nil)
                 }
             }
             option("Load a grid file…", "A file saved from LaunchGrid, or an AppGrid .agrid file.", "doc") { actions.loadFile() }

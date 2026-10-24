@@ -27,9 +27,12 @@ public struct GridStore: Sendable {
 
     public var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
 
+    /// The file itself: `url` with symlinks followed, so moving it aside leaves a link in place.
+    public var fileURL: URL { GridStore.followingSymlinks(url) }
+
     /// An earlier save, to fall back on when the last didn't make it to disk whole (a power
     /// cut right after writing can leave an empty file) or turned out to be one to regret.
-    public var backupURL: URL { GridStore.followingSymlinks(url).appendingPathExtension("bak") }
+    public var backupURL: URL { fileURL.appendingPathExtension("bak") }
 
     public func load() throws -> Grid {
         try GridStore.decode(Data(contentsOf: url))
@@ -45,7 +48,7 @@ public struct GridStore: Sendable {
     @discardableResult
     public func save(_ grid: Grid, refreshingBackup: Bool = true) throws -> Bool {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
-        let target = GridStore.followingSymlinks(url)
+        let target = fileURL
         let fm = FileManager.default
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         GridStore.removeLeftoverTemporaryFiles(beside: target)
@@ -153,10 +156,17 @@ public struct GridStore: Sendable {
         guard version >= 1 else { throw GridFileError.invalid("version \(version) is not a format version") }
         // Future migrations go here, keyed on `version`.
         var grid: Grid
+        let skipped = SkippedEntries()
         do {
-            grid = try JSONDecoder().decode(Grid.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.userInfo[SkippedEntries.key] = skipped
+            grid = try decoder.decode(Grid.self, from: data)
         } catch {
             throw GridFileError.invalid(error.localizedDescription)
+        }
+        // A few bad entries are dropped; with nothing left, the file is broken, not empty.
+        if skipped.count > 0 && grid.allApps.isEmpty {
+            throw GridFileError.invalid("none of its \(skipped.count) entries could be read")
         }
         guard (1...50).contains(grid.rows), (1...50).contains(grid.columns) else {
             throw GridFileError.invalid("grid size \(grid.rows)×\(grid.columns) is out of range")

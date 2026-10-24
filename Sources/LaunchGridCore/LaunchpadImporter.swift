@@ -45,6 +45,10 @@ public enum LaunchpadImporter {
 
     /// AppGrid's database inside its sandbox container, if present.
     public static var appGridDatabaseURL: URL? {
+        #if !APP_STORE
+        // For the debug scripts, on a Mac without AppGrid.
+        if let path = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_APPGRID_DB"] { return URL(fileURLWithPath: path) }
+        #endif
         let url = Sandbox.realHome.appendingPathComponent("Library/Containers/com.zekalogic.appgrid.app/Data/Library/Application Support/db")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
@@ -60,6 +64,9 @@ public enum LaunchpadImporter {
         var title: String?
         var bundleID: String?
         var customPath: String?
+        /// Apple's `bookmark` column: where the app was, which tells copies sharing a bundle ID
+        /// (Xcode and Xcode-beta) apart. AppGrid's copy of the schema leaves it empty.
+        var bookmark: Data?
     }
 
     /// - Parameters:
@@ -94,6 +101,7 @@ public enum LaunchpadImporter {
 
         guard tableExists(db, "items"), tableExists(db, "apps") else { throw ImportError.notALaunchpadDatabase }
         let hasCustomPath = columnExists(db, table: "apps", column: "custom_path")
+        let hasBookmark = columnExists(db, table: "apps", column: "bookmark")
 
         var items: [Row] = []
         try query(db, "SELECT rowid, type, parent_id, ordering FROM items ORDER BY parent_id, ordering") { st in
@@ -101,10 +109,10 @@ public enum LaunchpadImporter {
                              parent: Int(sqlite3_column_int64(st, 2)), ordering: Int(sqlite3_column_int(st, 3))))
         }
         var apps: [Int: AppRow] = [:]
-        let appSQL = "SELECT item_id, title, bundleid\(hasCustomPath ? ", custom_path" : "") FROM apps"
+        let appSQL = "SELECT item_id, title, bundleid, \(hasCustomPath ? "custom_path" : "NULL"), \(hasBookmark ? "bookmark" : "NULL") FROM apps"
         try query(db, appSQL) { st in
             apps[Int(sqlite3_column_int64(st, 0))] = AppRow(
-                title: text(st, 1), bundleID: text(st, 2), customPath: hasCustomPath ? text(st, 3) : nil)
+                title: text(st, 1), bundleID: text(st, 2), customPath: text(st, 3), bookmark: blob(st, 4))
         }
         var groupTitles: [Int: String] = [:]
         if tableExists(db, "groups") {
@@ -149,6 +157,8 @@ public enum LaunchpadImporter {
             let bundleID = row.bundleID.flatMap { $0.hasPrefix("manual_app_") || $0.isEmpty ? nil : $0 }
             var candidate: String?
             if let p = row.customPath, FileManager.default.fileExists(atPath: p) { candidate = p }
+            if candidate == nil, let data = row.bookmark, let p = path(ofBookmark: data),
+               FileManager.default.fileExists(atPath: p) { candidate = p }
             if candidate == nil, let b = bundleID { candidate = resolve(b) }
             guard let found = candidate else {
                 skipped.append(title)
@@ -275,6 +285,18 @@ public enum LaunchpadImporter {
 
     private static func text(_ st: OpaquePointer, _ i: Int32) -> String? {
         sqlite3_column_text(st, i).map { String(cString: $0) }
+    }
+
+    private static func blob(_ st: OpaquePointer, _ i: Int32) -> Data? {
+        let n = Int(sqlite3_column_bytes(st, i))
+        guard n > 0, let bytes = sqlite3_column_blob(st, i) else { return nil }
+        return Data(bytes: bytes, count: n)
+    }
+
+    /// Where a bookmark points, without asking anything of the person or mounting a volume.
+    static func path(ofBookmark data: Data) -> String? {
+        var stale = false
+        return (try? URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting], bookmarkDataIsStale: &stale))?.path
     }
 
     private static func tableExists(_ db: OpaquePointer, _ name: String) -> Bool {

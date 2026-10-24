@@ -124,9 +124,15 @@ if [ "$STILLS" = 1 ]; then
 fi
 
 if [ "$STORE" = 1 ]; then
+    # Without it, the screenshots would quietly show the blurred desktop instead.
+    PICTURE="/System/Library/Desktop Pictures/iMac Blue.heic"
+    if [ ! -f "$PICTURE" ]; then
+        echo "record-demo: $PICTURE isn't on this Mac; pick another system wallpaper for the App Store screenshots." >&2
+        exit 1
+    fi
     defaults write "$DOMAIN" windowMode -string window
     defaults write "$DOMAIN" background -string image
-    defaults write "$DOMAIN" customImagePath -string "/System/Library/Desktop Pictures/iMac Blue.heic"
+    defaults write "$DOMAIN" customImagePath -string "$PICTURE"
     echo "App Store: keep the mouse and keyboard still until LaunchGrid quits."
     run_app app-store "$(steps scripts/demo/app-store.txt)"
     # JPEG without alpha, at the App Store's 2880×1800 whatever the display's scale.

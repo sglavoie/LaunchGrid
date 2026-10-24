@@ -109,7 +109,7 @@ No file timestamps are read. A scratch run's marker (`AppDelegate.isScratch`) ho
 
 ### Promotional text and description
 
-Plain text: App Store Connect shows no Markdown, so the headings are capitals and the lists use "•". Promotional text (145 of 170 characters) can change at any time without a new review; the description (1822 of 4,000) changes only with a new version. Both keep "Launchpad" to a plain factual mention (2.3.7), leave out AppGrid, and end the description with the AI disclosure above.
+Plain text: App Store Connect shows no Markdown, so the headings are capitals and the lists use "•". Promotional text (145 of 170 characters) can change at any time without a new review; the description (1820 of 4,000) changes only with a new version. Both keep "Launchpad" to a plain factual mention (2.3.7), leave out AppGrid, and end the description with the AI disclosure above.
 
 Promotional text:
 
@@ -135,7 +135,7 @@ ORGANISE IT YOUR WAY
 • Works with the keyboard throughout: Esc steps back, Return opens or renames.
 
 MAKE IT YOURS
-• Full Screen, Full Screen Behind Dock, or a resizable window.
+• Full Screen, Full Screen with Dock, or a resizable window.
 • Backgrounds: blurred desktop, your wallpaper, Liquid Glass (macOS 26), a solid colour or a picture of your own.
 • Choose the number of rows and columns, the icon size and whether names show.
 • Set your own shortcut, open LaunchGrid at login, and keep it in the Dock, the menu bar or both.

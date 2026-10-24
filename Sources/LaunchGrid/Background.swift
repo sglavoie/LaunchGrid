@@ -17,7 +17,7 @@ struct BackgroundView: View {
         let prefs = state.prefs
         // Pictures are looked up again on each show and Space switch: each Space can have its
         // own wallpaper, and either picture may have been changed since.
-        let _ = (state.isShown, spaceChanges)
+        let refresh = "\(state.isShown)|\(spaceChanges)"
         ZStack {
             switch prefs.background {
             case .material:
@@ -29,9 +29,9 @@ struct BackgroundView: View {
                     VisualEffect(material: .hudWindow)
                 }
             case .wallpaper:
-                BlurredImage(url: wallpaperURL, radius: prefs.blurRadius)
+                BlurredImage(url: wallpaperURL, radius: prefs.blurRadius, refresh: refresh)
             case .image:
-                BlurredImage(url: prefs.customImagePath.map { URL(fileURLWithPath: $0) }, radius: prefs.blurRadius)
+                BlurredImage(url: prefs.customImagePath.map { URL(fileURLWithPath: $0) }, radius: prefs.blurRadius, refresh: refresh)
             case .solid:
                 Color(nsColor: prefs.solidColor)
             }
@@ -85,20 +85,14 @@ struct BlurredImage: View {
     let url: URL?
     /// In points on screen, whatever the picture's own size.
     let radius: Double
-    /// Read when the parent redraws (each show and Space switch), not only when the path
-    /// changes: a body with the same inputs isn't run again.
-    private let identity: String
+    /// Changes at each show and Space switch, so the file is looked at again: a picture saved
+    /// over the old one at the same path is a new picture.
+    let refresh: String
     @State private var image: NSImage?
     /// The picture `image` was made from: another one (a different display's wallpaper) isn't
     /// left on screen while the new one blurs.
     @State private var shownIdentity: String?
     @Environment(\.displayScale) private var displayScale
-
-    init(url: URL?, radius: Double) {
-        self.url = url
-        self.radius = radius
-        identity = url.map(ImageBlurCache.identity) ?? ""
-    }
 
     var body: some View {
         GeometryReader { geo in
@@ -116,7 +110,7 @@ struct BlurredImage: View {
                     VisualEffect(material: .fullScreenUI)
                 }
             }
-            .task(id: "\(identity)|\(radius)|\(size.width)x\(size.height)@\(displayScale)") {
+            .task(id: "\(url?.path ?? "")|\(refresh)|\(radius)|\(size.width)x\(size.height)@\(displayScale)") {
                 await load(size: size)
             }
             .animation(.easeInOut(duration: 0.2), value: shownIdentity)
@@ -128,9 +122,11 @@ struct BlurredImage: View {
             if url == nil { image = nil; shownIdentity = nil }
             return
         }
-        let identity = identity
+        // Off the main thread: a picture on a stalled network volume mustn't hang the overlay.
+        let identity = await Task.detached(priority: .userInitiated) { ImageBlurCache.identity(of: url) }.value
+        guard !Task.isCancelled else { return }
         let target = ImageBlurCache.Target(radius: radius, size: size, pixelScale: displayScale)
-        if let hit = ImageBlurCache.shared.cached(url: url, target) { show(hit, identity); return }
+        if let hit = ImageBlurCache.shared.cached(identity: identity, target) { show(hit, identity); return }
         if shownIdentity != identity {
             // Another picture: the blurred desktop stands in until it is ready.
             show(nil, nil)
@@ -140,7 +136,7 @@ struct BlurredImage: View {
             guard !Task.isCancelled else { return }
         }
         let made = await Task.detached(priority: .userInitiated) {
-            ImageBlurCache.shared.image(url: url, target).map(SendableImage.init)
+            ImageBlurCache.shared.image(url: url, identity: identity, target).map(SendableImage.init)
         }.value?.image
         guard !Task.isCancelled else { return }
         show(made, made == nil ? nil : identity)
@@ -164,8 +160,10 @@ final class ImageBlurCache: @unchecked Sendable {
     private let context = CIContext()
 
     init() {
-        // A few screens' wallpapers and a custom image; older blurs are cheap to redo.
+        // A few screens' wallpapers and a custom image; older blurs are cheap to redo. An
+        // unblurred one is as large as the screen (59 MB on a 5K display), so bytes count too.
         cache.countLimit = 8
+        cache.totalCostLimit = 160 << 20
     }
 
     private let lock = NSLock()
@@ -175,7 +173,7 @@ final class ImageBlurCache: @unchecked Sendable {
 
     /// The path and the file it names now: a picture replaced at the same path (a new file
     /// saved over it) is a new picture. Not by modification date, which would need a reason
-    /// in the privacy manifest.
+    /// in the privacy manifest. Reads the disk, so not on the main thread.
     static func identity(of url: URL) -> String {
         let file = (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier
         return "\(url.path)|\(file.map { String(describing: $0) } ?? "")"
@@ -189,16 +187,17 @@ final class ImageBlurCache: @unchecked Sendable {
         var pixelScale: CGFloat
     }
 
-    private func key(url: URL, _ t: Target) -> NSString {
-        "\(Self.identity(of: url))|\(t.radius)|\(t.size.width)x\(t.size.height)@\(t.pixelScale)" as NSString
+    /// `identity` is `identity(of:)` of the picture.
+    private func key(identity: String, _ t: Target) -> NSString {
+        "\(identity)|\(t.radius)|\(t.size.width)x\(t.size.height)@\(t.pixelScale)" as NSString
     }
 
-    func cached(url: URL, _ target: Target) -> NSImage? {
-        cache.object(forKey: key(url: url, target))
+    func cached(identity: String, _ target: Target) -> NSImage? {
+        cache.object(forKey: key(identity: identity, target))
     }
 
-    func image(url: URL, _ target: Target) -> NSImage? {
-        let key = key(url: url, target)
+    func image(url: URL, identity: String, _ target: Target) -> NSImage? {
+        let key = key(identity: identity, target)
         if let hit = cache.object(forKey: key) { return hit }
         // Upright, as the camera held it: a portrait photo is stored sideways with an EXIF orientation.
         guard var ci = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else { return nil }
@@ -219,7 +218,7 @@ final class ImageBlurCache: @unchecked Sendable {
         guard let cg = context.createCGImage(ci, from: extent) else { return nil }
         lock.withLock { renderCount += 1 }
         let out = NSImage(cgImage: cg, size: extent.size)
-        cache.setObject(out, forKey: key)
+        cache.setObject(out, forKey: key, cost: cg.bytesPerRow * cg.height)
         return out
     }
 }

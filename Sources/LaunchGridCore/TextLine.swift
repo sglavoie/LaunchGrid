@@ -121,7 +121,7 @@ public struct TextLine: Equatable, Sendable {
     }
 
     /// Han, hiragana and katakana: written without spaces between words.
-    private static func isUnspaced(_ c: Character) -> Bool {
+    static func isUnspaced(_ c: Character) -> Bool {
         c.unicodeScalars.contains { s in
             s.properties.isIdeographic || (0x3040...0x30FF).contains(s.value) || (0x31F0...0x31FF).contains(s.value)
         }

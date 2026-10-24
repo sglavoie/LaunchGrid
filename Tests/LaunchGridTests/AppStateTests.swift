@@ -159,6 +159,29 @@ func installed(_ name: String) -> InstalledApp {
         #expect(FileManager.default.fileExists(atPath: notice.file.path))
     }
 
+    @Test func aSymlinkedLayoutIsRecoveredBesideTheFileItPointsAt() throws {
+        // As a dotfiles repository can hold it: the layout lives elsewhere, linked from here.
+        let real = TempDir.url.appendingPathComponent("dotfiles/grid.json")
+        try FileManager.default.createDirectory(at: real.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let link = TempDir.url.appendingPathComponent("grid.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let first = makeState(["A"])
+        first.saveNow()
+        let a = try #require(first.grid.allApps.first)
+        first.apply { $0.rename(a.id, to: "Renamed") }
+        first.saveNow()
+        try Data().write(to: real)
+
+        let state = AppState(prefs: testPreferences(), store: first.store)
+        #expect(state.grid.allApps.map(\.title) == ["A"], "restored from the backup beside the real file")
+        let notice = try #require(state.recoveryNotice)
+        #expect(notice.file.deletingLastPathComponent().lastPathComponent == "dotfiles")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == real.path, "the link stays")
+        state.saveNow()
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == real.path)
+        #expect(try GridStore(url: real).load().allApps.map(\.title) == ["A"])
+    }
+
     @Test func aLayoutRestoredFromTheBackupIsWrittenBackWithoutWaitingForAChange() async throws {
         let first = makeState(["A"])
         first.saveNow()
@@ -170,7 +193,8 @@ func installed(_ name: String) -> InstalledApp {
         let state = AppState(prefs: testPreferences(), store: first.store)
         #expect(state.recoveryNotice != nil)
         #expect(!state.store.exists, "the unreadable file was set aside")
-        try await Task.sleep(for: .milliseconds(900))
+        // Not a fixed wait: other tests running alongside keep the main actor busy.
+        for _ in 0..<50 where !state.store.exists { try await Task.sleep(for: .milliseconds(100)) }
         #expect(try state.store.load().allApps.map(\.title) == ["A"])
     }
 
@@ -465,6 +489,20 @@ func installed(_ name: String) -> InstalledApp {
         #expect(Volume.unmountedVolume(for: "/Applications/Xcode.app") == nil)
         #expect(Volume.unmountedVolume(for: "/Volumes") == nil)
     }
+
+    @MainActor @Test func onlyOneCopyHoldsTheInstanceLock() {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lg-lock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(AppDelegate.acquireInstanceLock(in: folder))
+        #expect(!AppDelegate.acquireInstanceLock(in: folder), "a second copy starting meanwhile hands over")
+    }
+
+    @Test func theMountedVolumesComeFromTheSystem() throws {
+        let names = try #require(Volume.mountedNames())
+        #expect(names == Set(try FileManager.default.contentsOfDirectory(atPath: "/Volumes")))
+        let startup = try #require(try URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeNameKey]).volumeName)
+        #expect(names.contains(startup), "the startup disk, linked to / from there")
+    }
 }
 
 @Suite struct LayoutExclusionTests {
@@ -589,6 +627,27 @@ func installed(_ name: String) -> InstalledApp {
         state.apply { $0.rename(a.id, to: "Again") }
         state.saveNow(reportingFailure: false) // what quitting does
         #expect(try savedTitles(state) == ["Again"])
+    }
+
+    @Test func backgroundSavesLandInOrderWithOnesMadeAtOnce() async throws {
+        let state = makeState(["A"])
+        state.saveNow()
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "One") }
+        let first = await withCheckedContinuation { done in state.saveInBackground { done.resume(returning: $0) } }
+        #expect(first)
+        #expect(try savedTitles(state) == ["One"])
+
+        state.apply { $0.rename(a.id, to: "Two") }
+        var finished: Bool?
+        state.saveInBackground { finished = $0 }
+        state.apply { $0.rename(a.id, to: "Three") }
+        #expect(state.saveNow(reportingFailure: false), "quitting waits for the one under way")
+        #expect(try savedTitles(state) == ["Three"])
+        for _ in 0..<50 where finished == nil { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(finished == true)
+        #expect(try savedTitles(state) == ["Three"], "the older save didn't land after it")
+        #expect(state.saveNow(), "nothing left to write")
     }
 
     @Test func anUnchangedGridIsNotSavedAgain() throws {
@@ -754,6 +813,25 @@ func installed(_ name: String) -> InstalledApp {
         state.followMovedApps(["/Applications/B.app": "/Users/x/Apps/B.app"])
         #expect(state.grid.allApps.map(\.path) == ["/Applications/A.app", "/Users/x/Apps/B.app"])
         #expect(!state.canUndo)
+    }
+
+    @Test func undoAndRedoDoNotBringBackAPlaceAMovedAppLeft() throws {
+        let state = makeState(["A", "B"])
+        let b = try #require(state.grid.allApps.last)
+        state.apply { $0.rename(b.id, to: "Bee") }
+        state.apply { $0.move([b.id], toPage: 0, at: 0) }
+        state.undo()
+        state.followMovedApps(["/Applications/B.app": "/Users/x/Apps/B.app"])
+        state.undo()
+        #expect(state.grid.allApps.map(\.path) == ["/Applications/A.app", "/Users/x/Apps/B.app"])
+        state.redo()
+        state.redo()
+        #expect(state.grid.allApps.map(\.path) == ["/Users/x/Apps/B.app", "/Applications/A.app"])
+
+        state.rememberPath("/Volumes/Ext/B.app", of: b.id) // as a launch finding it elsewhere does
+        state.undo()
+        #expect(state.grid.allApps.last?.path == "/Volumes/Ext/B.app")
+        #expect(!state.appPathsInUse.contains("/Users/x/Apps/B.app"), "its old bookmark can go")
     }
 }
 

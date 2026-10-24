@@ -22,6 +22,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// The display the panel and its background belong to.
     private(set) var screen: NSScreen?
     private var scrollAccumulator: CGFloat = 0
+    /// Whether the trackpad gesture under way goes up and down, taken from its first movement
+    /// so a slightly slanted swipe doesn't switch axis halfway.
+    private var scrollIsVertical: Bool?
     private var lastWheelFlip = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
     private var visibilityGeneration = 0
@@ -64,12 +67,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
         state.didShow()
     }
 
-    func hide(deactivate: Bool = true) {
+    /// - Parameter saving: false when the caller has just saved (quitting), so a failure
+    ///   isn't reported twice.
+    func hide(deactivate: Bool = true, saving: Bool = true) {
         guard let panel, panel.isVisible else { return }
         textInput.discardComposition()
         state.isShown = false
-        // A failure is told once the panel is gone: an alert would open behind it.
-        let saved = state.saveNow(reportingFailure: false)
+        // Written off the main thread, so the fade doesn't wait for the disk. A failure is told
+        // once the panel is gone, whichever ends first: an alert would open behind it.
+        let progress = HideProgress()
+        if saving {
+            state.saveInBackground(reportingFailure: false) { [weak self] saved in
+                progress.saved = saved
+                if !saved && progress.gone { self?.state.reportLastSaveFailure() }
+            }
+        }
         visibilityGeneration += 1
         let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -80,7 +92,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 guard let self, self.visibilityGeneration == generation, !self.state.isShown else { return }
                 panel.orderOut(nil)
                 self.state.didHide()
-                if !saved { self.state.reportLastSaveFailure() }
+                progress.gone = true
+                if progress.saved == false { self.state.reportLastSaveFailure() }
                 // Hand focus back to the previous app unless another of our windows is up.
                 let others = NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }
                 if deactivate && NSApp.isActive && !others { NSApp.hide(nil) }
@@ -643,9 +656,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if !event.phase.isEmpty || !event.momentumPhase.isEmpty {
             // Trackpad: the pager follows the fingers, then snaps.
             if !event.momentumPhase.isEmpty { return nil }
-            if event.phase.contains(.began) { scrollAccumulator = 0 }
-            let dx = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) ? event.scrollingDeltaX : 0
-            scrollAccumulator += dx
+            if event.phase.contains(.began) {
+                scrollAccumulator = 0
+                scrollIsVertical = nil
+            }
+            // Up and down turns pages too, as the mouse wheel does: down for the next one.
+            if scrollIsVertical == nil, event.scrollingDeltaX != 0 || event.scrollingDeltaY != 0 {
+                scrollIsVertical = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
+            }
+            scrollAccumulator += scrollIsVertical == true ? event.scrollingDeltaY : event.scrollingDeltaX
             let inFolder = state.openFolder != nil
             if inFolder {
                 state.folderSwipeOffset = state.swipeOffset(for: scrollAccumulator, width: max(state.drag.folderGridFrame.width, 1))
@@ -782,4 +801,10 @@ final class SearchInputView: NSView, @preconcurrency NSTextInputClient {
 
     /// Editing commands (arrows, Return) are the key monitor's; nothing to do here.
     override func doCommand(by selector: Selector) {}
+}
+
+/// How a hide is going, for telling a failed save once both the save and the fade are done.
+@MainActor private final class HideProgress {
+    var saved: Bool?
+    var gone = false
 }
