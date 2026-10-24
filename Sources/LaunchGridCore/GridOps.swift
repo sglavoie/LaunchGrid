@@ -298,15 +298,22 @@ extension Grid {
 
     // MARK: Resizing
 
-    /// Changes the grid size and re-flows every item, in order, so each page is filled
-    /// before the next one starts. Page `n` keeps the old page `n`'s ID, and takes the title
-    /// of the page its first item came from, so a title stays with what it names.
+    /// Changes the grid size. When every page still fits, the pages stay as they are, so a
+    /// layout built by category keeps its pages. Otherwise every item re-flows, in order, so
+    /// each page is filled before the next one starts. Page `n` keeps the old page `n`'s ID,
+    /// and takes the title of the page its first item came from, so a title stays with what it names.
     public mutating func resize(rows: Int, columns: Int) {
+        let rows = max(1, rows), columns = max(1, columns)
+        guard pages.contains(where: { $0.items.count > rows * columns }) else {
+            self.rows = rows
+            self.columns = columns
+            return
+        }
         // Before the new size spills items onto later pages.
         let titles = Dictionary(pages.flatMap { page in page.items.map { ($0.id, page.title) } },
                                 uniquingKeysWith: { a, _ in a })
-        self.rows = max(1, rows)
-        self.columns = max(1, columns)
+        self.rows = rows
+        self.columns = columns
         normalize()
         // An empty page has no first item: its title stays by position, as before.
         let old = pages

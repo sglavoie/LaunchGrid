@@ -29,7 +29,7 @@ public enum Reconciler {
     ///   - isReachable: whether the scan could have seen the app at this path. Apps on an
     ///     unmounted volume or under a missing scan folder are kept, not pruned.
     ///   - pathExists: whether something is on disk at a path. A ref follows its bundle ID to
-    ///     another path only when its own app is gone from where it was.
+    ///     another path, or is pruned, only when its own app is gone from where it was.
     ///   - now: the clock for `Grid.recentlyPruned`; apps pruned within `restoreWindow` of it
     ///     return to their old slot (even with `autoAdd` off) when they show up again.
     public static func reconcile(
@@ -63,14 +63,15 @@ public enum Reconciler {
             let atPath = byPath[ref.path]
             if let atPath, ref.bundleID == nil || atPath.bundleID == ref.bundleID { return (atPath, false) }
             if let id = ref.bundleID, atPath != nil || (isReachable(ref.path) && !pathExists(ref.path)),
-               let other = byBundle[id]?.first(where: {
+               let other = likelyMove(of: ref, among: byBundle[id]?.filter {
                    !gridPaths.contains($0.path) && !seen.contains($0.path)
                        && !removed.contains($0.key) && !removed.contains($0.path)
-               }) {
+               } ?? []) {
                 return (other, true)
             }
-            // Another app now lives at this path (e.g. an update changed the bundle ID): adopt it.
-            if let atPath { return (atPath, false) }
+            // Another app now lives at this path (e.g. an update changed the bundle ID): adopt
+            // it, unless the user excluded that app.
+            if let atPath, !removed.contains(atPath.key), !removed.contains(atPath.path) { return (atPath, false) }
             return nil
         }
 
@@ -83,7 +84,10 @@ public enum Reconciler {
                 ref.path = found.path
                 ref.name = found.name
                 ref.bundleID = found.bundleID ?? ref.bundleID
-            } else if prune && isReachable(ref.path) {
+            } else if prune && isReachable(ref.path) && (byPath[ref.path] != nil || !pathExists(ref.path)) {
+                // Pruned once its app is gone from disk, or replaced by one it mustn't become (an
+                // excluded app): one the scan missed while it is still there (an update rewriting
+                // its Info.plist) keeps its tile.
                 report.removed.append(ref.title)
                 var slot = slot()
                 slot.app = ref
@@ -174,17 +178,31 @@ public enum Reconciler {
         return report
     }
 
+    /// Of the copies of a moved app (same bundle ID), the one it most likely moved to: the
+    /// one with its file name, then the one with its name, then the first.
+    static func likelyMove(of ref: AppRef, among candidates: [InstalledApp]) -> InstalledApp? {
+        let file = (ref.path as NSString).lastPathComponent
+        return candidates.first { ($0.path as NSString).lastPathComponent == file }
+            ?? candidates.first { $0.name == ref.name }
+            ?? candidates.first
+    }
+
     /// Installed apps that are not on the grid, for "Add Missing Apps…". A copy sharing its
     /// bundle ID with one on the grid (Xcode-beta beside Xcode) counts as missing.
     public static func missingApps(in grid: Grid, installed: [InstalledApp]) -> [InstalledApp] {
         let paths = Set(grid.allApps.map(\.path))
         let installedPaths = Set(installed.map(\.path))
-        // Grid paths per key; a key whose ref points nowhere installed is that app, moved.
-        let onGrid = Dictionary(grouping: grid.allApps, by: \.key).mapValues { $0.map(\.path) }
-        return installed
-            .filter { app in
-                !paths.contains(app.path) && (onGrid[app.key]?.allSatisfy(installedPaths.contains) ?? true)
-            }
+        // A ref pointing nowhere installed is its app, moved: it stands for one copy with its
+        // key (the likeliest), which isn't missing. Other copies still are.
+        let offGrid = installed.filter { !paths.contains($0.path) }
+        let byKey = Dictionary(grouping: offGrid, by: \.key)
+        var claimed = Set<String>()
+        for ref in grid.allApps where !installedPaths.contains(ref.path) {
+            let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) }
+            if let copy = likelyMove(of: ref, among: free) { claimed.insert(copy.path) }
+        }
+        return offGrid
+            .filter { !claimed.contains($0.path) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -312,12 +330,13 @@ extension Grid {
     }
 
     /// Just after the nearest remembered neighbour still present. With none left, the start
-    /// if every item before it was remembered, else the old index.
+    /// if every item before it was remembered, else the old index. `before` can also list
+    /// apps pruned before it, so it can hold more than the items that stood before it.
     static func slot(after before: [UUID]?, fallback: Int, in ids: [UUID]) -> Int {
         guard let before else { return fallback }
         for id in before.reversed() {
             if let i = ids.firstIndex(of: id) { return i + 1 }
         }
-        return before.count == fallback ? 0 : fallback
+        return before.count >= fallback ? 0 : fallback
     }
 }

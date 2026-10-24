@@ -157,20 +157,33 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pageCountAfterResize(rows: 1, columns: 2) == 3)
         g.resize(rows: 1, columns: 2)
         #expect(g.pages.map(titles) == [["A", "B"], ["C", "D"], ["E"]])
-        #expect(g.pageCountAfterResize(rows: 2, columns: 3) == 1)
+        // Growing keeps every page as it is: nothing has to move.
+        #expect(g.pageCountAfterResize(rows: 2, columns: 3) == 3)
         g.resize(rows: 2, columns: 3)
-        #expect(g.pages.map(titles) == [["A", "B", "C", "D", "E"]])
+        #expect(g.pages.map(titles) == [["A", "B"], ["C", "D"], ["E"]])
+        #expect(g.rows == 2 && g.columns == 3)
+    }
+
+    @Test func resizeKeepsPagesThatStillFit() {
+        var g = grid([["A", "B"], ["C"]], columns: 4)
+        g.setPageTitle(0, "Work")
+        g.setPageTitle(1, "Games")
+        #expect(!g.pagesDiffer(from: g.resized(rows: 2, columns: 2)), "same capacity")
+        #expect(!g.pagesDiffer(from: g.resized(rows: 1, columns: 2)), "smaller, but every page fits")
+        g.resize(rows: 1, columns: 2)
+        #expect(g.pages.map(titles) == [["A", "B"], ["C"]])
+        #expect(g.pages.map(\.title) == ["Work", "Games"])
     }
 
     @Test func resizeKeepsLeadingPageIdentity() {
-        var g = grid([["A"], ["B"], ["C"]])
+        var g = grid([["A", "B"], ["C"], ["D"]])
         g.setPageTitle(0, "First")
         g.setPageTitle(2, "Third")
         let first = g.pages[0].id
-        g.resize(rows: 1, columns: 2)
-        #expect(g.pages.map(titles) == [["A", "B"], ["C"]])
+        g.resize(rows: 1, columns: 1)
+        #expect(g.pages.map(titles) == [["A"], ["B"], ["C"], ["D"]])
         #expect(g.pages[0].id == first && g.pages[0].title == "First")
-        #expect(g.pages[1].title == "Third", "with C, the third page's first item")
+        #expect(g.pages[3].title == "Third", "with D, the third page's first item")
     }
 
     @Test func resizeTitlesFollowTheirPagesFirstItem() {
@@ -182,7 +195,7 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(titles) == [["A", "B"], ["C", "D"], ["E", "F"]])
         #expect(g.pages.map(\.title) == [nil, "Games", "Games"], "E, from the Games page, starts the last one")
         g.resize(rows: 1, columns: 3)
-        #expect(g.pages.map(\.title) == [nil, "Games"], "named after where each page's first item came from")
+        #expect(g.pages.map(\.title) == [nil, "Games", "Games"], "every page still fits, so none moves")
         #expect(!g.pagesDiffer(from: g.resized(rows: 3, columns: 1)), "same capacity, nothing moves")
 
         // Shrinking spills full pages onto the next ones; titles still go by where items came from.
@@ -360,6 +373,33 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(leftovers.isEmpty, "the temporary file is renamed into place")
     }
 
+    @Test func versionOneAsTextLoadsAndZeroIsRejected() throws {
+        #expect(try GridStore.decode(Data(#"{"version": "1", "rows": 2, "columns": 2, "pages": []}"#.utf8)).rows == 2)
+        #expect(throws: GridFileError.self) { try GridStore.decode(Data(#"{"version": 0, "pages": []}"#.utf8)) }
+    }
+
+    @Test func encodingTheSameGridTwiceWritesTheSameBytes() throws {
+        let g = Grid(removedBundleIDs: Set((0..<20).map { "com.test.\($0)" }))
+        let once = try GridStore.encode(g)
+        #expect(try GridStore.encode(GridStore.decode(once)) == once)
+    }
+
+    @Test func saveCanKeepAnOlderBackupAndSweepsLeftoverTemporaryFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        try store.save(Grid(rows: 1, columns: 1))
+        #expect(try store.save(Grid(rows: 2, columns: 2)), "the first file becomes the backup")
+        #expect(try !store.save(Grid(rows: 3, columns: 3), refreshingBackup: false))
+        #expect(try store.loadBackup().rows == 1, "older than the save before this one")
+
+        let stray = dir.appendingPathComponent(".grid.json.\(UUID().uuidString).tmp")
+        try Data("half".utf8).write(to: stray)
+        try store.save(Grid(rows: 4, columns: 4))
+        #expect(!FileManager.default.fileExists(atPath: stray.path), "left by a save cut short")
+        #expect(try store.loadBackup().rows == 3)
+    }
+
     @Test func saveKeepsASymlinkedFileASymlink() throws {
         let fm = FileManager.default
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("store-\(UUID().uuidString)")
@@ -424,6 +464,16 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 }
 
 @Suite struct SearchTests {
+    @Test func otherScriptsLigaturesAndSeparatorOnlyQueries() {
+        #expect(Search.score("网易云音乐", query: "网音") != nil, "two characters are enough outside ASCII")
+        #expect(Search.score("Google Chrome", query: "gc") != nil, "initials, not the subsequence")
+        #expect(Search.score("Mail", query: "ml") == nil, "two ASCII letters still aren't a subsequence")
+        #expect(Search.score("カメラ", query: "かめら") == 1000)
+        #expect(Search.score("Æther", query: "aeth") != nil)
+        #expect(Search.score("Wi-Fi Explorer", query: "-") == nil)
+        #expect(Search.score("Wi-Fi Explorer", query: " - ") == nil)
+    }
+
     @Test func ranking() {
         let apps = ["Notes", "Keynote", "Notion", "Sonoma Notes", "Final Cut Pro", "GarageBand"].map { app($0) }
         let no = Search.results(in: apps, query: "no").map(\.name)

@@ -152,6 +152,16 @@ enum DebugScript {
                 case "missing": delegate.showAddMissing()
                 case "choose": delegate.showChooseApps()
                 case "welcome": delegate.showFirstRun()
+                case "datafolder": state.showDataFolder() // as Settings › Library's button
+                case "browseapp":
+                    // Browse for App… (Settings › Library › Add Missing Apps), adding what is picked.
+                    let picked = AppBrowser.pick()
+                    state.addApps(picked)
+                    print("browseapp: \(picked.map(\.path))")
+                    fflush(stdout)
+                case "bookmarks":
+                    print("bookmarks: \((Preferences.appDefaults.dictionary(forKey: "bookmarks") ?? [:]).keys.sorted())")
+                    fflush(stdout)
                 case "undo": state.undo()
                 case "bg":
                     // "bg:wallpaper", or "bg:/path/to/picture" for a custom image.
@@ -162,6 +172,15 @@ enum DebugScript {
                         state.prefs.background = style
                     }
                 case "blur": state.prefs.blurRadius = Double(arg) ?? 0
+                case "showsnap":
+                    // "showsnap:ms,name[,/picture]": shows the overlay (with that custom picture, as if
+                    // shown on another display with its own) and snaps it ms later, before the runner's pause.
+                    let n = arg.split(separator: ",", maxSplits: 2).map(String.init)
+                    guard n.count >= 2, let ms = Int(n[0]) else { break }
+                    if n.count == 3 { state.prefs.customImagePath = n[2] }
+                    overlay.show()
+                    try? await Task.sleep(for: .milliseconds(ms))
+                    snapshot(name: n[1], dir: dir)
                 case "blursweep":
                     // "blursweep:10-30": one radius every 30 ms, as dragging the slider does.
                     let ends = arg.split(separator: "-").compactMap { Int($0) }
@@ -221,15 +240,16 @@ enum DebugScript {
                         RunLoop.main.add(timer, forMode: .common)
                     }
                 case "state":
-                    print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active) swipe=\(Int(state.swipeOffset))")
+                    print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active) swipe=\(Int(state.swipeOffset)) fswipe=\(Int(state.folderSwipeOffset))")
                     if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
                     if let f = state.openFolder { print("folder: \(f.apps.count) apps, first \(f.apps.prefix(3).map(\.title)), last \(f.apps.suffix(3).map(\.title))") }
                     fflush(stdout)
                 case "wclick":
-                    // Clicks at x,y (points from the top left) in the window titled `title`: "wclick:title,x,y".
+                    // Clicks at x,y (points from the top left) in the window titled `title`: "wclick:title,x,y";
+                    // "-" for the untitled overlay.
                     let n = arg.split(separator: ",").map(String.init)
                     guard n.count == 3, let x = Double(n[1]), let y = Double(n[2]),
-                          let window = NSApp.windows.first(where: { $0.isVisible && $0.title == n[0] }) else { break }
+                          let window = NSApp.windows.first(where: { $0.isVisible && $0.title == (n[0] == "-" ? "" : n[0]) }) else { break }
                     let p = NSPoint(x: x, y: (window.contentView?.bounds.height ?? 0) - y)
                     window.makeKeyAndOrderFront(nil)
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -473,7 +493,11 @@ enum DebugScript {
             let c = state.folderLayout.center(to)
             end = CGPoint(x: f.minX + c.x - state.folderLayout.cell.width * 0.4, y: f.minY + c.y)
             await glide(start, end)
+            // Before the pointer settles the gap stays put, the move pending; after, it has moved.
+            print("gap: \(String(describing: state.drag.gap)) pending=\(String(describing: state.drag.pendingGap))")
             for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
+            print("gap: \(String(describing: state.drag.gap)) pending=\(String(describing: state.drag.pendingGap))")
+            fflush(stdout)
         case "edgehide":
             let frame = state.drag.pagerFrame
             let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)

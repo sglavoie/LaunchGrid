@@ -47,11 +47,17 @@ mkdir -p "$OUT_DIR"
 ditto -c -k --keepParent build/LaunchGrid.app "$ZIP"
 git rev-parse HEAD > "$OUT_DIR/COMMIT"
 
-RESULT="$(xcrun notarytool submit "$ZIP" --keychain-profile "$PROFILE" --wait --output-format json)"
+# notarytool exits non-zero for a rejected submission too: keep its output to report it.
+STATUS=0
+RESULT="$(xcrun notarytool submit "$ZIP" --keychain-profile "$PROFILE" --wait --output-format json)" || STATUS=$?
 echo "$RESULT"
-if ! echo "$RESULT" | grep -q '"status" *: *"Accepted"'; then
+if [ "$STATUS" -ne 0 ] || ! echo "$RESULT" | grep -q '"status" *: *"Accepted"'; then
     ID="$(echo "$RESULT" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p')"
-    echo "Notarisation failed; see: xcrun notarytool log $ID --keychain-profile $PROFILE" >&2
+    if [ -n "$ID" ]; then
+        echo "Notarisation failed; see: xcrun notarytool log $ID --keychain-profile $PROFILE" >&2
+    else
+        echo "Notarisation failed before a submission was made (notarytool exited with $STATUS)." >&2
+    fi
     exit 1
 fi
 

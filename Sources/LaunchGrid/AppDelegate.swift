@@ -606,9 +606,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     return
                 }
                 state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid))
-                var message = String(localized: "Imported \(result.imported) apps from \(source)")
-                if !result.skipped.isEmpty { message += String(localized: "; skipped \(result.skipped.count) not installed") }
-                if !result.duplicates.isEmpty { message += String(localized: "; skipped \(result.duplicates.count) listed twice") }
+                // Whole sentences, so a translation can order them its own way.
+                let (n, skipped, twice) = (result.imported, result.skipped.count, result.duplicates.count)
+                let message = switch (skipped > 0, twice > 0) {
+                case (false, false): String(localized: "Imported \(n) apps from \(source)")
+                case (true, false): String(localized: "Imported \(n) apps from \(source); skipped \(skipped) not installed")
+                case (false, true): String(localized: "Imported \(n) apps from \(source); skipped \(twice) listed twice")
+                case (true, true): String(localized: "Imported \(n) apps from \(source); skipped \(skipped) not installed and \(twice) listed twice")
+                }
                 state.showToast(message)
                 closeFirstRunIfDone()
             }

@@ -10,7 +10,8 @@ public enum Search {
     /// Returns nil when there is no match.
     public static func score(_ name: String, query: String) -> Int? {
         let q = normalize(query)
-        guard !q.isEmpty else { return nil }
+        // Separators alone ("-") would match every name that has one.
+        guard q.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         let n = normalize(name)
         if n == q { return 1000 }
         if n.hasPrefix(q) { return 900 - min(n.count, 99) }
@@ -22,7 +23,9 @@ public enum Search {
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
         if acronym(of: name).hasPrefix(q) { return 600 }
         if n.contains(q) { return 500 - min(n.count, 99) }
-        if q.count >= 3, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
+        // Two characters say more in a script without an alphabet ("网音" for 网易云音乐).
+        let minimum = q.allSatisfy(\.isASCII) ? 3 : 2
+        if q.count >= minimum, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
         return nil
     }
 
@@ -40,9 +43,22 @@ public enum Search {
     }
 
     static func normalize(_ s: String) -> String {
-        s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
-            .trimmingCharacters(in: .whitespaces)
+        var s = s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        // Letters the folding leaves alone, written as their plain-letter spelling.
+        if s.unicodeScalars.contains(where: { letterSpellings[$0] != nil }) {
+            s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap { letterSpellings[$0].map { Array($0.unicodeScalars) } ?? [$0] }))
+        }
+        // Hiragana as katakana, so "かめら" finds "カメラ".
+        if s.unicodeScalars.contains(where: { (0x3041...0x3096).contains($0.value) }) {
+            s = s.applyingTransform(.hiraganaToKatakana, reverse: false) ?? s
+        }
+        return s.trimmingCharacters(in: .whitespaces)
     }
+
+    /// After case folding, so lowercase only.
+    private static let letterSpellings: [Unicode.Scalar: String] = [
+        "æ": "ae", "œ": "oe", "ø": "o", "ł": "l", "đ": "d", "ð": "d", "þ": "th", "ı": "i",
+    ]
 
     /// Initials of words and of camel-case humps: "Visual Studio Code" → "vsc", "GarageBand" → "gb",
     /// and after a run of capitals, "PDFExpert" → "pe".

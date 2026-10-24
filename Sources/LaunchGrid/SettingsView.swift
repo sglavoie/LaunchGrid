@@ -423,12 +423,12 @@ struct LibrarySettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extra folders to scan") {
-                let unreadable = state.unreadableFolders
+                let unreadable = state.unreadableFolders, missing = state.missingFolders
                 ForEach(prefs.extraFolders, id: \.self) { path in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(path).lineLimit(1).truncationMode(.middle)
-                            if !FileManager.default.fileExists(atPath: path) {
+                            if missing.contains(path) {
                                 Text("Not found. Its apps stay on the grid until it's back.")
                                     .font(.caption).foregroundStyle(.orange)
                             } else if unreadable.contains(path) {
@@ -483,9 +483,7 @@ struct LibrarySettings: View {
                     Button("Import from Launchpad") { actions.importLaunchpad() }
                         .disabled(LaunchpadImporter.launchpadDatabaseURL == nil)
                 }
-                Button("Show Data Folder in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([state.store.url])
-                }
+                Button("Show Data Folder in Finder") { state.showDataFolder() }
                 Text("Loading or importing replaces the current layout; ⌘Z in the grid undoes it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -571,18 +569,28 @@ struct AddMissingAppsView: View {
 
     /// Adds apps from anywhere on disk, along with those already ticked in the list.
     private func browse(adding picked: [InstalledApp]) {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.applicationBundle]
-        panel.allowsMultipleSelection = true
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        guard panel.runModal() == .OK else { return }
-        let browsed = panel.urls.compactMap { AppScanner.read(appAt: $0) }
-        // Apps outside the scan folders are read again at each scan.
-        for app in browsed { FileAccess.remember(URL(fileURLWithPath: app.path)) }
+        let browsed = AppBrowser.pick()
         guard !browsed.isEmpty else { return }
         let apps = picked + browsed.filter { app in !picked.contains { $0.path == app.path } }
         state.addApps(apps)
         close()
+    }
+}
+
+/// The open panel for apps from anywhere on disk ("Browse for App…").
+@MainActor
+enum AppBrowser {
+    /// The apps picked, remembered (in the sandbox) so access to them outlasts this run.
+    static func pick() -> [InstalledApp] {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard panel.runModal() == .OK else { return [] }
+        let browsed = panel.urls.compactMap { AppScanner.read(appAt: $0) }
+        // Apps outside the scan folders are read again at each scan.
+        for app in browsed { FileAccess.remember(URL(fileURLWithPath: app.path)) }
+        return browsed
     }
 }
 
@@ -697,13 +705,17 @@ struct FirstRunView: View {
             }
             option("Load a grid file…", "A file saved from LaunchGrid, or an AppGrid .agrid file.", "doc") { actions.loadFile() }
             Divider()
-            // Only the icons that are on: the Dock icon is off by default.
-            let shortcut = KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers)
+            // Only the icons that are on (the Dock icon is off by default), and the shortcut
+            // only when one is registered: it may be off, or taken by another app.
+            let shortcut = HotkeyService.shared.activeCombo.map { KeyCombo.describe(keyCode: $0.keyCode, modifiers: $0.modifiers) }
             Group {
-                switch (state.prefs.showInMenuBar, state.prefs.showInDock) {
-                case (true, true): Text("Open LaunchGrid with **\(shortcut)**, the menu bar icon, or the Dock icon.")
-                case (false, true): Text("Open LaunchGrid with **\(shortcut)** or the Dock icon.")
-                default: Text("Open LaunchGrid with **\(shortcut)** or the menu bar icon.")
+                switch (state.prefs.showInMenuBar, state.prefs.showInDock, shortcut) {
+                case (true, true, let shortcut?): Text("Open LaunchGrid with **\(shortcut)**, the menu bar icon, or the Dock icon.")
+                case (false, true, let shortcut?): Text("Open LaunchGrid with **\(shortcut)** or the Dock icon.")
+                case (_, _, let shortcut?): Text("Open LaunchGrid with **\(shortcut)** or the menu bar icon.")
+                case (true, true, nil): Text("Open LaunchGrid with the menu bar icon or the Dock icon.")
+                case (false, true, nil): Text("Open LaunchGrid with the Dock icon.")
+                case (_, _, nil): Text("Open LaunchGrid with the menu bar icon.")
                 }
             }
                 .foregroundStyle(.secondary)

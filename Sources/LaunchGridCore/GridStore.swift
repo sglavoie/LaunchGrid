@@ -27,8 +27,8 @@ public struct GridStore: Sendable {
 
     public var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
 
-    /// The save before the last one, to fall back on when the last didn't make it to disk
-    /// whole (a power cut right after writing can leave an empty file).
+    /// An earlier save, to fall back on when the last didn't make it to disk whole (a power
+    /// cut right after writing can leave an empty file) or turned out to be one to regret.
     public var backupURL: URL { GridStore.followingSymlinks(url).appendingPathExtension("bak") }
 
     public func load() throws -> Grid {
@@ -39,18 +39,41 @@ public struct GridStore: Sendable {
         try GridStore.decode(Data(contentsOf: backupURL))
     }
 
-    public func save(_ grid: Grid) throws {
+    /// Saves `grid`. With `refreshingBackup`, the file it replaces becomes the backup first;
+    /// without, the backup stays as it is, so it can be older than the save before this one.
+    /// Returns whether the backup was refreshed.
+    @discardableResult
+    public func save(_ grid: Grid, refreshingBackup: Bool = true) throws -> Bool {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
         let target = GridStore.followingSymlinks(url)
         let fm = FileManager.default
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if fm.fileExists(atPath: target.path) {
-            // A clone on APFS, so it costs next to nothing. Best effort: the save matters more.
+        GridStore.removeLeftoverTemporaryFiles(beside: target)
+        var refreshed = false
+        if refreshingBackup && fm.fileExists(atPath: target.path) {
+            // A clone on APFS, so it costs next to nothing, renamed over the old backup so there
+            // is always one. Best effort: the save matters more.
             let backup = backupURL
-            try? fm.removeItem(at: backup)
-            try? fm.copyItem(at: target, to: backup)
+            let tmp = backup.deletingLastPathComponent()
+                .appendingPathComponent(".\(backup.lastPathComponent).\(UUID().uuidString).tmp")
+            if (try? fm.copyItem(at: target, to: tmp)) != nil {
+                refreshed = rename(tmp.path, backup.path) == 0
+                if !refreshed { unlink(tmp.path) }
+            }
         }
         try GridStore.writeDurably(GridStore.encode(grid), to: target)
+        return refreshed
+    }
+
+    /// Deletes temporary files an earlier save left beside `url` when it was cut short (by a
+    /// crash or a power cut), which nothing else would ever remove.
+    static func removeLeftoverTemporaryFiles(beside url: URL) {
+        let folder = url.deletingLastPathComponent()
+        let prefixes = [".\(url.lastPathComponent).", ".\(url.lastPathComponent).bak."]
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
+        for name in names where name.hasSuffix(".tmp") && prefixes.contains(where: name.hasPrefix) {
+            unlink(folder.appendingPathComponent(name).path)
+        }
     }
 
     /// Writes `data` to a temporary file beside `url`, flushes it to the disk itself, then
@@ -127,6 +150,7 @@ public struct GridStore: Sendable {
         }
         let version = (try? JSONDecoder().decode(Header.self, from: data))?.version ?? 1
         guard version <= Grid.currentVersion else { throw GridFileError.unsupportedVersion(version) }
+        guard version >= 1 else { throw GridFileError.invalid("version \(version) is not a format version") }
         // Future migrations go here, keyed on `version`.
         var grid: Grid
         do {

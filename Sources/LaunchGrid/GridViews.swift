@@ -84,14 +84,15 @@ struct GridRootView: View {
         .environment(\.colorScheme, .dark)
     }
 
+    /// Steps back one level, in Esc's order: search, edit mode, then the selection.
     private func backgroundClicked() {
         if state.textEdit != nil { return }
-        if state.editing {
+        if !state.query.isEmpty {
+            state.endSearch()
+        } else if state.editing {
             state.editing = false
         } else if !state.selection.isEmpty {
             state.selection.removeAll()
-        } else if !state.query.isEmpty {
-            state.query = ""
         } else if state.prefs.hideOnEmptyClick {
             state.onHide()
         }
@@ -121,6 +122,18 @@ struct ToastLayer: View {
         // VoiceOver doesn't see a toast appear; "Removed — ⌘Z to undo" is worth hearing.
         .onChange(of: state.toast) { _, toast in
             if let toast { AccessibilityNotification.Announcement(toast).post() }
+        }
+        // Nor a page flip with nothing focused (Tab, a swipe), nor edit mode turning on or off.
+        .onChange(of: state.currentPage) { _, page in
+            guard state.isShown, state.grid.pages.indices.contains(page) else { return }
+            let count = state.grid.pages.count
+            let text = state.grid.pages[page].title.map { String(localized: "Page \(page + 1) of \(count), \($0)") }
+                ?? String(localized: "Page \(page + 1) of \(count)")
+            AccessibilityNotification.Announcement(text).post()
+        }
+        .onChange(of: state.editing) { _, editing in
+            guard state.isShown else { return }
+            AccessibilityNotification.Announcement(editing ? String(localized: "Editing layout") : String(localized: "Done editing")).post()
         }
     }
 }
@@ -225,34 +238,53 @@ struct Caret: View {
 struct PillButtonStyle: ButtonStyle {
     var prominent = false
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .padding(.horizontal, 14).padding(.vertical, 5)
-            .foregroundStyle(.white)
-            .background(prominent ? Color.accentColor : .white.opacity(0.18), in: Capsule())
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        Pill(configuration: configuration, prominent: prominent)
+    }
+
+    /// A view, so it can read the contrast setting.
+    private struct Pill: View {
+        @Environment(\.colorSchemeContrast) private var contrast
+        let configuration: Configuration
+        let prominent: Bool
+
+        var body: some View {
+            let high = contrast == .increased
+            configuration.label
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 14).padding(.vertical, 5)
+                .foregroundStyle(.white)
+                .background(prominent ? Color.accentColor : .white.opacity(high ? 0.32 : 0.18), in: Capsule())
+                .overlay { if high { Capsule().strokeBorder(.white.opacity(0.6)) } }
+                .opacity(configuration.isPressed ? 0.7 : 1)
+        }
     }
 }
 
 struct PageTitle: View {
     @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         let page = state.currentPage
         let title = state.query.isEmpty && state.grid.pages.indices.contains(page) ? state.grid.pages[page].title : nil
+        let high = contrast == .increased
         Group {
             if let title {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(.white.opacity(high ? 1 : 0.9))
+                    .accessibilityAddTraits([.isHeader, .isButton])
+                    .accessibilityHint("Renames the page")
             } else if state.editing && state.query.isEmpty && state.grid.pages.indices.contains(page) {
                 Text("Add Page Title")
                     .font(.system(size: 15))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.4))
+                    .accessibilityAddTraits(.isButton)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { state.beginPageTitleEdit(page) }
+        .accessibilityAction { state.beginPageTitleEdit(page) }
         .id(page)
         .transition(.opacity)
         .animation(.easeOut(duration: 0.15), value: page)
@@ -294,6 +326,7 @@ struct Pager: View {
             .frame(width: w, alignment: .leading)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
                 state.drag.pagerFrame = $0
+                if state.drag.pagerSize != $0.size { state.drag.pagerSize = $0.size }
             }
         }
         .clipped()
@@ -380,7 +413,7 @@ struct ItemCell: View {
             onDelete: { state.remove([item.id]) }
         )
         .onTapGesture { tapped() }
-        .modifier(ItemAccessibilityActions(id: item.id, isFolder: item.folder != nil, open: { state.activate(item) }))
+        .modifier(ItemAccessibilityActions(id: item.id, selected: selected, isFolder: item.folder != nil, open: { state.activate(item) }))
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.7).onEnded { _ in
                 guard !state.drag.active, !state.editing else { return }
@@ -652,7 +685,7 @@ struct PageDots: View {
                         else { Text("\(hidden) more matches — keep typing to narrow the search") }
                     }
                         .font(.callout)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.9 : 0.6))
                 }
             }
         }
@@ -663,6 +696,7 @@ struct PageDots: View {
 
 struct SearchResultsView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
     @AccessibilityFocusState private var voiceOverFocus: UUID?
 
     var body: some View {
@@ -674,7 +708,7 @@ struct SearchResultsView: View {
                 if results.isEmpty {
                     Text("No Results")
                         .font(.title2.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.85 : 0.5))
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, app in
@@ -716,7 +750,7 @@ struct FolderPanel: View {
     var body: some View {
         GeometryReader { geo in
             let grid = state.grid
-            let pager = state.drag.pagerFrame
+            let pager = state.drag.pagerSize
             let cols = FolderLayout.columns(grid)
             let rows = FolderLayout.rows(apps: folder.apps.count, grid: grid)
             let cellW = max(pager.width, 400) / CGFloat(grid.columns)
@@ -734,6 +768,7 @@ struct FolderPanel: View {
                     .accessibilityAction { state.beginRename(folder.id) }
                 ZStack(alignment: .topLeading) {
                     FolderPageContent(folder: folder, size: gridSize)
+                        .offset(x: state.folderSwipeOffset)
                 }
                 .frame(width: gridSize.width, height: gridSize.height)
                 .clipped()
@@ -759,7 +794,7 @@ struct FolderPanel: View {
             }
             .padding(24)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
-            .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.15)))
+            .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(contrast == .increased ? 0.5 : 0.15)))
             .contentShape(RoundedRectangle(cornerRadius: 28))
             .onTapGesture {}
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
@@ -773,7 +808,7 @@ struct FolderPanel: View {
         }
     }
 
-    static let space = "folderPanel"
+    nonisolated static let space = "folderPanel"
 }
 
 struct FolderPageContent: View {
@@ -785,7 +820,7 @@ struct FolderPageContent: View {
     var body: some View {
         let layout = GridLayout(size: size, rows: FolderLayout.rows(apps: folder.apps.count, grid: state.grid),
                                 columns: FolderLayout.columns(state.grid))
-        let icon = GridLayout(size: state.drag.pagerFrame.size, rows: state.grid.rows, columns: state.grid.columns)
+        let icon = GridLayout(size: state.drag.pagerSize, rows: state.grid.rows, columns: state.grid.columns)
             .iconSize(scale: state.prefs.iconScale)
         let perPage = FolderLayout.perPage(state.grid)
         var entries: [(id: UUID, app: AppRef?)] = state.remainingFolderApps().map { ($0.id, $0) }
@@ -837,7 +872,7 @@ struct FolderItemCell: View {
                 else if state.editing { state.toggleSelection(app.id) }
                 else { state.launch(app) }
             }
-            .modifier(ItemAccessibilityActions(id: app.id, open: { state.launch(app) }))
+            .modifier(ItemAccessibilityActions(id: app.id, selected: selected, open: { state.launch(app) }))
             .simultaneousGesture(
                 // As on a page: a long press enters edit mode.
                 LongPressGesture(minimumDuration: 0.7).onEnded { _ in
@@ -859,9 +894,12 @@ struct FolderItemCell: View {
 /// in edit mode it selects (a folder opens when nothing is selected), otherwise it opens.
 /// The ✕ button, merged into the item, can't be reached, so removing (and renaming and
 /// selecting) are named actions.
+/// Reads the state only in its actions, which run later: what the body shows comes in as
+/// properties, so a selection change redraws only the cells it changes.
 struct ItemAccessibilityActions: ViewModifier {
     @Environment(AppState.self) private var state
     let id: UUID
+    let selected: Bool
     var isFolder = false
     let open: () -> Void
 
@@ -870,7 +908,7 @@ struct ItemAccessibilityActions: ViewModifier {
             .accessibilityAction {
                 if !state.editing || (isFolder && state.selection.isEmpty) { open() } else { state.toggleSelection(id) }
             }
-            .accessibilityAction(named: state.selection.contains(id) ? Text("Deselect") : Text("Select")) { state.toggleSelection(id) }
+            .accessibilityAction(named: selected ? Text("Deselect") : Text("Select")) { state.toggleSelection(id) }
             .accessibilityAction(named: "Rename") { state.beginRename(id) }
             .accessibilityAction(named: "Remove") { state.remove([id]) }
     }
@@ -890,7 +928,7 @@ struct TextEditCard: View {
                 .onTapGesture { state.textEdit = nil }
             VStack(alignment: .leading, spacing: 12) {
                 Text(request.title).font(.headline)
-                TextField("Name", text: $text)
+                TextField(request.isPageTitle ? "Page Title" : "Name", text: $text)
                     .textFieldStyle(.roundedBorder)
                     .focused($focused)
                     .onSubmit { state.commitTextEdit(text) }
@@ -964,7 +1002,7 @@ struct MenuEntry: Identifiable {
         }
         entries.append(.divider)
         let pages = state.grid.pages.indices.map { p in
-            MenuEntry.button(state.grid.pages[p].title.map { "\(p + 1) — \($0)" } ?? String(localized: "Page \(p + 1)")) {
+            MenuEntry.button(state.grid.pages[p].title.map { String(localized: "\(p + 1) — \($0)", comment: "Move to Page: a page's number and title") } ?? String(localized: "Page \(p + 1)")) {
                 state.moveToPage(targets, page: p)
             }
         }

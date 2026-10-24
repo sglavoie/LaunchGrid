@@ -76,6 +76,22 @@ import Testing
         #expect(after("|final cut") { $0.moveWordRight() } == "final| cut")
         #expect(after("final| cut") { $0.moveWordRight() } == "final cut|")
         #expect(after("a - |") { $0.moveWordLeft() } == "|a - ")
+        #expect(after("don't|") { $0.moveWordLeft() } == "|don't", "an apostrophe inside a word")
+        #expect(after("|rock’n roll") { $0.moveWordRight() } == "rock’n| roll")
+        #expect(after("'quoted'|") { $0.moveWordLeft() } == "'|quoted'")
+    }
+
+    @Test func movesByWordInsideTextWrittenWithoutSpaces() {
+        var line = TextLine(text: "网易云音乐")
+        line.moveWordLeft()
+        #expect(line.caret > 0, "not across the whole run in one step")
+        var steps = 1
+        while line.caret > 0 && steps < 10 { line.moveWordLeft(); steps += 1 }
+        #expect(line.caret == 0 && steps > 1)
+        var mixed = TextLine(text: "Final Cut 视频编辑")
+        mixed.moveToStart()
+        mixed.moveWordRight()
+        #expect(mixed.caret == 5, "Latin words as before")
     }
 
     @Test func deletesAroundTheCaret() {
@@ -100,5 +116,7 @@ import Testing
         #expect(TextLine.singleLine("a\u{7}b \u{1B}") == "ab")
         #expect(TextLine.singleLine("\n\r\n\t") == "")
         #expect(TextLine.singleLine("café 👍🏽") == "café 👍🏽")
+        #expect(TextLine.singleLine("\u{202E}Safari\u{200B}") == "Safari", "invisible format characters")
+        #expect(TextLine.singleLine("👨‍👩‍👧 🏴󠁧󠁢󠁳󠁣󠁴󠁿") == "👨‍👩‍👧 🏴󠁧󠁢󠁳󠁣󠁴󠁿", "joiners and tags inside emoji stay")
     }
 }

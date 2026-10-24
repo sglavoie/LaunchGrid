@@ -144,7 +144,8 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         // Only when Xcode.app itself is gone does its ref follow the bundle ID.
         var h = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
         _ = Reconciler.reconcile(&h, installed: [apps[0]], autoAdd: false, pathExists: { _ in true })
-        #expect(h.allApps.isEmpty, "Xcode.app still exists on disk, so it is not moved onto the beta")
+        #expect(h.allApps.map(\.path) == ["/Applications/Xcode.app"],
+                "Xcode.app still exists on disk: not moved onto the beta, nor pruned")
         var i = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
         let moved = Reconciler.reconcile(&i, installed: [apps[0]], autoAdd: false, pathExists: { _ in false })
         #expect(moved.moved == ["Xcode-beta"])
@@ -161,6 +162,42 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         let report = Reconciler.reconcile(&g, installed: [beta], autoAdd: true, pathExists: { _ in false })
         #expect(report.moved.isEmpty && report.added.isEmpty)
         #expect(g.allApps.isEmpty)
+    }
+
+    @Test func movedRefFollowsTheCopyWithItsFileName() {
+        let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
+        let copies = [installed("Xcode-beta", id: "com.apple.dt.Xcode"),
+                      installed("Xcode", id: "com.apple.dt.Xcode", path: "/Applications/Dev/Xcode.app")]
+        let report = Reconciler.reconcile(&g, installed: copies, autoAdd: true, pathExists: { _ in false })
+        #expect(report.moved == ["Xcode"])
+        #expect(g.allApps.map(\.path) == ["/Applications/Dev/Xcode.app", "/Applications/Xcode-beta.app"])
+    }
+
+    @Test func aTileDoesNotTurnIntoAnExcludedAppAtItsPath() {
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A"))])],
+                     removedBundleIDs: ["com.vendor.new"])
+        let report = Reconciler.reconcile(&g, installed: [installed("A", id: "com.vendor.new"), installed("B")],
+                                          autoAdd: false, pathExists: { _ in true })
+        #expect(report.removed == ["A"])
+        #expect(g.allApps.isEmpty)
+    }
+
+    @Test func aMovedTileHidesOnlyOneCopyFromMissingApps() {
+        let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
+        let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
+        let moved = installed("Xcode", id: "com.apple.dt.Xcode", path: "/Applications/Dev/Xcode.app")
+        let beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
+        #expect(Reconciler.missingApps(in: g, installed: [beta, moved]) == [beta],
+                "the moved Xcode is the tile's; the beta is still missing")
+    }
+
+    @Test func aRestoredAppWhoseNeighboursAreAllGoneGoesToTheStart() {
+        let ids = (0..<3).map { _ in UUID() }
+        #expect(Grid.slot(after: [UUID(), UUID(), UUID(), UUID()], fallback: 3, in: ids) == 0,
+                "four remembered (some pruned earlier) for slot 3")
+        #expect(Grid.slot(after: [UUID(), UUID()], fallback: 3, in: ids) == 3)
+        #expect(Grid.slot(after: [ids[1]], fallback: 0, in: ids) == 2)
     }
 
     @Test func unreachableAppIsNotMovedOntoAnotherCopy() {

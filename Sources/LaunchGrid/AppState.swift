@@ -4,12 +4,33 @@ import SwiftUI
 import LaunchGridCore
 
 /// Inline text editing requested by the UI (rename, page title).
+/// What a scan saw of the disk besides the apps, read with it.
+struct DiskState: Equatable, Sendable {
+    /// Scan folders that didn't exist.
+    var missingRoots: [String] = []
+    /// Of the folders the scan couldn't list, those that exist.
+    var unreadable: [String] = []
+    /// The names in /Volumes; nil until read.
+    var mountedVolumes: Set<String>?
+
+    nonisolated static func read(roots: [String], unlisted: [String]) -> DiskState {
+        let fm = FileManager.default
+        return DiskState(missingRoots: roots.filter { !fm.fileExists(atPath: $0) },
+                         unreadable: unlisted.filter { fm.fileExists(atPath: $0) },
+                         mountedVolumes: (try? fm.contentsOfDirectory(atPath: "/Volumes")).map(Set.init))
+    }
+}
+
 struct TextEditRequest: Identifiable {
     enum Target { case item(UUID), pageTitle(Int) }
     let id = UUID()
     var target: Target
     var title: String
     var text: String
+
+    var isPageTitle: Bool {
+        if case .pageTitle = target { true } else { false }
+    }
 }
 
 @MainActor @Observable
@@ -31,12 +52,20 @@ final class AppState {
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
     /// Apps on the grid from outside the scan folders, read off the main thread with each
-    /// scan. `outsideChecked` holds every path looked at, found or not.
+    /// scan. `outsideChecked` holds every path looked at, found or not, and `outsideExisting`
+    /// those with something on disk (an app, or a bundle that couldn't be read).
     @ObservationIgnored private var outsideApps: [String: InstalledApp] = [:]
     @ObservationIgnored private var outsideChecked: Set<String> = []
+    @ObservationIgnored private var outsideExisting: Set<String> = []
+    /// Paths being read off the main thread for `reconcile()`, which runs again once they are.
+    @ObservationIgnored private var outsideReading: Set<String> = []
     /// Folders the last scan couldn't list (denied, stalled, a lapsed bookmark): their apps
     /// went unseen, not away. Observed, so Settings can point them out.
     private(set) var unlistedFolders: [String] = []
+    /// What the disk looked like at the last scan, read with it off the main thread: a stalled
+    /// volume would otherwise hang reconciling, undo and Settings at each look. Observed, for
+    /// Settings' folder warnings.
+    private var disk = DiskState()
     /// LaunchGrid's own bundle ID: it never belongs on its own grid.
     @ObservationIgnored var ownBundleID = Bundle.main.bundleIdentifier
     private(set) var hasGridFile: Bool
@@ -85,6 +114,8 @@ final class AppState {
     var iconGeneration = 0
     /// Horizontal offset of the pager while a trackpad swipe is in progress.
     var swipeOffset: CGFloat = 0
+    /// The same for the open folder's page.
+    var folderSwipeOffset: CGFloat = 0
     var isShown = false
     /// The display the overlay is on, whose wallpaper the background shows.
     var screenID: CGDirectDisplayID = 0
@@ -119,6 +150,11 @@ final class AppState {
     @ObservationIgnored var scanner: @Sendable ([URL]) -> AppScanner.ScanResult = { AppScanner.scanReporting(roots: $0) }
     /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
     @ObservationIgnored private var savesBlocked = false
+    /// When a save last refreshed the backup. The backup is refreshed at the first save of a
+    /// run and then at most every `backupInterval`, so a change to regret (an import, a sort)
+    /// doesn't reach it with the very next edit.
+    @ObservationIgnored private var lastBackup: Date?
+    static let backupInterval: TimeInterval = 10 * 60
 
     init(prefs: Preferences, store: GridStore) {
         self.prefs = prefs
@@ -136,11 +172,11 @@ final class AppState {
                     try FileManager.default.moveItem(at: store.url, to: backup)
                     NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
                     if !newer, let previous = try? store.loadBackup() {
-                        // The save before last: at most a few changes behind.
+                        // An earlier save: at most about `backupInterval` behind.
                         NSLog("LaunchGrid: restored the previous save from \(store.backupURL.path)")
                         loaded = previous
                         recoveryNotice = (
-                            String(localized: "Your saved layout could not be read, so LaunchGrid restored the save before it. The last few changes may be missing; the unreadable file was kept as \(backup.lastPathComponent)."),
+                            String(localized: "Your saved layout could not be read, so LaunchGrid restored an earlier save. Changes from the last few minutes may be missing; the unreadable file was kept as \(backup.lastPathComponent)."),
                             backup)
                     } else {
                         let message = newer
@@ -164,6 +200,9 @@ final class AppState {
         // is still to be made.
         hasGridFile = loaded.map { !$0.allApps.isEmpty } ?? false
         grid = loaded ?? Grid()
+        // The unreadable file is gone: write the restored layout back before anything else
+        // can go wrong, or the next launch would find no layout at all.
+        if recoveryNotice != nil { scheduleSave() }
     }
 
     // MARK: Mutations
@@ -282,7 +321,8 @@ final class AppState {
         }
         do {
             let generation = gridGeneration
-            try store.save(grid)
+            let refreshBackup = lastBackup.map { Date().timeIntervalSince($0) >= Self.backupInterval } ?? true
+            if try store.save(grid, refreshingBackup: refreshBackup) { lastBackup = Date() }
             savedGeneration = generation
             if !grid.allApps.isEmpty { hasGridFile = true }
             saveFailureReported = false
@@ -296,6 +336,18 @@ final class AppState {
             lastSaveFailureDetail = detail
             if reportingFailure { reportSaveFailure(detail) }
             return false
+        }
+    }
+
+    /// Shows the layout file in Finder. Before the first layout (or after an unreadable one was
+    /// set aside) there is no file to select: the folder itself opens.
+    func showDataFolder() {
+        if store.exists {
+            NSWorkspace.shared.activateFileViewerSelecting([store.url])
+        } else {
+            let folder = store.url.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(folder)
         }
     }
 
@@ -339,17 +391,18 @@ final class AppState {
         let candidates = outsideCandidates()
         Task {
             let started = Date()
-            let (result, outside) = await Task.detached(priority: .utility) {
+            let (result, outside, disk) = await Task.detached(priority: .utility) {
                 let result = scanner(roots)
                 let scanned = Set(result.apps.map(\.path))
-                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0) }))
+                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0) }),
+                        DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted))
             }.value
             NSLog("LaunchGrid: scanned \(result.apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
             if !result.unlisted.isEmpty {
                 NSLog("LaunchGrid: could not list \(result.unlisted.joined(separator: ", ")); keeping their apps")
             }
             self.scanning = false
-            self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted)
+            self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted, disk: disk)
             completion?()
             if self.rescanQueued {
                 self.rescanQueued = false
@@ -361,15 +414,20 @@ final class AppState {
     }
 
     /// Takes in a finished scan. `outside` holds what was read of the grid's apps outside the
-    /// scan folders; any not covered are read when reconciling. `unlisted` holds the folders
+    /// scan folders; any not covered are read in the background when reconciling. `unlisted` holds the folders
     /// the scan couldn't list.
-    func catalogScanned(_ apps: [InstalledApp], outside: (apps: [String: InstalledApp], checked: Set<String>) = ([:], []),
-                        unlisted: [String] = []) {
+    /// `outside` and `disk` are what the scan saw of the disk, read now when not given.
+    func catalogScanned(_ apps: [InstalledApp], outside: OutsideRead? = nil,
+                        unlisted: [String] = [], disk: DiskState? = nil) {
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { installedByPath[$0] == nil })
         outsideApps = outside.apps
         outsideChecked = outside.checked
+        outsideExisting = outside.existing
+        let disk = disk ?? DiskState.read(roots: prefs.scanRoots.map(\.path), unlisted: unlisted)
+        if self.disk != disk { self.disk = disk }
         if unlistedFolders != unlisted { unlistedFolders = unlisted }
         if hasGridFile { reconcile() }
         refreshUpdatedIcons()
@@ -385,11 +443,29 @@ final class AppState {
             .map(\.path)
     }
 
+    /// What was read of apps outside the scan folders.
+    struct OutsideRead: Sendable {
+        /// The apps found, by path.
+        var apps: [String: InstalledApp] = [:]
+        /// Every path looked at.
+        var checked: Set<String> = []
+        /// The paths with something on disk, readable as an app or not.
+        var existing: Set<String> = []
+    }
+
     /// Reads the apps at `paths`; those missing or unreadable are left out of `apps`.
-    nonisolated static func readOutsideApps(_ paths: [String]) -> (apps: [String: InstalledApp], checked: Set<String>) {
-        let apps = paths.filter { FileManager.default.fileExists(atPath: $0) }
-            .compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0)) }
-        return (Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }), Set(paths))
+    nonisolated static func readOutsideApps(_ paths: [String]) -> OutsideRead {
+        let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
+        let apps = existing.compactMap { AppScanner.read(appAt: URL(fileURLWithPath: $0)) }
+        return OutsideRead(apps: Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }),
+                           checked: Set(paths), existing: Set(existing))
+    }
+
+    /// Whether something was on disk at `path` when it was last read: a scanned app, or one
+    /// outside the scan folders. No disk access, so reconciling can't hang on a stalled volume.
+    private var knownToExist: (String) -> Bool {
+        let scanned = installedByPath, outside = outsideApps, existing = outsideExisting
+        return { scanned[$0] != nil || outside[$0] != nil || existing.contains($0) }
     }
 
     /// Drops icons of apps updated in place since they were rendered, then reloads them.
@@ -417,20 +493,31 @@ final class AppState {
 
     /// Whether a scan could have seen an app at `path`. Absence says nothing about apps on
     /// an unmounted volume or under a scan folder that is currently missing or couldn't be listed.
-    nonisolated static func isReachable(_ path: String, unreachableFolders: [String]) -> Bool {
+    /// `mountedVolumes`, the names in /Volumes, comes from the last scan when given.
+    nonisolated static func isReachable(_ path: String, unreachableFolders: [String], mountedVolumes: Set<String>? = nil) -> Bool {
         if unreachableFolders.contains(where: { path.hasPrefix($0 + "/") }) { return false }
-        return Volume.unmountedVolume(for: path) == nil
+        return Volume.unmountedVolume(for: path, mounted: mountedVolumes) == nil
+    }
+
+    /// Whether a scan could have seen an app at `path`, as of the last scan.
+    private var isReachable: (String) -> Bool {
+        let unreachable = unreachableFolders, mounted = disk.mountedVolumes
+        return { Self.isReachable($0, unreachableFolders: unreachable, mountedVolumes: mounted) }
     }
 
     /// Folders that are there but the last scan couldn't list (privacy controls, a stalled
     /// volume, a lapsed sandbox bookmark), for Settings; a missing scan folder isn't one.
     var unreadableFolders: [String] {
-        unlistedFolders.filter { FileManager.default.fileExists(atPath: $0) }
+        let unreadable = Set(disk.unreadable)
+        return unlistedFolders.filter(unreadable.contains)
     }
 
-    /// Scan folders that are missing now, and folders the last scan couldn't list.
+    /// Scan folders that were missing at the last scan, for Settings.
+    var missingFolders: [String] { disk.missingRoots }
+
+    /// Scan folders missing at the last scan, and folders it couldn't list.
     private var unreachableFolders: [String] {
-        prefs.scanRoots.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) } + unlistedFolders
+        disk.missingRoots + unlistedFolders
     }
 
     /// Merges the catalog into the grid. Not an undo step: it mirrors the disk.
@@ -446,17 +533,16 @@ final class AppState {
         // and recently pruned ones there can still return to their slot. The scan read them;
         // only ones that reached the grid since are read here.
         let candidates = outsideCandidates().filter { installedByPath[$0] == nil }
-        let unchecked = candidates.filter { !outsideChecked.contains($0) }
-        if !unchecked.isEmpty {
-            let read = Self.readOutsideApps(unchecked)
-            outsideApps.merge(read.apps) { _, new in new }
-            outsideChecked.formUnion(read.checked)
-        }
+        // Ones that reached the grid since (an undo, an app added with Browse) are read off the
+        // main thread; until then they count as out of reach, so they keep their tiles.
+        let unchecked = Set(candidates.filter { !outsideChecked.contains($0) })
+        readOutsideAppsInBackground(unchecked.subtracting(outsideReading))
         let extra = candidates.compactMap { outsideApps[$0] }
+        let reachable = isReachable
         var g = grid
-        let unreachable = unreachableFolders
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
-                                          isReachable: { Self.isReachable($0, unreachableFolders: unreachable) })
+                                          isReachable: { !unchecked.contains($0) && reachable($0) },
+                                          pathExists: knownToExist)
         guard g != grid else { return }
         if !report.isEmpty {
             NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
@@ -465,6 +551,19 @@ final class AppState {
         afterChange()
         if !report.added.isEmpty || !report.restored.isEmpty {
             IconProvider.shared.prewarm(g.allApps.map(\.path))
+        }
+    }
+
+    private func readOutsideAppsInBackground(_ paths: Set<String>) {
+        guard !paths.isEmpty else { return }
+        outsideReading.formUnion(paths)
+        Task {
+            let read = await Task.detached(priority: .userInitiated) { Self.readOutsideApps(Array(paths)) }.value
+            outsideReading.subtract(paths)
+            outsideApps.merge(read.apps) { _, new in new }
+            outsideChecked.formUnion(read.checked)
+            outsideExisting.formUnion(read.existing)
+            if hasGridFile { reconcile() }
         }
     }
 
@@ -538,10 +637,9 @@ final class AppState {
             return
         }
         // A tile whose app is gone from a reachable place is the old place of an installed copy.
-        let scanned = installedByPath, unreachable = unreachableFolders
-        let isStale: (String) -> Bool = {
-            scanned[$0] == nil && Self.isReachable($0, unreachableFolders: unreachable) && !FileManager.default.fileExists(atPath: $0)
-        }
+        // From what the last reads saw, without touching the disk: a path not read yet isn't stale.
+        let isReachable = isReachable, exists = knownToExist, checked = outsideChecked
+        let isStale: (String) -> Bool = { checked.contains($0) && isReachable($0) && !exists($0) }
         apply { Reconciler.choose(include: include, exclude: exclude, in: &$0, installed: among, isStale: isStale) }
         IconProvider.shared.prewarm(include.map(\.path))
         let toast = switch (include.isEmpty, exclude.isEmpty) {
@@ -572,6 +670,22 @@ final class AppState {
 
     var openFolder: Folder? { openFolderID.flatMap { grid.folder($0) } }
 
+    /// The folder (and its page) that was open when typing started a search; ending the
+    /// search returns to it.
+    @ObservationIgnored var folderBeforeSearch: (id: UUID, page: Int)?
+
+    /// Clears the search (Esc, emptying it, a click on the background), reopening the folder
+    /// it started in.
+    func endSearch() {
+        query = ""
+        guard let folder = folderBeforeSearch else { return }
+        folderBeforeSearch = nil
+        guard grid.folder(folder.id) != nil else { return }
+        openFolder(folder.id)
+        let pages = FolderLayout.pageCount(apps: openFolder?.apps.count ?? 0, grid: grid)
+        folderPage = min(folder.page, pages - 1)
+    }
+
     var currentItems: [GridItem] {
         grid.pages.indices.contains(currentPage) ? grid.pages[currentPage].items : []
     }
@@ -584,9 +698,10 @@ final class AppState {
         Task {
             do {
                 let path = try await Launcher.launch(app)
-                let unreachable = unreachableFolders
-                if Self.followsLaunch(to: path, of: app, in: grid,
-                                      isReachable: { Self.isReachable($0, unreachableFolders: unreachable) }) {
+                // Off the main thread: a stalled volume mustn't hang the app.
+                let gone = path == app.path ? false
+                    : await Task.detached { !FileManager.default.fileExists(atPath: app.path) }.value
+                if Self.followsLaunch(to: path, of: app, in: grid, isReachable: isReachable, pathExists: { _ in !gone }) {
                     rememberPath(path, of: app.id)
                 }
             } catch {
@@ -636,6 +751,13 @@ final class AppState {
         for app in grid.allApps {
             if let path = moves[app.path] { rememberPath(path, of: app.id) }
         }
+        // One pruned meanwhile (the scan didn't find it at its new place) can still return
+        // to its slot from there, and its bookmark stays in use.
+        var g = grid
+        for i in g.recentlyPruned.indices {
+            if let path = moves[g.recentlyPruned[i].app.path] { g.recentlyPruned[i].app.path = path }
+        }
+        if g != grid { grid = g }
     }
 
     /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode
@@ -708,9 +830,13 @@ final class AppState {
     /// The pager's offset for a swipe of `dx` on a pager `width` wide: at most 0.6 of a page,
     /// and past the first or last page only a little, giving way less the further it goes,
     /// as a scroll view's edge does.
+    /// How far the pages (or the open folder's) follow a swipe of `dx`: with some resistance
+    /// past either end.
     func swipeOffset(for dx: CGFloat, width: CGFloat) -> CGFloat {
         let width = max(width, 1)
-        let pastEnd = (dx > 0 && currentPage == 0) || (dx < 0 && currentPage >= grid.pages.count - 1)
+        let (page, count) = openFolder.map { (folderPage, FolderLayout.pageCount(apps: $0.apps.count, grid: grid)) }
+            ?? (currentPage, grid.pages.count)
+        let pastEnd = (dx > 0 && page == 0) || (dx < 0 && page >= count - 1)
         guard pastEnd else { return max(-width * 0.6, min(width * 0.6, dx)) }
         let reach = width * 0.2
         let give = (1 - 1 / (abs(dx) * 0.55 / reach + 1)) * reach
@@ -770,14 +896,24 @@ final class AppState {
         selection.removeAll()
     }
 
+    /// Groups the selection into a folder where `anchor` is; without one, where the focused
+    /// item is, if selected, else the first selected item on the page shown, so the folder
+    /// opens where the person is looking.
     func groupSelection(anchor: UUID? = nil) {
         let ids = orderedSelection
         guard selectionActionable, ids.count > 1 else { return }
         let name = GridBuilder.folderName(for: ids.compactMap { grid.item($0)?.app }.map { installedApp(for: $0) })
+        let shown = openFolder.map { $0.apps.map(\.id) } ?? currentItems.map(\.id)
+        let focused = focusIndex.flatMap { shown.indices.contains($0) ? shown[$0] : nil }
+        let onPage = currentItems.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) }
+        let anchor = anchor ?? focused.flatMap { selection.contains($0) ? $0 : nil } ?? onPage.first(where: selection.contains)
         var newID: UUID?
         apply { newID = $0.group(ids, name: name, anchor: anchor) }
         selection.removeAll()
-        if let newID { openFolder(newID) }
+        guard let newID else { return }
+        // Nothing selected on this page: show the folder's page, so it opens over its own.
+        if let page = grid.locate(newID)?.page, page != currentPage { goToPage(page) }
+        openFolder(newID)
     }
 
     func newPage() {
@@ -871,6 +1007,7 @@ final class AppState {
         textEdit = nil
         cancelDrag(reopeningFolder: false)
         swipeOffset = 0
+        folderSwipeOffset = 0
     }
 
     /// Cancels a drag in progress. An edge flip may have moved the view onto the extra

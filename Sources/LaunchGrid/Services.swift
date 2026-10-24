@@ -23,15 +23,20 @@ enum Launcher {
     static func launch(_ app: AppRef) async throws -> String {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+        // Looked at off the main thread, so a stalled volume doesn't hang the app.
+        let path = app.path
+        let (exists, unmounted) = await Task.detached {
+            (FileManager.default.fileExists(atPath: path), Volume.unmountedVolume(for: path))
+        }.value
         // The app is still there and failed to open (damaged, refused by Gatekeeper, cancelled):
         // that's the answer, not a reason to open another copy with its bundle ID.
-        if FileManager.default.fileExists(atPath: app.path) {
+        if exists {
             _ = try await NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app.path), configuration: config)
             return app.path
         }
         // An app on a volume that isn't mounted hasn't gone anywhere: say so, rather than open
         // another copy with its bundle ID (Xcode for Xcode-beta).
-        if let volume = Volume.unmountedVolume(for: app.path) { throw VolumeNotMounted(volume: volume) }
+        if let volume = unmounted { throw VolumeNotMounted(volume: volume) }
         // Retry elsewhere only if Launch Services knows another copy, and not one in the Trash.
         if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
            url.path != app.path, !isInTrash(url.path) {
@@ -59,13 +64,15 @@ enum Launcher {
     }
 }
 
-enum Volume {
+enum Volume: Sendable {
     /// The name of the volume holding `path` when that volume isn't mounted. Only paths
     /// under /Volumes can be on one that isn't.
-    static func unmountedVolume(for path: String) -> String? {
+    /// `mounted`, the names in /Volumes when already known, saves looking.
+    static func unmountedVolume(for path: String, mounted: Set<String>? = nil) -> String? {
         let parts = (path as NSString).pathComponents
         guard parts.count > 2, parts[0] == "/", parts[1] == "Volumes" else { return nil }
-        return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2]) ? nil : parts[2]
+        let there = mounted.map { $0.contains(parts[2]) } ?? FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
+        return there ? nil : parts[2]
     }
 }
 
@@ -316,7 +323,7 @@ enum KeyCombo {
         if let f = functionKeys[code] { return f }
         if let k = keypadKeys[code] { return String(localized: "Keypad \(k)") }
         switch code {
-        case kVK_Space: return "Space"
+        case kVK_Space: return String(localized: "Space")
         case kVK_Return: return "↩"
         case kVK_Tab: return "⇥"
         case kVK_Delete: return "⌫"
@@ -460,10 +467,21 @@ enum KeyCombo {
 final class FolderWatcher: @unchecked Sendable {
     /// Whether a change in directory `path` can matter to a scan. Apps and updaters write deep
     /// inside bundles (caches, frameworks); only a bundle's top level and its `Contents`
-    /// (where an update rewrites Info.plist) are worth a rescan.
-    static func isRelevant(_ path: String) -> Bool {
+    /// (where an update rewrites Info.plist) are worth a rescan. Under one of `roots`, neither
+    /// are hidden folders nor ones deeper than the scan reads (`maxDepth`), so a busy extra
+    /// folder (Downloads, a project with `.git`) doesn't rescan at every write.
+    static func isRelevant(_ path: String, roots: [String] = [], maxDepth: Int = 3) -> Bool {
         let parts = path.split(separator: "/")
-        guard let bundle = parts.firstIndex(where: { $0.hasSuffix(".app") }) else { return true }
+        let bundle = parts.firstIndex(where: { $0.hasSuffix(".app") })
+        let root = roots.map { $0.split(separator: "/") }
+            .filter { $0.count <= parts.count && parts.starts(with: $0) }
+            .max { $0.count < $1.count }
+        if let root {
+            // The folders between the root and the change (or the bundle it is in).
+            let below = parts[root.count..<(bundle ?? parts.count)]
+            if below.contains(where: { $0.hasPrefix(".") }) || below.count >= maxDepth { return false }
+        }
+        guard let bundle else { return true }
         let inside = parts.count - bundle - 1
         return inside == 0 || (inside == 1 && parts[bundle + 1] == "Contents")
     }
@@ -474,10 +492,18 @@ final class FolderWatcher: @unchecked Sendable {
     /// `kFSEventStreamCreateFlagWatchRoot`, creating it (a first app in ~/Applications, a
     /// volume mounting) is an event, and so is what lands in it afterwards.
     let paths: [String]
+    /// `paths` as given and with symlinks resolved, as FSEvents reports them (/private/tmp for /tmp).
+    private let realPaths: [String]
 
     init(paths: [String], latency: TimeInterval = 2.0, onChange: @escaping @MainActor () -> Void) {
         self.onChange = onChange
         self.paths = paths
+        realPaths = paths + paths.compactMap { path in
+            guard let real = realpath(path, nil) else { return nil }
+            defer { free(real) }
+            let s = String(cString: real)
+            return s == path ? nil : s
+        }
         guard !paths.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
@@ -485,8 +511,8 @@ final class FolderWatcher: @unchecked Sendable {
             guard let info else { return }
             let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
             // No paths means something unusual (e.g. a dropped history); rescan to be safe.
-            guard paths.isEmpty || paths.contains(where: FolderWatcher.isRelevant) else { return }
             let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
+            guard paths.isEmpty || paths.contains(where: { FolderWatcher.isRelevant($0, roots: watcher.realPaths) }) else { return }
             MainActor.assumeIsolated { watcher.onChange() }
         }
         stream = FSEventStreamCreate(nil, callback, &context, paths as CFArray,
@@ -537,10 +563,15 @@ enum FileAccess {
                   url.startAccessingSecurityScopedResource() else { continue }
             let now = url.standardizedFileURL.path
             // Not into the Trash: that's on its way out, and the setting is better left as it was.
-            if now != URL(fileURLWithPath: path).standardizedFileURL.path, !Launcher.isInTrash(now), saved[now] == nil {
+            if now != URL(fileURLWithPath: path).standardizedFileURL.path, !Launcher.isInTrash(now) {
                 saved[path] = nil
-                saved[now] = bookmark(url) ?? data
-                granted[now] = url
+                if saved[now] == nil {
+                    saved[now] = bookmark(url) ?? data
+                    granted[now] = url
+                } else {
+                    // Picked again at its new place: that bookmark has its own access.
+                    url.stopAccessingSecurityScopedResource()
+                }
                 moves[path] = now
                 migrate(prefs, from: path, to: now)
                 NSLog("LaunchGrid: \(path) moved to \(now); following it")

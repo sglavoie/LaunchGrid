@@ -81,6 +81,9 @@ final class DragController {
 
     // Frames reported by views, in root coordinates.
     @ObservationIgnored var pagerFrame: CGRect = .zero
+    /// `pagerFrame`'s size, observed, for views sized from it (an open folder): the frame
+    /// itself also moves with every swipe, which mustn't redraw them.
+    var pagerSize: CGSize = .zero
     @ObservationIgnored var folderPanelFrame: CGRect = .zero
     @ObservationIgnored var folderGridFrame: CGRect = .zero
     @ObservationIgnored var menuButtonFrame: CGRect = .zero
@@ -285,7 +288,9 @@ extension AppState {
         updatePageTargets(p)
     }
 
-    private func updateFolderGap(_ p: CGPoint) {
+    /// As on a page, the gap waits for the pointer to settle (`dragTick` moves it), unless
+    /// `immediately`: after a folder page flips, it follows the pointer straight away.
+    private func updateFolderGap(_ p: CGPoint, immediately: Bool = false) {
         let frame = drag.folderGridFrame
         // Holding at the side of a folder with several pages flips its pages. The zone is
         // narrow and extends past the grid into the panel's margin.
@@ -298,8 +303,14 @@ extension AppState {
         let local = CGPoint(x: p.x - frame.minX, y: p.y - frame.minY)
         guard let cell = folderLayout.cellIndex(at: local) else { return }
         let index = min(folderPage * FolderLayout.perPage(grid) + cell, remainingFolderApps().count)
-        if index != drag.gap {
+        if index == drag.gap {
+            drag.pendingGap = nil
+        } else if immediately {
+            drag.pendingGap = nil
             withAnimation(Self.dragMotion(.spring(response: 0.3, dampingFraction: 0.8))) { drag.gap = index }
+        } else if index != drag.pendingGap {
+            drag.pendingGap = index
+            drag.pendingGapSince = Date()
         }
     }
 
@@ -374,7 +385,7 @@ extension AppState {
             withAnimation(Self.pageAnimation) { folderPage = target }
             // The gap follows the pointer onto the new page.
             drag.pendingGap = nil
-            updateFolderGap(drag.iconCenter)
+            updateFolderGap(drag.iconCenter, immediately: true)
             return
         }
         if now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell {
@@ -419,7 +430,7 @@ extension AppState {
                 apply { g in g.removingEmptiedPages { $0.group([target] + ids, name: name, anchor: target) } }
             }
         } else if case .folder(let fid) = drag.source, openFolderID == fid {
-            let gap = drag.gap ?? remainingFolderApps().count
+            let gap = drag.pendingGap ?? drag.gap ?? remainingFolderApps().count
             apply { $0.addToFolder(ids, folder: fid, at: gap) }
         } else {
             // A drop right after moving counts, even if the pointer hadn't settled yet.

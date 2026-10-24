@@ -89,6 +89,9 @@ struct BlurredImage: View {
     /// changes: a body with the same inputs isn't run again.
     private let identity: String
     @State private var image: NSImage?
+    /// The picture `image` was made from: another one (a different display's wallpaper) isn't
+    /// left on screen while the new one blurs.
+    @State private var shownIdentity: String?
     @Environment(\.displayScale) private var displayScale
 
     init(url: URL?, radius: Double) {
@@ -116,21 +119,42 @@ struct BlurredImage: View {
             .task(id: "\(identity)|\(radius)|\(size.width)x\(size.height)@\(displayScale)") {
                 await load(size: size)
             }
+            .animation(.easeInOut(duration: 0.2), value: shownIdentity)
         }
     }
 
     private func load(size: CGSize) async {
-        guard let url, size.width > 0, size.height > 0 else { if url == nil { image = nil }; return }
+        guard let url, size.width > 0, size.height > 0 else {
+            if url == nil { image = nil; shownIdentity = nil }
+            return
+        }
+        let identity = identity
         let target = ImageBlurCache.Target(radius: radius, size: size, pixelScale: displayScale)
-        if let hit = ImageBlurCache.shared.cached(url: url, target) { image = hit; return }
-        // Dragging the Blur slider steps through radii: blur only the one it rests on.
-        if image != nil {
+        if let hit = ImageBlurCache.shared.cached(url: url, target) { show(hit, identity); return }
+        if shownIdentity != identity {
+            // Another picture: the blurred desktop stands in until it is ready.
+            show(nil, nil)
+        } else if image != nil {
+            // Dragging the Blur slider steps through radii: blur only the one it rests on.
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
         }
-        image = await Task.detached(priority: .userInitiated) {
+        let made = await Task.detached(priority: .userInitiated) {
             ImageBlurCache.shared.image(url: url, target).map(SendableImage.init)
         }.value?.image
+        guard !Task.isCancelled else { return }
+        show(made, made == nil ? nil : identity)
+    }
+
+    /// A new picture fades in; the stand-in replaces the old one at once, so the old one
+    /// doesn't linger through a fade.
+    private func show(_ image: NSImage?, _ identity: String?) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = image == nil
+        withTransaction(transaction) {
+            self.image = image
+            shownIdentity = identity
+        }
     }
 }
 

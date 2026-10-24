@@ -27,9 +27,14 @@ public struct TextLine: Equatable, Sendable {
 
     /// `s` as one line, for pasting: each run of whitespace and line breaks (`\r\n`, tabs
     /// included) becomes one space, other control characters go, and the ends are trimmed.
+    /// So do invisible format characters standing alone (a zero-width space, or a direction
+    /// override that would show the name reversed); a joiner inside an emoji or a word stays.
     public static func singleLine(_ s: String) -> String {
         s.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
-            .map { $0.filter { !$0.unicodeScalars.contains { $0.properties.generalCategory == .control } } }
+            .map { $0.filter { c in
+                !c.unicodeScalars.contains { $0.properties.generalCategory == .control }
+                    && !c.unicodeScalars.allSatisfy { $0.properties.generalCategory == .format }
+            } }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
     }
@@ -71,23 +76,54 @@ public struct TextLine: Equatable, Sendable {
 
     // MARK: Words
 
-    private static func isWord(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+    /// Whether `chars[k]` belongs to a word: a letter or digit, or an apostrophe between
+    /// letters, so "don't" is one word, as macOS treats it.
+    private static func isWord(_ chars: [Character], _ k: Int) -> Bool {
+        let c = chars[k]
+        if c.isLetter || c.isNumber { return true }
+        guard c == "'" || c == "’", k > 0, k + 1 < chars.count else { return false }
+        return chars[k - 1].isLetter && chars[k + 1].isLetter
+    }
 
     /// Start of the word before `i`, skipping the separators in between (as ⌥← does).
     private func wordStart(before i: Int) -> Int {
-        let chars = Array(text)
-        var j = i
-        while j > 0, !Self.isWord(chars[j - 1]) { j -= 1 }
-        while j > 0, Self.isWord(chars[j - 1]) { j -= 1 }
-        return j
+        words().last { $0.lowerBound < i }?.lowerBound ?? 0
     }
 
     /// End of the word after `i`, skipping the separators in between (as ⌥→ does).
     private func wordEnd(after i: Int) -> Int {
+        words().first { $0.upperBound > i }?.upperBound ?? text.count
+    }
+
+    /// The words, as character ranges: runs of letters and digits. A run in a script written
+    /// without spaces (Chinese, Japanese) is split where the system's word breaking splits it,
+    /// as macOS's own ⌥← and ⌥→ do, rather than crossed in one step.
+    private func words() -> [Range<Int>] {
         let chars = Array(text)
-        var j = i
-        while j < chars.count, !Self.isWord(chars[j]) { j += 1 }
-        while j < chars.count, Self.isWord(chars[j]) { j += 1 }
-        return j
+        var runs: [Range<Int>] = []
+        var j = 0
+        while j < chars.count {
+            guard Self.isWord(chars, j) else { j += 1; continue }
+            let start = j
+            while j < chars.count, Self.isWord(chars, j) { j += 1 }
+            runs.append(start..<j)
+        }
+        return runs.flatMap { run -> [Range<Int>] in
+            guard chars[run].contains(where: Self.isUnspaced) else { return [run] }
+            let piece = String(chars[run])
+            var ranges: [Range<Int>] = []
+            piece.enumerateSubstrings(in: piece.startIndex..., options: [.byWords, .substringNotRequired]) { _, r, _, _ in
+                let lower = piece.distance(from: piece.startIndex, to: r.lowerBound)
+                ranges.append(run.lowerBound + lower ..< run.lowerBound + lower + piece[r].count)
+            }
+            return ranges.isEmpty ? [run] : ranges
+        }
+    }
+
+    /// Han, hiragana and katakana: written without spaces between words.
+    private static func isUnspaced(_ c: Character) -> Bool {
+        c.unicodeScalars.contains { s in
+            s.properties.isIdeographic || (0x3040...0x30FF).contains(s.value) || (0x31F0...0x31FF).contains(s.value)
+        }
     }
 }

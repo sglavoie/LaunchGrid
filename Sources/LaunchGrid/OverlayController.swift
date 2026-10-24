@@ -25,8 +25,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var lastWheelFlip = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
     private var visibilityGeneration = 0
-    /// The folder (and its page) that was open when typing started a search; Esc returns to it.
-    private var folderBeforeSearch: (id: UUID, page: Int)?
 
     var isVisible: Bool { panel?.isVisible == true && state.isShown }
     var window: NSWindow? { panel }
@@ -297,7 +295,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         switch code {
         case kVK_Escape:
             if state.drag.active { state.cancelDrag() }
-            else if !state.query.isEmpty { endSearch() }
+            else if !state.query.isEmpty { state.endSearch() }
             else if state.openFolder != nil { state.closeFolder(restoringFocus: true) }
             else if state.editing { state.editing = false }
             else if !state.selection.isEmpty { state.selection.removeAll() }
@@ -345,8 +343,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
             } else if !state.selection.isEmpty {
                 state.remove(state.orderedSelection)
             } else if state.editing, let id = focusedID {
+                // The open folder's slot, in case removing its last app takes the folder too.
+                let folderSlot = state.openFolderID.flatMap { f in state.currentItems.firstIndex { $0.id == f } }
                 state.remove([id])
-                // Stay on the item that took its place (the folder may have gone with it).
+                // Stay on the item that took its place: in the folder, or where the folder was.
+                if let folderSlot, state.openFolder == nil { state.focusIndex = folderSlot }
                 let count = focusableCount
                 state.focusIndex = count > 0 ? state.focusIndex.map { min($0, count - 1) } : nil
             }
@@ -441,11 +442,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     /// Types into the search at its caret. Starting one closes an open folder, remembering it
-    /// for `endSearch()`.
+    /// for `AppState.endSearch()`.
     private func insertIntoSearch(_ text: String) {
         guard !text.isEmpty else { return }
         if state.query.isEmpty {
-            folderBeforeSearch = state.openFolderID.map { ($0, state.folderPage) }
+            state.folderBeforeSearch = state.openFolderID.map { ($0, state.folderPage) }
             state.openFolderID = nil
         }
         state.searchLine.insert(text)
@@ -455,20 +456,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func editSearch(_ edit: (inout TextLine) -> Void) {
         var line = state.searchLine
         edit(&line)
-        if line.text.isEmpty { endSearch() } else { state.searchLine = line }
+        if line.text.isEmpty { state.endSearch() } else { state.searchLine = line }
     }
 
     /// Clears the search from the keyboard, back to the folder it was started in, if still there.
-    private func endSearch() {
-        state.query = ""
-        guard let folder = folderBeforeSearch else { return }
-        folderBeforeSearch = nil
-        guard state.grid.folder(folder.id) != nil else { return }
-        state.openFolder(folder.id)
-        let pages = FolderLayout.pageCount(apps: state.openFolder?.apps.count ?? 0, grid: state.grid)
-        state.folderPage = min(folder.page, pages - 1)
-    }
-
     private var focusableCount: Int {
         if !state.query.isEmpty { return state.searchResults.count }
         if let f = state.openFolder { return f.apps.count }
@@ -655,15 +646,25 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if event.phase.contains(.began) { scrollAccumulator = 0 }
             let dx = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) ? event.scrollingDeltaX : 0
             scrollAccumulator += dx
-            if state.openFolder == nil {
+            let inFolder = state.openFolder != nil
+            if inFolder {
+                state.folderSwipeOffset = state.swipeOffset(for: scrollAccumulator, width: max(state.drag.folderGridFrame.width, 1))
+            } else {
                 state.swipeOffset = state.swipeOffset(for: scrollAccumulator, width: width)
             }
             if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-                let threshold = min(120, width * 0.12)
-                withAnimation(AppState.pageAnimation) {
-                    if scrollAccumulator < -threshold { state.flipPage(1) }
-                    else if scrollAccumulator > threshold { state.flipPage(-1) }
-                    state.swipeOffset = 0
+                let threshold = min(120, (inFolder ? max(state.drag.folderGridFrame.width, 1) : width) * 0.12)
+                let flip = scrollAccumulator < -threshold ? 1 : scrollAccumulator > threshold ? -1 : 0
+                if inFolder && flip != 0 {
+                    // The folder shows one page at a time: the new one comes in where it is.
+                    state.folderSwipeOffset = 0
+                    state.flipPage(flip)
+                } else {
+                    withAnimation(AppState.pageAnimation) {
+                        if flip != 0 { state.flipPage(flip) }
+                        state.swipeOffset = 0
+                        state.folderSwipeOffset = 0
+                    }
                 }
                 scrollAccumulator = 0
             }

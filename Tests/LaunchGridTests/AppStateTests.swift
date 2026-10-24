@@ -158,6 +158,36 @@ func installed(_ name: String) -> InstalledApp {
         #expect(notice.file.lastPathComponent.hasPrefix("grid.corrupt-"))
         #expect(FileManager.default.fileExists(atPath: notice.file.path))
     }
+
+    @Test func aLayoutRestoredFromTheBackupIsWrittenBackWithoutWaitingForAChange() async throws {
+        let first = makeState(["A"])
+        first.saveNow()
+        let a = try #require(first.grid.allApps.first)
+        first.apply { $0.rename(a.id, to: "Renamed") }
+        first.saveNow()
+        try Data().write(to: first.store.url)
+
+        let state = AppState(prefs: testPreferences(), store: first.store)
+        #expect(state.recoveryNotice != nil)
+        #expect(!state.store.exists, "the unreadable file was set aside")
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(try state.store.load().allApps.map(\.title) == ["A"])
+    }
+
+    @Test func theBackupIsRefreshedAtTheFirstSaveOfARunNotAtEveryOne() throws {
+        let state = makeState(["A"])
+        state.saveNow()
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "B") }
+        state.saveNow()
+        state.apply { $0.rename(a.id, to: "C") }
+        state.saveNow()
+        #expect(try state.store.loadBackup().allApps.map(\.title) == ["A"], "kept: refreshed less often")
+        let next = AppState(prefs: testPreferences(), store: state.store)
+        next.apply { $0.rename(a.id, to: "D") }
+        next.saveNow()
+        #expect(try next.store.loadBackup().allApps.map(\.title) == ["C"], "a new run refreshes it at once")
+    }
 }
 
 @MainActor @Suite(.tempDir) struct SelectionTests {
@@ -223,6 +253,19 @@ func installed(_ name: String) -> InstalledApp {
         state.groupSelection()
         #expect(state.grid.pages[0].items.allSatisfy { $0.folder == nil })
     }
+
+    @Test func groupingWithTheKeyboardMakesTheFolderOnThePageShown() {
+        let state = makeState(["A", "B", "C", "D"])
+        state.apply { $0.pages = [Page(items: Array($0.pages[0].items.prefix(2))), Page(items: Array($0.pages[0].items.suffix(2)))] }
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.goToPage(1)
+        state.toggleSelection(id["C"]!)
+        state.toggleSelection(id["D"]!)
+        state.groupSelection()
+        #expect(state.grid.pages[1].items.first?.folder?.apps.map(\.name) == ["A", "C", "D"])
+        #expect(state.currentPage == 1 && state.openFolderID == state.grid.pages[1].items.first?.id)
+    }
 }
 
 @MainActor @Suite(.tempDir) struct ToastTests {
@@ -261,6 +304,14 @@ func installed(_ name: String) -> InstalledApp {
         #expect(FolderWatcher.isRelevant("/Applications/Foo.app/Contents/"))
         #expect(!FolderWatcher.isRelevant("/Applications/Foo.app/Contents/Resources/"))
         #expect(!FolderWatcher.isRelevant("/Applications/Foo.app/Contents/Frameworks/X.framework/Versions/A/"))
+        let roots = ["/Users/me/Downloads", "/Applications"]
+        #expect(FolderWatcher.isRelevant("/Users/me/Downloads/", roots: roots))
+        #expect(FolderWatcher.isRelevant("/Users/me/Downloads/Tools/Old/", roots: roots), "the deepest folder the scan lists")
+        #expect(!FolderWatcher.isRelevant("/Users/me/Downloads/a/b/c/", roots: roots), "deeper than the scan reads")
+        #expect(!FolderWatcher.isRelevant("/Users/me/Downloads/project/.git/objects/", roots: roots))
+        #expect(FolderWatcher.isRelevant("/Users/me/Downloads/Tools/Foo.app/", roots: roots))
+        #expect(!FolderWatcher.isRelevant("/Users/me/Downloads/a/b/c/Foo.app/", roots: roots), "not scanned there")
+        #expect(FolderWatcher.isRelevant("/private/elsewhere/x/y/z/", roots: roots), "outside the roots: rescan to be safe")
     }
 
     @MainActor @Test func aFolderCreatedAfterWatchingStartsIsNoticed() async throws {
@@ -606,6 +657,17 @@ func installed(_ name: String) -> InstalledApp {
         // Folders found in a listing are named as the listing names them (/private/var, here).
         #expect(result.unlisted.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
             == [locked.resolvingSymlinksInPath().path, missing.path])
+    }
+
+    @Test func aTileNotReadYetIsKeptUntilABackgroundReadFindsItGone() async throws {
+        let state = makeState(["A"])
+        state.catalogScanned([installed("A")])
+        var g = state.grid
+        g.pages[0].items.append(.app(AppRef(bundleID: "com.test.B", path: "/Users/x/Gone/B.app", name: "B")))
+        state.replaceGrid(g) // as an undo or a load brings back a tile from outside the scan folders
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"], "not read yet: no disk access on the main thread")
+        for _ in 0..<50 where state.grid.allApps.count > 1 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(state.grid.allApps.map(\.name) == ["A"], "read off the main thread, found gone")
     }
 
     @Test func appsUnderAFolderTheScanCouldNotListAreKept() {

@@ -220,7 +220,19 @@ extension Grid {
             // Disposable: an unreadable list is dropped rather than failing the whole file.
             recentlyPruned: (try? c.decodeIfPresent([PrunedApp].self, forKey: .recentlyPruned)) ?? []
         )
-        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        // GridStore reads the version first, also when written as text, and rejects bad ones.
+        version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? 1
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(rows, forKey: .rows)
+        try c.encode(columns, forKey: .columns)
+        try c.encode(pages, forKey: .pages)
+        // Sorted, so saving the same grid twice writes the same bytes.
+        try c.encode(removedBundleIDs.sorted(), forKey: .removedBundleIDs)
+        try c.encode(recentlyPruned, forKey: .recentlyPruned)
     }
 }
 

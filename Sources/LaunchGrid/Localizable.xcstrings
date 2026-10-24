@@ -97,6 +97,28 @@
         }
       }
     },
+    "%lld more matches — keep typing to narrow the search": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld more match — keep typing to narrow the search"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld more matches — keep typing to narrow the search"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld of %lld installed apps.": {
       "localizations": {
         "en": {
@@ -151,6 +173,28 @@
         }
       }
     },
+    "Added %lld apps": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Added %lld app"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Added %lld apps"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "All %lld installed apps.": {
       "localizations": {
         "en": {
@@ -195,12 +239,130 @@
         }
       }
     },
+    "Group %lld Items": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Group %lld Item"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Group %lld Items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Imported %lld apps from %@": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Imported %#@apps@ from %2$@"
+          },
+          "substitutions": {
+            "apps": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg app"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg apps"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Imported %lld apps from %@; skipped %lld listed twice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported %#@apps@ from %2$@; skipped %3$lld listed twice"
+          },
+          "substitutions": {
+            "apps": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg app"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg apps"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Imported %lld apps from %@; skipped %lld not installed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported %#@apps@ from %2$@; skipped %3$lld not installed"
+          },
+          "substitutions": {
+            "apps": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg app"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg apps"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Imported %lld apps from %@; skipped %lld not installed and %lld listed twice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported %#@apps@ from %2$@; skipped %3$lld not installed and %4$lld listed twice"
           },
           "substitutions": {
             "apps": {
@@ -252,6 +414,72 @@
                       "value": "%arg pages"
                     }
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Move %lld Items to Page": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Move %lld Item to Page"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Move %lld Items to Page"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Remove %lld Items": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Remove %lld Item"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Remove %lld Items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Removed %lld items — ⌘Z to undo": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Removed %lld item — ⌘Z to undo"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Removed %lld items — ⌘Z to undo"
                 }
               }
             }
