@@ -50,6 +50,16 @@ import Testing
         #expect(after("|" + fr) { $0.insert("a") } == "a|" + fr)
     }
 
+    @Test func deletingNeverChangesTheCharactersAfterIt() {
+        let fr = "\u{1F1EB}\u{1F1F7}", de = "\u{1F1E9}\u{1F1EA}"
+        // A lone flag half before the deleted "x" would pair off with the first flag's half.
+        #expect(after("\u{1F1FA}x|" + fr + de) { $0.deleteBackward() } == "|" + fr + de)
+        #expect(after("\u{1F1FA}|x" + fr + de) { $0.deleteForward() } == "|" + fr + de)
+        // Korean jamo either side of the deleted character would fuse into one syllable.
+        #expect(after("a\u{1100}x|\u{1161}") { $0.deleteBackward() } == "a|\u{1161}")
+        #expect(after("ab|c") { $0.deleteBackward() } == "a|c")
+    }
+
     @Test func movesByCharacterAndToEitherEnd() {
         #expect(after("ab|c") { $0.moveLeft() } == "a|bc")
         #expect(after("|abc") { $0.moveLeft() } == "|abc")

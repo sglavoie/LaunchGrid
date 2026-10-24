@@ -81,13 +81,9 @@ final class IconProvider: @unchecked Sendable {
     private let queue = DispatchQueue(label: "launchgrid.icons", qos: .userInitiated, attributes: .concurrent)
     /// Each cached icon's app version, to spot apps updated in place.
     private let versions = OSAllocatedUnfairLock(initialState: [String: String]())
-    /// Renders under way, so a prewarm and an icon view asking for the same path share one.
-    private let inFlight = OSAllocatedUnfairLock(initialState: [String: PendingRender]())
-
-    private final class PendingRender: @unchecked Sendable {
-        let done = DispatchGroup()
-        var image: NSImage?
-    }
+    /// Renders under way, so a prewarm and an icon view asking for the same path share one:
+    /// each holds who's waiting for it.
+    private let inFlight = OSAllocatedUnfairLock(initialState: [String: [@Sendable (NSImage) -> Void]]())
 
     init() {
         cache.countLimit = 2000
@@ -103,7 +99,7 @@ final class IconProvider: @unchecked Sendable {
         if let hit = cached(path) { return hit }
         return await withCheckedContinuation { (cont: CheckedContinuation<SendableImage, Never>) in
             queue.async {
-                cont.resume(returning: SendableImage(image: self.render(path)))
+                self.render(path) { cont.resume(returning: SendableImage(image: $0)) }
             }
         }.image
     }
@@ -127,16 +123,33 @@ final class IconProvider: @unchecked Sendable {
         }
     }
 
-    /// Only on `queue`: blocks until every path is rendered.
+    /// Only on `queue`: blocks until every path is rendered. Paths another render already has
+    /// under way are waited for once, at the end, rather than each holding a thread.
     private func renderBlocking(_ paths: [String]) {
+        let done = DispatchGroup()
         DispatchQueue.concurrentPerform(iterations: paths.count) { i in
-            _ = self.render(paths[i])
+            done.enter()
+            self.render(paths[i]) { _ in done.leave() }
         }
+        done.wait()
     }
 
-    func clear() {
-        cache.removeAllObjects()
-        versions.withLock { $0.removeAll() }
+    /// "Regenerate Icons": draws every icon again, replacing each cached one as its new one is
+    /// ready, so icons on screen never fall back to placeholders. Icons of other apps go.
+    func regenerate(_ paths: [String]) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            queue.async {
+                DispatchQueue.concurrentPerform(iterations: paths.count) { i in _ = self.draw(paths[i]) }
+                let keep = Set(paths)
+                let others = self.versions.withLock { v in
+                    let gone = v.keys.filter { !keep.contains($0) }
+                    for path in gone { v[path] = nil }
+                    return gone
+                }
+                for path in others { self.cache.removeObject(forKey: path as NSString) }
+                cont.resume()
+            }
+        }
     }
 
     /// Removes cached icons whose app changed on disk since they were rendered; returns their paths.
@@ -162,25 +175,23 @@ final class IconProvider: @unchecked Sendable {
             .map { info?[$0] as? String ?? "" }.joined(separator: "|")
     }
 
-    @discardableResult
-    private func render(_ path: String) -> NSImage {
-        if let hit = cached(path) { return hit }
-        let (pending, isOwner) = inFlight.withLock { map in
-            if let pending = map[path] { return (pending, false) }
-            let pending = PendingRender()
-            pending.done.enter()
-            map[path] = pending
-            return (pending, true)
+    /// Calls `done` with the icon: at once from the cache, else when it's drawn, by this call or
+    /// by the render already under way for that path. Never blocks a thread waiting.
+    private func render(_ path: String, done: @escaping @Sendable (NSImage) -> Void) {
+        if let hit = cached(path) { return done(hit) }
+        let isOwner = inFlight.withLock { map in
+            if map[path] != nil {
+                map[path]?.append(done)
+                return false
+            }
+            map[path] = [done]
+            return true
         }
-        guard isOwner else {
-            pending.done.wait()
-            return pending.image ?? NSWorkspace.shared.icon(forFile: path)
-        }
+        guard isOwner else { return }
+        // Cached before the waiters are taken, so a request in between finds it there.
         let image = draw(path)
-        pending.image = image
-        inFlight.withLock { $0[path] = nil }
-        pending.done.leave()
-        return image
+        let waiting = inFlight.withLock { $0.removeValue(forKey: path) ?? [] }
+        for waiter in waiting { waiter(image) }
     }
 
     private func draw(_ path: String) -> NSImage {
@@ -459,14 +470,15 @@ final class FolderWatcher: @unchecked Sendable {
 
     private var stream: FSEventStreamRef?
     private let onChange: @MainActor () -> Void
-    /// The folders being watched: those of `paths` that existed when the watcher was made.
+    /// The folders being watched. One that doesn't exist yet is watched too: with
+    /// `kFSEventStreamCreateFlagWatchRoot`, creating it (a first app in ~/Applications, a
+    /// volume mounting) is an event, and so is what lands in it afterwards.
     let paths: [String]
 
     init(paths: [String], latency: TimeInterval = 2.0, onChange: @escaping @MainActor () -> Void) {
         self.onChange = onChange
-        let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
-        self.paths = existing
-        guard !existing.isEmpty else { return }
+        self.paths = paths
+        guard !paths.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
         let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
@@ -477,7 +489,7 @@ final class FolderWatcher: @unchecked Sendable {
             let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
             MainActor.assumeIsolated { watcher.onChange() }
         }
-        stream = FSEventStreamCreate(nil, callback, &context, existing as CFArray,
+        stream = FSEventStreamCreate(nil, callback, &context, paths as CFArray,
                                      FSEventStreamEventId(kFSEventStreamEventIdSinceNow), latency,
                                      FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagUseCFTypes))
         guard let stream else { return }

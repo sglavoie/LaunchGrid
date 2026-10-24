@@ -16,6 +16,18 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.pages.map(titles) == [["A", "B"], ["C"]])
     }
 
+    @Test func newAppsGoAtTheEndNotIntoEarlierGaps() {
+        var g = Grid(rows: 1, columns: 4, pages: [
+            Page(title: "Dev", items: [.app(app("A"))]),
+            Page(title: "Games", items: [.app(app("C")), .app(app("D")), .app(app("E"))]),
+        ])
+        _ = Reconciler.reconcile(&g, installed: ["A", "C", "D", "E", "Y", "Z"].map { installed($0) }, autoAdd: true)
+        #expect(g.pages.map(titles) == [["A"], ["C", "D", "E", "Y"], ["Z"]])
+
+        Reconciler.add([installed("X")], to: &g)
+        #expect(g.pages.map(titles) == [["A"], ["C", "D", "E", "Y"], ["Z", "X"]], "Add Missing Apps too")
+    }
+
     @Test func doesNotAddWhenAutoAddIsOff() {
         var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))])])
         _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("B")], autoAdd: false)

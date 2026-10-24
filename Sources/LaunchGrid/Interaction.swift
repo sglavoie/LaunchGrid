@@ -175,7 +175,7 @@ extension AppState {
             }
         }
         if drag.panning {
-            swipeOffset = location.x - start.x
+            swipeOffset = swipeOffset(for: location.x - start.x, width: drag.pagerFrame.width)
             return
         }
         guard drag.active else { return }
@@ -189,7 +189,10 @@ extension AppState {
             drag.abandonedStart = nil
             return
         }
-        defer { drag.reset() }
+        defer {
+            drag.reset()
+            dragFinished()
+        }
         if drag.panning {
             let w = max(drag.pagerFrame.width, 1)
             let dx = location.x - start.x, flick = predicted.x - start.x
@@ -238,7 +241,10 @@ extension AppState {
             center = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
         }
         guard let hit, let item = grid.item(hit) else { return false }
-        let ids = targets(for: hit)
+        // From an open folder only its own selected apps come along: the drop puts them back
+        // in it, and items selected on the page would be pulled in (a folder dissolved).
+        let pool = openFolder.map { Set($0.apps.map(\.id)) }
+        let ids = targets(for: hit).filter { pool?.contains($0) ?? true }
         drag.ids = ids
         drag.primary = item
         drag.source = source

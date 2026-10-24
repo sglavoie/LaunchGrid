@@ -115,7 +115,16 @@ public struct GridStore: Sendable {
 
     /// Decodes, migrates and validates a grid.
     public static func decode(_ data: Data) throws -> Grid {
-        struct Header: Decodable { var version: Int? }
+        /// The version, also when written as text ("2"), so a newer file is told apart from a broken one.
+        struct Header: Decodable {
+            var version: Int?
+            enum CodingKeys: String, CodingKey { case version }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                version = (try? c.decodeIfPresent(Int.self, forKey: .version))
+                    ?? (try? c.decodeIfPresent(String.self, forKey: .version)).flatMap { $0.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
+            }
+        }
         let version = (try? JSONDecoder().decode(Header.self, from: data))?.version ?? 1
         guard version <= Grid.currentVersion else { throw GridFileError.unsupportedVersion(version) }
         // Future migrations go here, keyed on `version`.

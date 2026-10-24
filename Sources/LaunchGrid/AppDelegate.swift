@@ -157,8 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if CommandLine.arguments.contains("--show") { self.overlay.show() }
         }
         startWatching()
-        // Slow fallback in case FSEvents misses something (e.g. network volumes), and a chance
-        // to start watching scan folders that were created since.
+        // Slow fallback in case FSEvents misses something (e.g. network volumes).
         periodicRescan = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.startWatching(onlyIfChanged: true)
@@ -273,7 +272,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = String(localized: "LaunchGrid's shortcut couldn't be registered")
-        alert.informativeText = String(localized: "\(KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) couldn't be registered as a global shortcut; it may be reserved by macOS or another app. Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut.")
+        let shortcut = KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
+        // Only the icons that are on: the Dock icon is off by default.
+        alert.informativeText = switch (prefs.showInMenuBar, prefs.showInDock) {
+        case (true, true): String(localized: "\(shortcut) couldn't be registered as a global shortcut; it may be reserved by macOS or another app. Open LaunchGrid from the menu bar or Dock icon, or choose a different shortcut.")
+        case (false, true): String(localized: "\(shortcut) couldn't be registered as a global shortcut; it may be reserved by macOS or another app. Open LaunchGrid from its Dock icon, or choose a different shortcut.")
+        default: String(localized: "\(shortcut) couldn't be registered as a global shortcut; it may be reserved by macOS or another app. Open LaunchGrid from its menu bar icon, or choose a different shortcut.")
+        }
         alert.addButton(withTitle: String(localized: "Choose Shortcut…"))
         alert.addButton(withTitle: String(localized: "Not Now"))
         if alert.runModal() == .alertFirstButtonReturn { showSettings() }
@@ -341,7 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func makeMenu() -> NSMenu {
+    func makeMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: String(localized: "Show LaunchGrid"), action: #selector(showOverlay), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -364,6 +369,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.setSubmenu(importMenu, for: importItem)
         menu.addItem(withTitle: String(localized: "Rebuild from Scratch…"), action: #selector(confirmRebuild), keyEquivalent: "").target = self
         menu.addItem(.separator())
+        // Without the Dock icon (the default) there's no app menu, so About is here too.
+        menu.addItem(withTitle: String(localized: "About LaunchGrid"), action: #selector(showAbout), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "LaunchGrid Support"), action: #selector(openSupport), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Privacy Policy"), action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -371,10 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return menu
     }
 
-    /// Watches the scan folders that exist now; `onlyIfChanged` keeps the current watcher when
-    /// that set is the same.
+    /// Watches the scan folders, including any not created yet; `onlyIfChanged` keeps the
+    /// current watcher when that set is the same.
     private func startWatching(onlyIfChanged: Bool = false) {
-        let roots = prefs.scanRoots.map(\.path).filter { FileManager.default.fileExists(atPath: $0) }
+        let roots = prefs.scanRoots.map(\.path)
         if onlyIfChanged, let watcher, watcher.paths == roots { return }
         watcher = FolderWatcher(paths: roots) { [weak self] in
             // An install produces bursts of events; scan once things settle.
@@ -425,9 +432,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Windows
 
-    private var libraryActions: LibraryActions {
+    var libraryActions: LibraryActions {
         LibraryActions(
-            rebuild: { [weak self] style in self?.state.build(style: style) },
+            rebuild: { [weak self] style in
+                self?.state.build(style: style)
+                self?.closeFirstRunIfDone()
+            },
             importAppGrid: { [weak self] in self?.importAppGrid() },
             importLaunchpad: { [weak self] in self?.importLaunchpad() },
             loadFile: { [weak self] in self?.loadGridFile() },
@@ -485,6 +495,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // The App Store asks for both pages to be reachable from inside the app.
     static let website = URL(string: "https://launchgrid.sglavoie.com/")!
+    @objc func showAbout() {
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
     @objc func openSupport() { NSWorkspace.shared.open(Self.website.appendingPathComponent("support/")) }
     @objc func openPrivacyPolicy() { NSWorkspace.shared.open(Self.website.appendingPathComponent("privacy/")) }
 
@@ -531,8 +547,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         switch alert.runModal() {
         case .alertFirstButtonReturn: state.build(style: .byCategory)
         case .alertSecondButtonReturn: state.build(style: .alphabetical)
-        default: break
+        default: return
         }
+        closeFirstRunIfDone()
     }
 
     // MARK: Import / export

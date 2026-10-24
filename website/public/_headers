@@ -5,6 +5,8 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
   Cache-Control: public, max-age=3600, must-revalidate
 
+# Fonts change rarely, but their names carry no version: a week, then checked again,
+# so a replaced font reaches returning visitors.
 /fonts/*
   ! Cache-Control
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400

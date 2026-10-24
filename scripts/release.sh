@@ -28,7 +28,7 @@ if command -v gh >/dev/null 2>&1 && gh release view "v$VERSION" >/dev/null 2>&1;
 fi
 
 if [ -z "${SIGN_IDENTITY:-}" ]; then
-    IDS="$(security find-identity -v -p codesigning | sed -n 's/.*) \([0-9A-F]\{40\}\) "Developer ID Application: .*/\1/p')"
+    IDS="$(security find-identity -v -p codesigning | sed -n 's/.*) \([0-9A-F]\{40\}\) "Developer ID Application: .*/\1/p' | sort -u)"
     if [ "$(echo "$IDS" | grep -c .)" != 1 ]; then
         echo "Found $(echo "$IDS" | grep -c .) Developer ID Application identities; set SIGN_IDENTITY to one's hash." >&2
         exit 1

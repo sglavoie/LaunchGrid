@@ -166,7 +166,7 @@ public enum Reconciler {
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             var paths = seen
             let unique = fresh.filter { paths.insert($0.path).inserted }
-            grid.appendToFirstFree(unique.map { .app($0.makeRef()) })
+            grid.appendAtEnd(unique.map { .app($0.makeRef()) })
             report.added = unique.map(\.name)
         }
 
@@ -196,7 +196,7 @@ public enum Reconciler {
         let new = apps.filter { paths.insert($0.path).inserted }
         let copies = CopyIndex(installed + apps)
         for app in apps { grid.setExcluded(app, false, copies: copies) }
-        grid.appendToFirstFree(new.map { .app($0.makeRef()) })
+        grid.appendAtEnd(new.map { .app($0.makeRef()) })
     }
 
     /// Applies a choice of which apps belong on the grid. Excluded apps leave it (folders and

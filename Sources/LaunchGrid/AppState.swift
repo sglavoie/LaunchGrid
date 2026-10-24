@@ -24,6 +24,9 @@ final class AppState {
     }
     /// Bumped on every grid change; keys the search cache without comparing grids.
     @ObservationIgnored private var gridGeneration = 0
+    /// `gridGeneration` as of the last save (or load), so saving an unchanged grid doesn't
+    /// replace the backup of the save before it with a copy of the same one.
+    @ObservationIgnored private var savedGeneration = 0
     @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [AppRef])?
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
@@ -32,8 +35,8 @@ final class AppState {
     @ObservationIgnored private var outsideApps: [String: InstalledApp] = [:]
     @ObservationIgnored private var outsideChecked: Set<String> = []
     /// Folders the last scan couldn't list (denied, stalled, a lapsed bookmark): their apps
-    /// went unseen, not away.
-    @ObservationIgnored private var unlistedFolders: [String] = []
+    /// went unseen, not away. Observed, so Settings can point them out.
+    private(set) var unlistedFolders: [String] = []
     /// LaunchGrid's own bundle ID: it never belongs on its own grid.
     @ObservationIgnored var ownBundleID = Bundle.main.bundleIdentifier
     private(set) var hasGridFile: Bool
@@ -83,12 +86,14 @@ final class AppState {
     /// Horizontal offset of the pager while a trackpad swipe is in progress.
     var swipeOffset: CGFloat = 0
     var isShown = false
+    /// The display the overlay is on, whose wallpaper the background shows.
+    var screenID: CGDirectDisplayID = 0
     /// Why the global shortcut could not be registered, shown in Settings.
     var hotkeyProblem: String?
     /// The Settings window's tab, by its label.
     var settingsTab = "General"
-    /// The Settings window's height; the debug script makes it taller to capture a whole tab.
-    var settingsHeight: CGFloat = 600
+    /// The Settings window's height when the debug script sets one; otherwise each tab's own.
+    var settingsHeight: CGFloat?
     let drag = DragController()
 
     // MARK: Hooks wired by the app delegate
@@ -250,27 +255,35 @@ final class AppState {
     @ObservationIgnored private var saveFailureReported = false
     /// Why the last `saveNow` failed.
     @ObservationIgnored private(set) var lastSaveError: Error?
+    /// What to tell the person about the last failed save, for `reportLastSaveFailure()`.
+    @ObservationIgnored private var lastSaveFailureDetail: String?
 
-    /// Saves the grid now; false when that failed.
+    /// Saves the grid now, unless it is unchanged since the last save; false when that failed.
     @discardableResult
     func saveNow(reportingFailure: Bool = true) -> Bool {
         lastSaveError = nil
+        lastSaveFailureDetail = nil
         saveTask?.cancel()
+        if savedGeneration == gridGeneration && store.exists { return true }
         // Before the first layout, exclusions chosen in the welcome window are still worth keeping,
         // and so is emptying them: the file on disk would otherwise keep the last one.
         guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return true }
         if savesBlocked {
             guard !store.exists else {
                 NSLog("LaunchGrid: not saving over the layout that couldn't be read")
-                if reportingFailure {
-                    reportSaveFailure(String(localized: "LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. Move that file elsewhere and your changes will be saved."))
-                }
-                return true // on purpose, and already said
+                let detail = String(localized: "LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. Move that file elsewhere and your changes will be saved.")
+                // Not saved, so quitting asks first, as for any other failed save.
+                lastSaveError = CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: detail])
+                lastSaveFailureDetail = detail
+                if reportingFailure { reportSaveFailure(detail) }
+                return false
             }
             savesBlocked = false // moved out of the way since
         }
         do {
+            let generation = gridGeneration
             try store.save(grid)
+            savedGeneration = generation
             if !grid.allApps.isEmpty { hasGridFile = true }
             saveFailureReported = false
             // Before the first layout nothing is on the grid yet, so nothing is unused either.
@@ -279,11 +292,17 @@ final class AppState {
         } catch {
             NSLog("LaunchGrid: save failed: \(error)")
             lastSaveError = error
-            if reportingFailure {
-                reportSaveFailure(String(localized: "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)"))
-            }
+            let detail = String(localized: "Changes are kept while LaunchGrid runs, but may be lost when it quits.\n\n\(error.localizedDescription)")
+            lastSaveFailureDetail = detail
+            if reportingFailure { reportSaveFailure(detail) }
             return false
         }
+    }
+
+    /// Tells the person about the last failed save, if it failed; for a save made with
+    /// `reportingFailure: false` while the overlay was still on screen.
+    func reportLastSaveFailure() {
+        if let detail = lastSaveFailureDetail { reportSaveFailure(detail) }
     }
 
     /// Paths of the apps on the grid, in its undo and redo history, and recently pruned (which
@@ -351,7 +370,7 @@ final class AppState {
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         outsideApps = outside.apps
         outsideChecked = outside.checked
-        unlistedFolders = unlisted
+        if unlistedFolders != unlisted { unlistedFolders = unlisted }
         if hasGridFile { reconcile() }
         refreshUpdatedIcons()
     }
@@ -385,13 +404,13 @@ final class AppState {
         }
     }
 
-    /// "Regenerate Icons": re-renders every icon; `completion` runs once they are all back in the cache.
+    /// "Regenerate Icons": re-renders every icon; `completion` runs once they are all back in the
+    /// cache. Views reload them only then, so none shows a placeholder meanwhile.
     func regenerateIcons(completion: (@MainActor () -> Void)? = nil) {
-        IconProvider.shared.clear()
-        iconGeneration += 1
         let paths = grid.allApps.map(\.path)
         Task {
-            await IconProvider.shared.renderAll(paths)
+            await IconProvider.shared.regenerate(paths)
+            iconGeneration += 1
             completion?()
         }
     }
@@ -403,6 +422,12 @@ final class AppState {
         return Volume.unmountedVolume(for: path) == nil
     }
 
+    /// Folders that are there but the last scan couldn't list (privacy controls, a stalled
+    /// volume, a lapsed sandbox bookmark), for Settings; a missing scan folder isn't one.
+    var unreadableFolders: [String] {
+        unlistedFolders.filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
     /// Scan folders that are missing now, and folders the last scan couldn't list.
     private var unreachableFolders: [String] {
         prefs.scanRoots.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) } + unlistedFolders
@@ -411,6 +436,12 @@ final class AppState {
     /// Merges the catalog into the grid. Not an undo step: it mirrors the disk.
     func reconcile() {
         guard !installed.isEmpty else { return }
+        // A drag's gap and targets are slots among the items on screen: changing them under
+        // it would drop in the wrong place, or lose the item dragged. Wait for the drop.
+        if drag.active {
+            reconcileAfterDrag = true
+            return
+        }
         // Apps added from outside the scanned folders stay as long as they exist on disk,
         // and recently pruned ones there can still return to their slot. The scan read them;
         // only ones that reached the grid since are read here.
@@ -607,6 +638,29 @@ final class AppState {
         }
     }
 
+    /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode
+    /// never launches, shows it where it is to arrange it. The search clears, the view goes to
+    /// its page (its folder open, if it's in one) and keyboard focus lands on it.
+    func reveal(_ app: AppRef) {
+        guard let loc = grid.locate(app.id) else { return }
+        query = ""
+        if let fi = loc.folderIndex {
+            goToPage(loc.page)
+            openFolder(grid.pages[loc.page].items[loc.index].id)
+            folderPage = fi / FolderLayout.perPage(grid)
+            focusIndex = fi
+        } else {
+            if openFolderID != nil { openFolderID = nil }
+            goToPage(loc.page)
+            focusIndex = loc.index
+        }
+    }
+
+    /// A search result clicked or chosen with Return: launched, or in edit mode revealed.
+    func activateResult(_ app: AppRef) {
+        if editing { reveal(app) } else { launch(app) }
+    }
+
     /// Click / Return on an item.
     func activate(_ item: GridItem) {
         switch item {
@@ -616,15 +670,16 @@ final class AppState {
     }
 
     func openFolder(_ id: UUID) {
+        // Animated by the folder layer (GridRootView), not `withAnimation`: see there.
         folderPage = 0
         focusIndex = nil
-        withAnimationIfShown { openFolderID = id }
+        openFolderID = id
     }
 
     /// - Parameter restoringFocus: put keyboard focus back on the folder's cell (Esc).
     func closeFolder(restoringFocus: Bool = false) {
         let cell = restoringFocus ? openFolderID.flatMap { id in currentItems.firstIndex { $0.id == id } } : nil
-        withAnimationIfShown { openFolderID = nil }
+        openFolderID = nil // animated by the folder layer, as opening is
         focusIndex = cell
     }
 
@@ -650,6 +705,18 @@ final class AppState {
         }
     }
 
+    /// The pager's offset for a swipe of `dx` on a pager `width` wide: at most 0.6 of a page,
+    /// and past the first or last page only a little, giving way less the further it goes,
+    /// as a scroll view's edge does.
+    func swipeOffset(for dx: CGFloat, width: CGFloat) -> CGFloat {
+        let width = max(width, 1)
+        let pastEnd = (dx > 0 && currentPage == 0) || (dx < 0 && currentPage >= grid.pages.count - 1)
+        guard pastEnd else { return max(-width * 0.6, min(width * 0.6, dx)) }
+        let reach = width * 0.2
+        let give = (1 - 1 / (abs(dx) * 0.55 / reach + 1)) * reach
+        return dx < 0 ? -give : give
+    }
+
     func toggleSelection(_ id: UUID) {
         if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
         selectionAnchor = id
@@ -672,10 +739,14 @@ final class AppState {
         shiftRange = added
     }
 
-    /// The items an action on `id` applies to: the selection if `id` is part of it.
+    /// The items an action on `id` applies to: the selection if `id` is part of it. Search
+    /// results hide the selection, so there an action applies to `id` alone.
     func targets(for id: UUID) -> [UUID] {
-        selection.contains(id) ? orderedSelection : [id]
+        query.isEmpty && selection.contains(id) ? orderedSelection : [id]
     }
+
+    /// Whether the selection is in view to act on; search results hide it.
+    var selectionActionable: Bool { query.isEmpty && !selection.isEmpty }
 
     var orderedSelection: [UUID] {
         // A folder's own apps follow it, so ones selected inside an open folder count too.
@@ -701,7 +772,7 @@ final class AppState {
 
     func groupSelection(anchor: UUID? = nil) {
         let ids = orderedSelection
-        guard ids.count > 1 else { return }
+        guard selectionActionable, ids.count > 1 else { return }
         let name = GridBuilder.folderName(for: ids.compactMap { grid.item($0)?.app }.map { installedApp(for: $0) })
         var newID: UUID?
         apply { newID = $0.group(ids, name: name, anchor: anchor) }
@@ -798,15 +869,34 @@ final class AppState {
         editing = false
         focusIndex = nil
         textEdit = nil
-        cancelDrag()
+        cancelDrag(reopeningFolder: false)
         swipeOffset = 0
     }
 
     /// Cancels a drag in progress. An edge flip may have moved the view onto the extra
-    /// empty page, which goes away with the drag, so the view returns to a real page.
-    func cancelDrag() {
+    /// empty page, which goes away with the drag, so the view returns to a real page. A drag
+    /// that left an open folder (which closed) puts the folder back, as it was, with
+    /// `reopeningFolder`: Esc undoes the whole gesture.
+    func cancelDrag(reopeningFolder: Bool = true) {
+        let (wasActive, source) = (drag.active, drag.source)
         drag.cancel()
         currentPage = min(currentPage, grid.pages.count - 1)
+        if reopeningFolder, wasActive, case .folder(let id) = source, openFolderID == nil,
+           let loc = grid.locate(id), loc.folderIndex == nil {
+            currentPage = loc.page
+            openFolderID = id
+        }
+        dragFinished()
+    }
+
+    /// Set when a scan finished mid-drag; `dragFinished()` applies it.
+    @ObservationIgnored private var reconcileAfterDrag = false
+
+    /// After a drop or a cancelled drag: applies a scan that came in meanwhile.
+    func dragFinished() {
+        guard reconcileAfterDrag else { return }
+        reconcileAfterDrag = false
+        reconcile()
     }
 
     /// Page and folder transitions; none with Reduce Motion, so nothing slides.

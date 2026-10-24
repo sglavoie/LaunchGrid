@@ -9,9 +9,9 @@ typealias Grid = LaunchGridCore.Grid
 
 struct BackgroundView: View {
     @Environment(AppState.self) private var state
-    @Environment(\.screenID) private var screenID
     /// Counts Space switches: each Space can have its own wallpaper.
     @State private var spaceChanges = 0
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         let prefs = state.prefs
@@ -40,11 +40,17 @@ struct BackgroundView: View {
                 Color.black.opacity(prefs.backgroundOpacity)
             }
         }
-        .opacity(prefs.background == .solid ? max(0.15, 1 - prefs.backgroundOpacity * 0.8) : 1)
+        .opacity(prefs.background == .solid ? Self.solidOpacity(prefs.backgroundOpacity, reduceTransparency: reduceTransparency) : 1)
         .ignoresSafeArea()
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)) { _ in
             spaceChanges += 1
         }
+    }
+
+    /// A solid colour's opacity for the Transparency slider's value. Opaque with Reduce
+    /// Transparency, which asks for no see-through backgrounds.
+    static func solidOpacity(_ transparency: Double, reduceTransparency: Bool) -> Double {
+        reduceTransparency ? 1 : max(0.15, 1 - transparency * 0.8)
     }
 
     /// How many times the wallpaper was looked up, for the debug scripts.
@@ -52,7 +58,7 @@ struct BackgroundView: View {
 
     private var wallpaperURL: URL? {
         Self.wallpaperLookups += 1
-        let screen = NSScreen.screens.first { $0.displayID == screenID } ?? NSScreen.main
+        let screen = NSScreen.screens.first { $0.displayID == state.screenID } ?? NSScreen.main
         return screen.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
     }
 }
@@ -77,11 +83,13 @@ struct VisualEffect: NSViewRepresentable {
 /// while loading, or when the file can't be decoded (e.g. a dynamic or aerial wallpaper).
 struct BlurredImage: View {
     let url: URL?
+    /// In points on screen, whatever the picture's own size.
     let radius: Double
     /// Read when the parent redraws (each show and Space switch), not only when the path
     /// changes: a body with the same inputs isn't run again.
     private let identity: String
     @State private var image: NSImage?
+    @Environment(\.displayScale) private var displayScale
 
     init(url: URL?, radius: Double) {
         self.url = url
@@ -91,29 +99,38 @@ struct BlurredImage: View {
 
     var body: some View {
         GeometryReader { geo in
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
-            } else {
-                VisualEffect(material: .fullScreenUI)
+            // The size filled sets how strong the blur is in the picture's own pixels. Rounded
+            // up, so a window animating open (or being resized) doesn't blur at every frame.
+            let size = CGSize(width: (geo.size.width / 128).rounded(.up) * 128, height: (geo.size.height / 128).rounded(.up) * 128)
+            ZStack {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                } else {
+                    VisualEffect(material: .fullScreenUI)
+                }
+            }
+            .task(id: "\(identity)|\(radius)|\(size.width)x\(size.height)@\(displayScale)") {
+                await load(size: size)
             }
         }
-        .task(id: "\(identity)|\(radius)") {
-            guard let url else { image = nil; return }
-            let r = radius
-            if let hit = ImageBlurCache.shared.cached(url: url, radius: r) { image = hit; return }
-            // Dragging the Blur slider steps through radii: blur only the one it rests on.
-            if image != nil {
-                try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled else { return }
-            }
-            image = await Task.detached(priority: .userInitiated) {
-                ImageBlurCache.shared.image(url: url, radius: r).map(SendableImage.init)
-            }.value?.image
+    }
+
+    private func load(size: CGSize) async {
+        guard let url, size.width > 0, size.height > 0 else { if url == nil { image = nil }; return }
+        let target = ImageBlurCache.Target(radius: radius, size: size, pixelScale: displayScale)
+        if let hit = ImageBlurCache.shared.cached(url: url, target) { image = hit; return }
+        // Dragging the Blur slider steps through radii: blur only the one it rests on.
+        if image != nil {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
         }
+        image = await Task.detached(priority: .userInitiated) {
+            ImageBlurCache.shared.image(url: url, target).map(SendableImage.init)
+        }.value?.image
     }
 }
 
@@ -140,41 +157,46 @@ final class ImageBlurCache: @unchecked Sendable {
         return "\(url.path)|\(file.map { String(describing: $0) } ?? "")"
     }
 
-    private func key(url: URL, radius: Double) -> NSString { "\(Self.identity(of: url))|\(radius)" as NSString }
-
-    func cached(url: URL, radius: Double) -> NSImage? {
-        cache.object(forKey: key(url: url, radius: radius))
+    /// What a picture is rendered for: the blur radius in points, and the size (in points,
+    /// at `pixelScale` pixels each) it is scaled to fill.
+    struct Target: Sendable {
+        var radius: Double
+        var size: CGSize
+        var pixelScale: CGFloat
     }
 
-    func image(url: URL, radius: Double) -> NSImage? {
-        let key = key(url: url, radius: radius)
+    private func key(url: URL, _ t: Target) -> NSString {
+        "\(Self.identity(of: url))|\(t.radius)|\(t.size.width)x\(t.size.height)@\(t.pixelScale)" as NSString
+    }
+
+    func cached(url: URL, _ target: Target) -> NSImage? {
+        cache.object(forKey: key(url: url, target))
+    }
+
+    func image(url: URL, _ target: Target) -> NSImage? {
+        let key = key(url: url, target)
         if let hit = cache.object(forKey: key) { return hit }
         // Upright, as the camera held it: a portrait photo is stored sideways with an EXIF orientation.
         guard var ci = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else { return nil }
-        // Work at a reduced size: the result is blurred anyway. The longer side sets it, so a
-        // tall picture is shrunk as much as a wide one.
-        let scale = min(1, 1600 / max(ci.extent.width, ci.extent.height, 1))
+        let source = ci.extent.size
+        // Points on screen per source pixel, as the picture is scaled to fill.
+        let fill = max(target.size.width / max(source.width, 1), target.size.height / max(source.height, 1))
+        // Blurred, work at a reduced size: the longer side sets it, so a tall picture is shrunk
+        // as much as a wide one. Unblurred, at the screen's own resolution, so it stays sharp.
+        let scale = target.radius > 0
+            ? min(1, 1600 / max(source.width, source.height, 1))
+            : min(1, fill * max(target.pixelScale, 1))
         ci = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let extent = ci.extent
-        if radius > 0 {
-            ci = ci.clampedToExtent().applyingGaussianBlur(sigma: radius * scale * 1.5).cropped(to: extent)
+        let extent = ci.extent.integral
+        if target.radius > 0 {
+            // The radius is in points on screen: one working pixel is `fill / scale` points.
+            ci = ci.clampedToExtent().applyingGaussianBlur(sigma: target.radius * scale / fill).cropped(to: extent)
         }
         guard let cg = context.createCGImage(ci, from: extent) else { return nil }
         lock.withLock { renderCount += 1 }
         let out = NSImage(cgImage: cg, size: extent.size)
         cache.setObject(out, forKey: key)
         return out
-    }
-}
-
-private struct ScreenIDKey: EnvironmentKey {
-    static let defaultValue: CGDirectDisplayID = 0
-}
-
-extension EnvironmentValues {
-    var screenID: CGDirectDisplayID {
-        get { self[ScreenIDKey.self] }
-        set { self[ScreenIDKey.self] = newValue }
     }
 }
 

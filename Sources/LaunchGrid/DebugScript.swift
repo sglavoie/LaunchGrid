@@ -11,6 +11,8 @@ enum DebugScript {
     private static weak var trackedMenu: NSMenu?
     private static var menuChoice: String?
     private static var watchingMenus = false
+    /// Where a held drag ("hold", "fhold", "panhold") is, for "release".
+    private static var heldAt: (point: CGPoint, window: NSWindow)?
 
     static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate) {
         let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -41,9 +43,15 @@ enum DebugScript {
                 case "hide": overlay.hide()
                 case "page": state.goToPage(Int(arg) ?? 0)
                 case "search": state.query = arg
+                case "type":
+                    // Inserts at the search's caret, character by character, as typing does.
+                    for ch in arg { state.searchLine.insert(String(ch)) }
                 case "edit": state.editing = true
                 case "select": for i in (arg.split(separator: ",").compactMap { Int($0) }) where state.currentItems.indices.contains(i) {
                     state.selection.insert(state.currentItems[i].id)
+                }
+                case "fselect": for i in (arg.split(separator: ",").compactMap { Int($0) }) {
+                    if let app = state.openFolder?.apps[safe: i] { state.selection.insert(app.id) }
                 }
                 case "group": state.groupSelection()
                 case "folder":
@@ -52,7 +60,7 @@ enum DebugScript {
                 case "rename": if let item = state.currentItems.first { state.beginRename(item.id) }
                 case "settings": delegate.showSettings()
                 case "tab": state.settingsTab = arg
-                case "settingsheight": state.settingsHeight = CGFloat(Double(arg) ?? 600)
+                case "settingsheight": state.settingsHeight = Double(arg).map { CGFloat($0) }
                 case "hotkeyclear":
                     // Hides why the shortcut isn't registered, e.g. a scratch copy beside the installed one.
                     state.hotkeyProblem = nil
@@ -213,7 +221,8 @@ enum DebugScript {
                         RunLoop.main.add(timer, forMode: .common)
                     }
                 case "state":
-                    print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active)")
+                    print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active) swipe=\(Int(state.swipeOffset))")
+                    if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
                     if let f = state.openFolder { print("folder: \(f.apps.count) apps, first \(f.apps.prefix(3).map(\.title)), last \(f.apps.suffix(3).map(\.title))") }
                     fflush(stdout)
                 case "wclick":
@@ -316,12 +325,61 @@ enum DebugScript {
                         }
                         if type == .leftMouseDown { try? await Task.sleep(for: .seconds(parts[0] == "click" ? 0.05 : 1)) }
                     }
-                case "drag", "merge", "edge", "fdrag", "fedge", "edgehide":
+                case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "hold", "fhold", "panhold":
                     // An optional third number grabs the icon that many points right of its centre.
                     let n = arg.split(separator: ",").compactMap { Int($0) }
                     guard let window = overlay.window, let from = n.first else { break }
                     await simulateDrag(parts[0], from: from, to: n.count > 1 ? n[1] : 0, grab: CGFloat(n.count > 2 ? n[2] : 0),
                                        state: state, window: window, overlay: overlay, snapDir: dir)
+                case "titles": print("titles:", state.grid.pages.map { "\($0.title ?? "-") #\($0.items.count) \($0.items.first?.title ?? "")" }); fflush(stdout)
+                case "sortall": state.sortEverything()
+                case "windows":
+                    print("windows: \(NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "(untitled)" : $0.title) \(Int($0.frame.width))x\(Int($0.frame.height))" })")
+                    fflush(stdout)
+                case "statusmenu": print("statusmenu: \(delegate.makeMenu().items.map(\.title).filter { !$0.isEmpty })"); fflush(stdout)
+                case "rebuildaction": delegate.libraryActions.rebuild(arg == "alpha" ? .alphabetical : .byCategory)
+                case "about": delegate.showAbout()
+                case "frames": print("frames: \(state.prefs.windowFrames.count) saved, \(state.prefs.windowFrames)"); fflush(stdout)
+                case "framesfill":
+                    // Saved frames for N displays that aren't connected, as years of docks and projectors leave.
+                    for i in 0..<(Int(arg) ?? 0) { state.prefs.windowFrames["display-FAKE-\(i)"] = "{{0, 0}, {800, 600}}" }
+                case "framesave":
+                    // Saves "w,h" as the Window-mode frame for every connected display, as if resized there.
+                    let n = arg.split(separator: ",").compactMap { Double($0) }
+                    guard n.count == 2 else { break }
+                    for s in NSScreen.screens { state.prefs.windowFrames[s.frameKey] = NSStringFromRect(NSRect(x: s.visibleFrame.minX, y: s.visibleFrame.minY, width: n[0], height: n[1])) }
+                case "fakeinstall":
+                    // As if a scan found a newly installed app "Name" (nothing is put on disk).
+                    let app = InstalledApp(bundleID: "com.example.fake.\(arg.lowercased())", path: "/Applications/\(arg).app", name: arg)
+                    state.catalogScanned(state.installed + [app])
+                case "regenicons":
+                    state.regenerateIcons { print("regenicons: done"); fflush(stdout) }
+                case "movetopage":
+                    // Moves the first item of the current page to page N (0-based), as Move to Page does.
+                    if let first = state.currentItems.first, let p = Int(arg) { state.moveToPage([first.id], page: p) }
+                case "release":
+                    // Releases a held drag where it is.
+                    guard let (p, window) = heldAt else { break }
+                    heldAt = nil
+                    let h = window.contentView?.bounds.height ?? 0
+                    if let e = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: p.x, y: h - p.y), modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                  context: nil, eventNumber: 0, clickCount: 1, pressure: 0) {
+                        NSApp.postEvent(e, atStart: false)
+                    }
+                case "extrafolder":
+                    // Adds a scan folder without the open panel, as Settings › Library does.
+                    state.prefs.extraFolders.append(arg)
+                    delegate.libraryActions.foldersChanged()
+                case "mode":
+                    // "mode:window" (or fullScreen, behindDock), as Settings changes it.
+                    if let mode = WindowMode(rawValue: arg) {
+                        state.prefs.windowMode = mode
+                        overlay.modeChanged()
+                    }
+                case "screenchange":
+                    // As if a display was added, removed or changed resolution.
+                    NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
                 case "pages": print("pages(\(state.currentPage)):", state.grid.pages.map { $0.items.prefix(5).map(\.title) + ["#\($0.items.count)"] }); fflush(stdout)
                 case "wait": try? await Task.sleep(for: .seconds(Double(arg) ?? 1))
                 case "snap": snapshot(name: arg.isEmpty ? "snap" : arg, dir: dir)
@@ -338,6 +396,9 @@ enum DebugScript {
     /// drag: drop item `from` into the gap at slot `to`; merge: dwell on item `to`'s centre;
     /// edge: dwell at the right edge to flip a page, then drop at slot `to`.
     /// fedge: like fdrag, dwelling at the open folder's right edge to flip its page first.
+    /// finside: drag open-folder app `from` to the gap at folder slot `to`, staying inside it.
+    /// hold / fhold: like drag / fdrag, without releasing ("release" does).
+    /// panhold: swipe the page from beside item `from` by `to` points, without releasing.
     /// edgehide: dwell at the right edge until the page flips, then hide without releasing.
     static func simulateDrag(_ kind: String, from: Int, to: Int, grab: CGFloat = 0, state: AppState, window: NSWindow,
                              overlay: OverlayController, snapDir: String) async {
@@ -362,7 +423,11 @@ enum DebugScript {
             }
         }
         var start = rootPoint(from, dx: grab)
-        if kind == "fdrag" || kind == "fedge" {
+        if kind == "panhold" {
+            // Between two icons, where a drag swipes the page rather than lifting an icon.
+            start = rootPoint(from, dx: layout.cell.width / 2)
+        }
+        if kind == "fdrag" || kind == "fedge" || kind == "finside" || kind == "fhold" {
             let f = state.drag.folderGridFrame
             let fl = state.folderLayout
             let c = fl.center(from)
@@ -392,6 +457,23 @@ enum DebugScript {
             let c = state.folderLayout.center(to)
             end = CGPoint(x: f.minX + c.x - state.folderLayout.cell.width * 0.4, y: f.minY + c.y)
             await glide(edge, end)
+        case "hold", "fhold":
+            end = rootPoint(to, dx: -layout.cell.width * 0.4)
+            await glide(start, end)
+            for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
+            heldAt = (end, window)
+            return
+        case "panhold":
+            end = CGPoint(x: start.x + CGFloat(to), y: start.y)
+            await glide(start, end)
+            heldAt = (end, window)
+            return
+        case "finside":
+            let f = state.drag.folderGridFrame
+            let c = state.folderLayout.center(to)
+            end = CGPoint(x: f.minX + c.x - state.folderLayout.cell.width * 0.4, y: f.minY + c.y)
+            await glide(start, end)
+            for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
         case "edgehide":
             let frame = state.drag.pagerFrame
             let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)

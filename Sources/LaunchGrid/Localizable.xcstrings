@@ -129,6 +129,28 @@
         }
       }
     },
+    "%lld results": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld result"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld results"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "All %lld installed apps.": {
       "localizations": {
         "en": {

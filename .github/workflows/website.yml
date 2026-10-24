@@ -25,7 +25,8 @@ jobs:
 
   deploy:
     needs: check
-    if: github.event_name != 'pull_request'
+    # Only main is published: a manual run started on another branch only checks it.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # One deploy at a time; a newer push replaces a deploy still waiting to start.

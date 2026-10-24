@@ -208,6 +208,15 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.targets(for: id["A"]!).count == 2, "the drag badge counts these")
     }
 
+    @Test func movingToAFullPageKeepsTheItemsOnIt() {
+        let state = makeState((1...36).map { "App\($0)" })
+        state.apply { $0.normalize() } // 35 on the first page, one on the next
+        let last = state.grid.pages[1].items[0].id
+        state.moveToPage([last], page: 0)
+        #expect(state.grid.pages[0].items.last?.id == last)
+        #expect(state.grid.pages[1].items.map(\.title) == ["App35"], "the item it displaced")
+    }
+
     @Test func groupingNeedsTwoItems() {
         let state = makeState(["A", "B"])
         state.toggleSelection(ids(state)["A"]!)
@@ -225,7 +234,8 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.toast == "Loaded layout", "nobody has seen it yet")
         state.didShow()
         #expect(state.toast == "Loaded layout")
-        try await Task.sleep(for: .milliseconds(300))
+        // Waits longer on a busy machine (other tests share the main actor) rather than fail.
+        for _ in 0..<30 where state.toast != nil { try await Task.sleep(for: .milliseconds(100)) }
         #expect(state.toast == nil, "dismissed once seen")
     }
 }
@@ -251,6 +261,21 @@ func installed(_ name: String) -> InstalledApp {
         #expect(FolderWatcher.isRelevant("/Applications/Foo.app/Contents/"))
         #expect(!FolderWatcher.isRelevant("/Applications/Foo.app/Contents/Resources/"))
         #expect(!FolderWatcher.isRelevant("/Applications/Foo.app/Contents/Frameworks/X.framework/Versions/A/"))
+    }
+
+    @MainActor @Test func aFolderCreatedAfterWatchingStartsIsNoticed() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let later = dir.appendingPathComponent("Applications").path
+        var changes = 0
+        let watcher = FolderWatcher(paths: [later], latency: 0.1) { changes += 1 }
+        #expect(watcher.paths == [later])
+        try await Task.sleep(for: .milliseconds(300))
+        try FileManager.default.createDirectory(atPath: later, withIntermediateDirectories: false)
+        for _ in 0..<30 where changes == 0 { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(changes > 0, "creating ~/Applications, say, is noticed without waiting for the periodic rescan")
+        _ = watcher
     }
 }
 
@@ -515,6 +540,21 @@ func installed(_ name: String) -> InstalledApp {
         #expect(try savedTitles(state) == ["Again"])
     }
 
+    @Test func anUnchangedGridIsNotSavedAgain() throws {
+        let state = makeState(["A"])
+        state.saveNow()
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Renamed") }
+        state.saveNow()
+        state.saveNow() // as each hide and quitting do
+        #expect(try savedTitles(state) == ["Renamed"])
+        #expect(try state.store.loadBackup().allApps.map(\.title) == ["A"], "still the save before it")
+
+        let reopened = AppState(prefs: testPreferences(), store: state.store)
+        reopened.saveNow()
+        #expect(try reopened.store.loadBackup().allApps.map(\.title) == ["A"], "nothing changed since loading")
+    }
+
     @Test func exclusionsChosenBeforeTheFirstLayoutAreKept() {
         let url = TempDir.url.appendingPathComponent("grid.json")
         let state = AppState(prefs: testPreferences(), store: GridStore(url: url))
@@ -542,7 +582,8 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.loadProblem?.backup == url)
 
         state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.app(installed("A").makeRef())])]))
-        state.saveNow()
+        #expect(!state.saveNow(reportingFailure: false), "not saved, so quitting asks first")
+        #expect(state.lastSaveError != nil)
         #expect(try String(contentsOf: url, encoding: .utf8) == "not json")
 
         try FileManager.default.removeItem(at: url) // the user moved it away
@@ -745,5 +786,81 @@ func installed(_ name: String) -> InstalledApp {
         let start = try #require(AppDelegate.processStart(getpid()))
         #expect(abs(start - Date().timeIntervalSince1970) < 24 * 3600)
         #expect(AppDelegate.processStart(getpid()) == start)
+    }
+}
+
+@MainActor @Suite struct BackgroundTests {
+    @Test func aSolidColourIsOpaqueWithReduceTransparency() {
+        #expect(BackgroundView.solidOpacity(0.5, reduceTransparency: true) == 1)
+        #expect(BackgroundView.solidOpacity(0, reduceTransparency: false) == 1)
+        #expect(abs(BackgroundView.solidOpacity(0.5, reduceTransparency: false) - 0.6) < 1e-9)
+        #expect(BackgroundView.solidOpacity(0.9, reduceTransparency: false) >= 0.15)
+    }
+}
+
+@MainActor @Suite(.tempDir) struct DragDeferralTests {
+    @Test func aScanDuringADragWaitsForTheDrop() {
+        let state = makeState(["A"])
+        state.catalogScanned([installed("A")])
+        state.drag.active = true
+        state.catalogScanned(["A", "B"].map(installed))
+        #expect(state.grid.allApps.map(\.name) == ["A"], "the drag's slots stay as they are")
+        state.cancelDrag()
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+    }
+
+    @Test func escapeDuringADragOutOfAFolderReopensIt() throws {
+        let state = makeState(["A", "B", "C"])
+        let ids = state.grid.pages[0].items.map(\.id)
+        state.apply { _ = $0.group(Array(ids.prefix(2)), name: "F") }
+        let folder = try #require(state.grid.pages[0].items.compactMap(\.folder).first)
+        state.openFolder(folder.id)
+        state.drag.active = true
+        state.drag.source = .folder(folder.id)
+        state.closeFolder() // as dragging out of it does
+        state.cancelDrag()
+        #expect(state.openFolderID == folder.id)
+
+        state.drag.active = true
+        state.drag.source = .folder(folder.id)
+        state.closeFolder()
+        state.didHide()
+        #expect(state.openFolderID == nil, "hiding closes it")
+    }
+
+    @Test func swipingPastTheFirstOrLastPageGivesWayLittle() {
+        let state = makeState(["A"])
+        state.apply { _ = $0.addPage() }
+        #expect(state.swipeOffset(for: -300, width: 1000) == -300, "towards the next page")
+        let pastFirst = state.swipeOffset(for: 300, width: 1000)
+        #expect(pastFirst > 0 && pastFirst < 200)
+        #expect(state.swipeOffset(for: 3000, width: 1000) < 200, "never past a fifth of the page")
+        #expect(state.swipeOffset(for: 900, width: 1000) > pastFirst, "further still gives a little more")
+        state.goToPage(1)
+        #expect(state.swipeOffset(for: 300, width: 1000) == 300)
+        #expect(state.swipeOffset(for: -300, width: 1000) == -pastFirst)
+        #expect(state.swipeOffset(for: 900, width: 1000) == 600, "at most 0.6 of a page")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct RevealTests {
+    @Test func aSearchResultInEditModeIsShownWhereItIs() throws {
+        let state = makeState((1...40).map { "App\($0)" })
+        state.apply { $0.normalize() } // 35 on the first page, 5 on the next
+        let ids = state.grid.pages[0].items.map(\.id)
+        state.apply { _ = $0.group([ids[3], ids[4]], name: "F") }
+        state.editing = true
+
+        state.query = "App38"
+        state.activateResult(try #require(state.searchResults.first))
+        #expect(state.query.isEmpty && state.editing)
+        #expect(state.currentPage == 1 && state.openFolderID == nil)
+        #expect(state.currentItems[state.focusIndex ?? -1].title == "App38")
+
+        state.query = "App5"
+        state.activateResult(try #require(state.searchResults.first { $0.title == "App5" }))
+        let folder = try #require(state.openFolder)
+        #expect(state.currentPage == 0 && folder.name == "F")
+        #expect(folder.apps[state.focusIndex ?? -1].title == "App5")
     }
 }

@@ -53,9 +53,19 @@ public struct TextLine: Equatable, Sendable {
     public mutating func deleteToEnd() { delete(from: caret, to: text.count) }
 
     private mutating func delete(from start: Int, to end: Int) {
-        let start = max(0, start), end = min(text.count, end)
+        var start = max(0, start)
+        let end = min(text.count, end)
         guard start < end else { return }
-        text = String(text.prefix(start) + text.dropFirst(end))
+        let after = text.dropFirst(end)
+        // As with typing, the characters after the deletion stay as they were: where the one
+        // before would fuse with them (a lone flag half, which would re-pair every flag after
+        // it), it goes too.
+        var joined = String(text.prefix(start) + after)
+        while start > 0, !joined.suffix(after.count).elementsEqual(after) || joined.count != start + after.count {
+            start -= 1
+            joined = String(text.prefix(start) + after)
+        }
+        text = joined
         caret = start
     }
 

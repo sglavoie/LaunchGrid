@@ -70,7 +70,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let panel, panel.isVisible else { return }
         textInput.discardComposition()
         state.isShown = false
-        state.saveNow()
+        // A failure is told once the panel is gone: an alert would open behind it.
+        let saved = state.saveNow(reportingFailure: false)
         visibilityGeneration += 1
         let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -81,6 +82,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 guard let self, self.visibilityGeneration == generation, !self.state.isShown else { return }
                 panel.orderOut(nil)
                 self.state.didHide()
+                if !saved { self.state.reportLastSaveFailure() }
                 // Hand focus back to the previous app unless another of our windows is up.
                 let others = NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }
                 if deactivate && NSApp.isActive && !others { NSApp.hide(nil) }
@@ -128,9 +130,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         p.minSize = NSSize(width: 480, height: 360)
         p.delegate = self
-        let root = GridRootView()
-            .environment(state)
-            .environment(\.screenID, screen?.displayID ?? 0)
+        let root = GridRootView().environment(state)
         let host = NSHostingView(rootView: AnyView(root))
         host.sizingOptions = []
         // The text input view sits beside the SwiftUI content, out of sight.
@@ -151,12 +151,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
         return p
     }
 
+    /// Set while `placePanel` moves the panel, so the frame it fits to the screen isn't saved
+    /// over the person's own (a lower resolution for a while would shrink it for good).
+    private var placing = false
+
     private func placePanel() {
         // After a display change the remembered screen may be gone (or a new object for the
         // same display); match it by ID and fall back to the main screen.
         let id = screen?.displayID
         screen = NSScreen.screens.first { $0.displayID == id } ?? NSScreen.main
         guard let panel, let screen else { return }
+        placing = true
+        defer { placing = false }
         showBackground(for: screen)
         switch state.prefs.windowMode {
         case .fullScreen:
@@ -184,11 +190,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Points the background (blurred desktop or wallpaper) at `screen`.
+    /// Points the background (blurred desktop or wallpaper) at `screen`. Only the background
+    /// reads it, so nothing else is redrawn, and nothing at all on a show on the same display.
     private func showBackground(for screen: NSScreen) {
-        if let host {
-            host.rootView = AnyView(GridRootView().environment(state).environment(\.screenID, screen.displayID))
-        }
+        if state.screenID != screen.displayID { state.screenID = screen.displayID }
     }
 
     // MARK: NSWindowDelegate
@@ -224,7 +229,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func saveWindowFrame() {
-        guard state.prefs.windowMode == .window, let panel, panel.isVisible, let screen = panel.screen else { return }
+        guard !placing, state.prefs.windowMode == .window, let panel, panel.isVisible, let screen = panel.screen else { return }
         var frames = state.prefs.windowFrames
         frames[screen.frameKey] = NSStringFromRect(panel.frame)
         Self.prune(&frames)
@@ -377,7 +382,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "a": if state.query.isEmpty { selectAll() }
             case "f": state.query = ""
             case "g": state.groupSelection()
-            case "n": state.newPage()
+            case "n":
+                // The new page is shown, so nothing may stay in front of it.
+                state.query = ""
+                if state.openFolder != nil { state.closeFolder() }
+                state.newPage()
             case ",": state.onOpenSettings()
             case "w": hide()
             case "q": NSApp.terminate(nil)
@@ -615,7 +624,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func activateFocused() {
         if !state.query.isEmpty {
             let results = state.searchResults
-            if let app = results[safe: state.focusIndex ?? 0] { state.launch(app) }
+            if let app = results[safe: state.focusIndex ?? 0] { state.activateResult(app) }
             return
         }
         guard let i = state.focusIndex else { return }
@@ -636,7 +645,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func handleScroll(_ event: NSEvent) -> NSEvent? {
-        guard let panel, event.window === panel, isVisible, !state.drag.active else { return event }
+        // The rename card edits the page it opened on: don't turn pages behind it.
+        guard let panel, event.window === panel, isVisible, !state.drag.active, state.textEdit == nil else { return event }
         guard state.query.isEmpty else { return nil }
         let width = max(state.drag.pagerFrame.width, 1)
         if !event.phase.isEmpty || !event.momentumPhase.isEmpty {
@@ -646,7 +656,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let dx = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) ? event.scrollingDeltaX : 0
             scrollAccumulator += dx
             if state.openFolder == nil {
-                state.swipeOffset = max(-width * 0.6, min(width * 0.6, scrollAccumulator))
+                state.swipeOffset = state.swipeOffset(for: scrollAccumulator, width: width)
             }
             if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
                 let threshold = min(120, width * 0.12)

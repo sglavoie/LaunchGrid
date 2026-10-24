@@ -143,7 +143,13 @@ if (video && toggle) {
         toggle.classList.toggle("paused", video.paused);
         toggle.setAttribute("aria-label", video.paused ? "Play the video" : "Pause the video");
     };
-    const flip = () => (video.paused ? video.play().catch(() => {}) : video.pause());
+    // Set once the visitor pauses it, so scrolling it back into view doesn't restart it.
+    let held = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const play = () => video.play().catch(() => {}); // a blocked play() leaves the play button showing
+    const flip = () => {
+        held = !video.paused;
+        if (video.paused) play(); else video.pause();
+    };
     video.controls = false;
     toggle.hidden = false;
     toggle.addEventListener("click", flip);
@@ -151,8 +157,15 @@ if (video && toggle) {
     video.addEventListener("play", sync);
     video.addEventListener("pause", sync);
     sync();
-    // A blocked play() rejects and leaves the play button showing.
-    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) video.play().catch(() => {});
+    // Plays (and so downloads) only while in view: visitors who never scroll to it don't fetch it.
+    if ("IntersectionObserver" in window) {
+        new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting && !held) play();
+            else if (!entry.isIntersecting && !video.paused) video.pause();
+        }, { threshold: 0.25 }).observe(video);
+    } else if (!held) {
+        play();
+    }
 }
 
 // Settings screenshots: one panel at a time behind a tab list, arrow keys moving between tabs.

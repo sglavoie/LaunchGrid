@@ -141,9 +141,27 @@ extension Grid {
     /// move empties still counts, as it's still on screen).
     public mutating func move(_ ids: [UUID], toPage page: Int, at index: Int) {
         let items = detach(ids)
-        if !items.isEmpty { _ = place(items, page: page, at: index) }
+        // The moved items stay on the page asked for: on a full page, the items they
+        // displace spill onward instead of them.
+        if !items.isEmpty { _ = place(items, page: page, at: min(index, max(0, capacity - items.count))) }
         // Drops the folders the move emptied before spilling, so they don't push items over.
         normalize()
+    }
+
+    /// Adds items after the last item of the grid, on the last page while it has room and then
+    /// on new pages, as Launchpad adds newly installed apps. Gaps on earlier pages (a page
+    /// arranged by hand, or one per category) stay as they are.
+    public mutating func appendAtEnd(_ items: [GridItem]) {
+        guard !items.isEmpty else { return }
+        if pages.isEmpty { pages = [Page()] }
+        let last = pages.count - 1
+        let room = max(0, capacity - pages[last].items.count)
+        pages[last].items.append(contentsOf: items.prefix(room))
+        var remaining = items.dropFirst(room)
+        while !remaining.isEmpty {
+            pages.append(Page(items: Array(remaining.prefix(capacity))))
+            remaining = remaining.dropFirst(capacity)
+        }
     }
 
     /// Adds items at the end of the first page with room, or on a new page.
@@ -281,19 +299,40 @@ extension Grid {
     // MARK: Resizing
 
     /// Changes the grid size and re-flows every item, in order, so each page is filled
-    /// before the next one starts. Page `n` keeps the old page `n`'s ID and title.
+    /// before the next one starts. Page `n` keeps the old page `n`'s ID, and takes the title
+    /// of the page its first item came from, so a title stays with what it names.
     public mutating func resize(rows: Int, columns: Int) {
+        // Before the new size spills items onto later pages.
+        let titles = Dictionary(pages.flatMap { page in page.items.map { ($0.id, page.title) } },
+                                uniquingKeysWith: { a, _ in a })
         self.rows = max(1, rows)
         self.columns = max(1, columns)
         normalize()
+        // An empty page has no first item: its title stays by position, as before.
+        let old = pages
         flow(pages.flatMap(\.items))
+        for p in pages.indices {
+            pages[p].title = pages[p].items.first.map { titles[$0.id] ?? nil } ?? old[safe: p]?.title
+        }
     }
 
-    /// Number of pages a resize would produce, so the UI can warn before re-flowing.
-    public func pageCountAfterResize(rows: Int, columns: Int) -> Int {
+    /// The grid as a resize would leave it, so the UI can warn before re-flowing.
+    public func resized(rows: Int, columns: Int) -> Grid {
         var copy = self
         copy.resize(rows: rows, columns: columns)
-        return copy.pages.count
+        return copy
+    }
+
+    /// Number of pages a resize would produce.
+    public func pageCountAfterResize(rows: Int, columns: Int) -> Int {
+        resized(rows: rows, columns: columns).pages.count
+    }
+
+    /// Whether `other` (the grid resized, say) has any item on another page, or any page
+    /// titled differently.
+    public func pagesDiffer(from other: Grid) -> Bool {
+        let layout = { (g: Grid) in g.pages.map { $0.items.map(\.id) } }
+        return layout(other) != layout(self) || other.pages.map(\.title) != pages.map(\.title)
     }
 
     // MARK: Sorting
@@ -318,9 +357,10 @@ extension Grid {
     }
 
     /// Sorts every top-level item and re-flows them across pages. Folders stay intact; page
-    /// `n` keeps the old page `n`'s ID and title.
+    /// `n` keeps the old page `n`'s ID. Titles go: the pages no longer hold what they named.
     public mutating func sortEverything(folders: FolderPlacement = .first) {
         flow(Grid.sorted(pages.flatMap(\.items), folders: folders))
+        for p in pages.indices { pages[p].title = nil }
     }
 
     /// Lays `items` out over full pages; page `n` keeps the old page `n`'s ID and title.
@@ -330,5 +370,11 @@ extension Grid {
             let chunk = items.isEmpty ? [] : Array(items[start..<min(start + capacity, items.count)])
             return n < old.count ? Page(id: old[n].id, title: old[n].title, items: chunk) : Page(items: chunk)
         }
+    }
+}
+
+extension Array {
+    fileprivate subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

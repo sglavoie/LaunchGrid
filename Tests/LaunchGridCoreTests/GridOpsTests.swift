@@ -51,6 +51,15 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(titles) == [["B"], ["D", "A", "C"]])
     }
 
+    @Test func itemsMovedOntoTheEndOfAFullPageStayOnIt() {
+        var g = grid([["A", "B", "C"], ["D", "E"]])
+        let (d, e) = (g.pages[1].items[0].id, g.pages[1].items[1].id)
+        g.move([d], toPage: 0, at: 3)
+        #expect(g.pages.map(titles) == [["A", "B", "D"], ["C", "E"]], "C is displaced, not D")
+        g.removingEmptiedPages { $0.move([d, e], toPage: 0, at: 3) }
+        #expect(g.pages.map(titles) == [["A", "D", "E"], ["B", "C"]])
+    }
+
     @Test func groupCreatesFolderAtAnchorAndFlattensFolders() {
         var g = grid([["A", "B", "C"]])
         let (a, c) = (g.pages[0].items[0].id, g.pages[0].items[2].id)
@@ -161,7 +170,29 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         g.resize(rows: 1, columns: 2)
         #expect(g.pages.map(titles) == [["A", "B"], ["C"]])
         #expect(g.pages[0].id == first && g.pages[0].title == "First")
-        #expect(g.pages[1].title == nil)
+        #expect(g.pages[1].title == "Third", "with C, the third page's first item")
+    }
+
+    @Test func resizeTitlesFollowTheirPagesFirstItem() {
+        var g = grid([["A", "B"], ["C", "D", "E"], ["F"]], columns: 5)
+        g.setPageTitle(1, "Games")
+        g.setPageTitle(2, "Tools")
+        #expect(g.pagesDiffer(from: g.resized(rows: 1, columns: 2)))
+        g.resize(rows: 1, columns: 2)
+        #expect(g.pages.map(titles) == [["A", "B"], ["C", "D"], ["E", "F"]])
+        #expect(g.pages.map(\.title) == [nil, "Games", "Games"], "E, from the Games page, starts the last one")
+        g.resize(rows: 1, columns: 3)
+        #expect(g.pages.map(\.title) == [nil, "Games"], "named after where each page's first item came from")
+        #expect(!g.pagesDiffer(from: g.resized(rows: 3, columns: 1)), "same capacity, nothing moves")
+
+        // Shrinking spills full pages onto the next ones; titles still go by where items came from.
+        var big = grid([["A", "B", "C", "D"], ["E"], ["F", "G"]], columns: 4)
+        big.setPageTitle(0, "One")
+        big.setPageTitle(1, "Two")
+        big.setPageTitle(2, "Three")
+        big.resize(rows: 1, columns: 2)
+        #expect(big.pages.map(titles) == [["A", "B"], ["C", "D"], ["E", "F"], ["G"]])
+        #expect(big.pages.map(\.title) == ["One", "One", "Two", "Three"])
     }
 
     @Test func sortPageWithFolderPlacement() {
@@ -182,14 +213,14 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(titles) == [["A", "B", "C"], ["D", "E"]])
     }
 
-    @Test func sortEverythingKeepsPageTitlesByPosition() {
+    @Test func sortEverythingClearsPageTitles() {
         var g = grid([["E", "A"], ["D", "C", "B"], []])
         g.pages[0].title = "Work"
         g.pages[1].title = "Play"
         let ids = g.pages.map(\.id)
         g.sortEverything()
         #expect(g.pages.map(titles) == [["A", "B", "C"], ["D", "E"]])
-        #expect(g.pages.map(\.title) == ["Work", "Play"])
+        #expect(g.pages.map(\.title) == [nil, nil], "the titles named what the pages held before")
         #expect(g.pages.map(\.id) == Array(ids.prefix(2)))
     }
 
@@ -293,6 +324,14 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
     @Test func rejectsCorruptJSON() {
         #expect(throws: GridFileError.self) { try GridStore.decode(Data("{\"rows\": 5, \"pages\": [".utf8)) }
         #expect(throws: GridFileError.self) { try GridStore.decode(Data(#"{"pages": [{"items": [{"type": "nope"}]}]}"#.utf8)) }
+    }
+
+    @Test func aNewerVersionWrittenAsTextIsStillNewer() {
+        #expect {
+            try GridStore.decode(Data(#"{"version": "2", "rows": 5, "columns": 7, "pages": []}"#.utf8))
+        } throws: { error in
+            if case GridFileError.unsupportedVersion(2) = error { true } else { false }
+        }
     }
 
     @Test func rejectsOutOfRangeSize() {

@@ -36,19 +36,26 @@ struct GridRootView: View {
             .padding(.horizontal, 48)
             .accessibilityHidden(folderModal || editModal)
 
-            if let folder = state.openFolder {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { state.closeFolder() }
-                    .transition(.opacity)
-                    .accessibilityHidden(true)
-                FolderPanel(folder: folder)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityAddTraits(.isModal)
-                    .accessibilityHidden(editModal)
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
+            ZStack {
+                if let folder = state.openFolder {
+                    Color.black.opacity(0.35)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { state.closeFolder() }
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                    FolderPanel(folder: folder)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityAddTraits(.isModal)
+                        .accessibilityHidden(editModal)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
+                }
             }
+            // Opening and closing animate from here, not through `withAnimation`: called right
+            // after another change (grouping makes the folder, then opens it), `withAnimation`
+            // brought the view up to date first and the opening then sometimes never showed,
+            // leaving a folder open that nobody could see.
+            .animation(state.isShown ? AppState.pageAnimation : nil, value: state.openFolderID)
 
             DragLayer()
 
@@ -129,11 +136,12 @@ struct TopBar: View {
             HStack {
                 Spacer()
                 // A selection made with ⌘-click or ⇧-click outside edit mode gets the same actions.
-                if state.selection.count > 1 {
+                // Search results hide the selection: its actions wait until they're cleared.
+                if state.selectionActionable && state.selection.count > 1 {
                     Button("Group") { state.groupSelection() }
                         .buttonStyle(PillButtonStyle())
                 }
-                if !state.selection.isEmpty {
+                if state.selectionActionable {
                     Button("Remove") { state.remove(state.orderedSelection) }
                         .buttonStyle(PillButtonStyle())
                 }
@@ -467,14 +475,22 @@ struct ItemView: View {
         .padding(6)
         .background {
             if selected || focused {
+                let high = contrast == .increased
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(.white.opacity(selected ? 0.22 : 0.14))
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(selected ? 0.55 : 0.3), lineWidth: 1.5))
+                    .fill(.white.opacity(selected ? 0.22 : high ? 0.24 : 0.14))
+                    // Keyboard focus gets the stronger ring, with a dark edge so it shows on a
+                    // light wallpaper too; Increase Contrast makes it bolder still.
+                    .overlay(RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(.white.opacity(focused ? (high ? 1 : 0.8) : 0.55), lineWidth: focused ? (high ? 3 : 2) : 1.5))
+                    .overlay(RoundedRectangle(cornerRadius: 15).inset(by: -1)
+                        .strokeBorder(.black.opacity(focused ? (high ? 0.7 : 0.35) : 0), lineWidth: 1))
             }
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.folder != nil ? Text("Folder \(item.title)") : Text(verbatim: item.title))
+        // VoiceOver reads a folder's size after its name.
+        .accessibilityValue(item.folder.map { Text("\($0.apps.count) apps") } ?? Text(verbatim: ""))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
@@ -663,8 +679,8 @@ struct SearchResultsView: View {
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, app in
                     ItemView(item: .app(app), iconSize: icon, focused: state.focusIndex == i)
-                        .onTapGesture { state.launch(app) }
-                        .accessibilityAction { state.launch(app) }
+                        .onTapGesture { state.activateResult(app) }
+                        .accessibilityAction { state.activateResult(app) }
                         .accessibilityFocused($voiceOverFocus, equals: app.id)
                         .contextMenu { ItemMenu(item: .app(app)) }
                         .frame(width: layout.cell.width, height: layout.cell.height)
@@ -674,6 +690,18 @@ struct SearchResultsView: View {
             .onChange(of: state.focusIndex) { _, i in
                 if let i, results.indices.contains(i) { voiceOverFocus = results[i].id }
             }
+        }
+        // VoiceOver hears how many apps match once typing pauses, not on every keystroke.
+        .task(id: state.query) {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled, !state.query.isEmpty else { return }
+            let count = state.allSearchResults.count
+            let text = switch count {
+            case 0: String(localized: "No results")
+            case 1: String(localized: "1 result")
+            default: String(localized: "\(count) results")
+            }
+            AccessibilityNotification.Announcement(text).post()
         }
     }
 }
@@ -709,7 +737,7 @@ struct FolderPanel: View {
                 }
                 .frame(width: gridSize.width, height: gridSize.height)
                 .clipped()
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                     state.drag.folderGridFrame = $0
                 }
                 if pages > 1 {
@@ -734,12 +762,18 @@ struct FolderPanel: View {
             .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.15)))
             .contentShape(RoundedRectangle(cornerRadius: 28))
             .onTapGesture {}
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                 state.drag.folderPanelFrame = $0
             }
             .position(x: geo.size.width / 2, y: geo.size.height / 2)
+            // Measured in the panel's own space, which fills the overlay as the root does: in the
+            // root's, frames come out scaled while the panel's transition runs, and the last one
+            // (the panel at rest) wasn't always reported, leaving drags aimed at a stale frame.
+            .coordinateSpace(name: Self.space)
         }
     }
+
+    static let space = "folderPanel"
 }
 
 struct FolderPageContent: View {

@@ -15,7 +15,19 @@ struct SettingsView: View {
             LayoutSettings().tabItem { Label("Layout", systemImage: "square.grid.3x3") }.tag("Layout")
             LibrarySettings(actions: actions).tabItem { Label("Library", systemImage: "books.vertical") }.tag("Library")
         }
-        .frame(width: 580, height: state.settingsHeight)
+        .frame(width: 580, height: state.settingsHeight ?? Self.height(for: state.settingsTab))
+    }
+
+    /// Tall enough to show the tab without scrolling (as on the website's screenshots), where
+    /// the screen has room.
+    static func height(for tab: String) -> CGFloat {
+        let fits: CGFloat = switch tab {
+        case "General": 620
+        case "Library": 780
+        default: 600
+        }
+        let room = (NSScreen.main?.visibleFrame.height ?? 900) - 80
+        return max(420, min(fits, room))
     }
 }
 
@@ -111,7 +123,8 @@ struct HotkeyRecorder: View {
         let prefs = state.prefs
         LabeledContent("Show / hide LaunchGrid") {
             HStack {
-                Button(recording ? "Press a shortcut…" : KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) {
+                // String(localized:), so the prompt is looked up: the ternary would otherwise make it a plain String.
+                Button(recording ? String(localized: "Press a shortcut…") : KeyCombo.describe(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)) {
                     recording ? stop() : start()
                 }
                 .frame(minWidth: 140)
@@ -183,6 +196,7 @@ struct HotkeyRecorder: View {
 struct AppearanceSettings: View {
     @Environment(AppState.self) private var state
     @Environment(\.libraryActions) private var actions
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         @Bindable var prefs = state.prefs
@@ -231,8 +245,17 @@ struct AppearanceSettings: View {
                     ValueSlider(title: "Blur", value: $prefs.blurRadius, range: 0...60, step: 1,
                                 valueText: String(localized: "\(Int(prefs.blurRadius)) pt"))
                 }
-                ValueSlider(title: prefs.background == .solid ? "Transparency" : "Dimming",
-                            value: $prefs.backgroundOpacity, range: 0...0.9, valueText: percent(prefs.backgroundOpacity))
+                if prefs.background == .solid {
+                    // Shows how see-through the colour really is, not the setting's raw value.
+                    ValueSlider(title: "Transparency", value: $prefs.backgroundOpacity, range: 0...0.9,
+                                valueText: percent(1 - BackgroundView.solidOpacity(prefs.backgroundOpacity, reduceTransparency: reduceTransparency)))
+                    if reduceTransparency {
+                        Text("Reduce Transparency is on in Accessibility settings, so the colour is opaque.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    ValueSlider(title: "Dimming", value: $prefs.backgroundOpacity, range: 0...0.9, valueText: percent(prefs.backgroundOpacity))
+                }
             }
             Section("Icons") {
                 ValueSlider(title: "Icon size", value: $prefs.iconScale, range: 0.6...1.4, valueText: percent(prefs.iconScale))
@@ -293,7 +316,9 @@ struct LayoutSettings: View {
     var body: some View {
         @Bindable var prefs = state.prefs
         let grid = state.grid
-        let after = grid.pageCountAfterResize(rows: rows, columns: columns)
+        let preview = grid.resized(rows: rows, columns: columns)
+        let after = preview.pages.count
+        let moves = grid.pagesDiffer(from: preview)
         Form {
             Section("Grid size") {
                 // Widened to take in the grid's own size, which a loaded file can set anywhere in
@@ -303,14 +328,15 @@ struct LayoutSettings: View {
                 if rows != grid.rows || columns != grid.columns {
                     Group {
                         if after != grid.pages.count { Text("Items re-flow to fill each page in order: \(grid.pages.count) → \(after) pages.") }
-                        else { Text("Items re-flow to fill each page in order.") }
+                        else if moves { Text("Items re-flow to fill each page in order, so some move to another page.") }
+                        else { Text("Every item stays on its page.") }
                     }
-                        .font(.caption).foregroundStyle(after != grid.pages.count ? .orange : .secondary)
+                        .font(.caption).foregroundStyle(moves ? .orange : .secondary)
                     HStack {
                         Spacer()
                         Button("Revert") { rows = grid.rows; columns = grid.columns }
                         Button("Apply") {
-                            if after != grid.pages.count { confirm = true } else { apply() }
+                            if moves { confirm = true } else { apply() }
                         }
                         .keyboardShortcut(.defaultAction)
                     }
@@ -337,7 +363,7 @@ struct LayoutSettings: View {
         .confirmationDialog("Re-flow the grid?", isPresented: $confirm) {
             Button("Resize to \(rows) × \(columns)") { apply() }
         } message: {
-            Text("Items move between pages, and titles of pages past the last one are dropped. You can undo this from the grid with ⌘Z.")
+            Text("Items move between pages, and each page takes the title of the page its first item came from. You can undo this from the grid with ⌘Z.")
         }
     }
 
@@ -397,9 +423,19 @@ struct LibrarySettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extra folders to scan") {
+                let unreadable = state.unreadableFolders
                 ForEach(prefs.extraFolders, id: \.self) { path in
                     HStack {
-                        Text(path).lineLimit(1).truncationMode(.middle)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(path).lineLimit(1).truncationMode(.middle)
+                            if !FileManager.default.fileExists(atPath: path) {
+                                Text("Not found. Its apps stay on the grid until it's back.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            } else if unreadable.contains(path) {
+                                Text("LaunchGrid couldn't read this folder. Check its permissions in Privacy & Security, or remove it and add it again.")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                        }
                         Spacer()
                         Button(role: .destructive) {
                             prefs.extraFolders.removeAll { $0 == path }
@@ -418,6 +454,12 @@ struct LibrarySettings: View {
                         prefs.extraFolders.append(url.path)
                         actions.foldersChanged()
                     }
+                }
+                // Folders inside the scan folders, or the standard ones, that couldn't be read.
+                let others = unreadable.filter { !prefs.extraFolders.contains($0) }
+                if !others.isEmpty {
+                    Text("Couldn't be read, so new apps there won't appear: \(others.map { ($0 as NSString).abbreviatingWithTildeInPath }.formatted(.list(type: .and)))")
+                        .font(.caption).foregroundStyle(.orange)
                 }
             }
             Section("Grid file") {
@@ -655,7 +697,15 @@ struct FirstRunView: View {
             }
             option("Load a grid file…", "A file saved from LaunchGrid, or an AppGrid .agrid file.", "doc") { actions.loadFile() }
             Divider()
-            Text("Open LaunchGrid with **\(KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers))**, the menu bar icon, or the Dock icon.")
+            // Only the icons that are on: the Dock icon is off by default.
+            let shortcut = KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers)
+            Group {
+                switch (state.prefs.showInMenuBar, state.prefs.showInDock) {
+                case (true, true): Text("Open LaunchGrid with **\(shortcut)**, the menu bar icon, or the Dock icon.")
+                case (false, true): Text("Open LaunchGrid with **\(shortcut)** or the Dock icon.")
+                default: Text("Open LaunchGrid with **\(shortcut)** or the menu bar icon.")
+                }
+            }
                 .foregroundStyle(.secondary)
         }
         .padding(24)

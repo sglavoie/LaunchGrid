@@ -60,7 +60,8 @@ final class Preferences {
     var windowMode: WindowMode { didSet { d.set(windowMode.rawValue, forKey: "windowMode") } }
     var background: BackgroundStyle { didSet { d.set(background.rawValue, forKey: "background") } }
     var solidColorHex: String { didSet { d.set(solidColorHex, forKey: "solidColorHex") } }
-    /// Strength of the darkening tint (or colour opacity for solid backgrounds).
+    /// Strength of the darkening tint, or for solid backgrounds of the colour's transparency
+    /// (`Background.solidOpacity` turns it into an opacity).
     var backgroundOpacity: Double { didSet { d.set(backgroundOpacity, forKey: "backgroundOpacity") } }
     var blurRadius: Double { didSet { d.set(blurRadius, forKey: "blurRadius") } }
     var customImagePath: String? { didSet { d.set(customImagePath, forKey: "customImagePath") } }
@@ -99,8 +100,9 @@ final class Preferences {
             "showLabels": true,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
-        hotkeyKeyCode = UInt32(d.integer(forKey: "hotkeyKeyCode"))
-        hotkeyModifiers = UInt32(d.integer(forKey: "hotkeyModifiers"))
+        // A hand-edited value out of range (`defaults write … -int -1`) falls back to ⌥Space.
+        hotkeyKeyCode = UInt32(exactly: d.integer(forKey: "hotkeyKeyCode")) ?? UInt32(kVK_Space)
+        hotkeyModifiers = UInt32(exactly: d.integer(forKey: "hotkeyModifiers")) ?? UInt32(optionKey)
         hotkeyEnabled = d.bool(forKey: "hotkeyEnabled")
         windowMode = WindowMode(rawValue: d.string(forKey: "windowMode") ?? "") ?? .fullScreen
         background = BackgroundStyle(rawValue: d.string(forKey: "background") ?? "") ?? .material
