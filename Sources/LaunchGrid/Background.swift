@@ -154,12 +154,14 @@ struct BlurredImage: View {
     }
 }
 
-final class ImageBlurCache: @unchecked Sendable {
+final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
     static let shared = ImageBlurCache()
     private let cache = NSCache<NSString, NSImage>()
     private let context = CIContext()
 
-    init() {
+    override init() {
+        super.init()
+        cache.delegate = self
         // A few screens' wallpapers and a custom image; older blurs are cheap to redo. An
         // unblurred one is as large as the screen (59 MB on a 5K display), so bytes count too.
         cache.countLimit = 8
@@ -168,8 +170,22 @@ final class ImageBlurCache: @unchecked Sendable {
 
     private let lock = NSLock()
     private var renderCount = 0
+    private var evictionCount = 0
+    /// Bytes of each blur the cache holds, by image, to report how much it keeps.
+    private var held: [ObjectIdentifier: Int] = [:]
+    /// Bytes of the blurs the cache holds now, for the debug scripts.
+    var heldBytes: Int { lock.withLock { held.values.reduce(0, +) } }
     /// Blurs made (not served from the cache), for the debug scripts.
     var renders: Int { lock.withLock { renderCount } }
+    /// Blurs the cache let go of to stay within its limits, for the debug scripts.
+    var evictions: Int { lock.withLock { evictionCount } }
+
+    func cache(_ cache: NSCache<AnyObject, AnyObject>, willEvictObject obj: Any) {
+        lock.withLock {
+            evictionCount += 1
+            if let image = obj as? NSImage { held[ObjectIdentifier(image)] = nil }
+        }
+    }
 
     /// The path and the file it names now: a picture replaced at the same path (a new file
     /// saved over it) is a new picture. Not by modification date, which would need a reason
@@ -218,7 +234,9 @@ final class ImageBlurCache: @unchecked Sendable {
         guard let cg = context.createCGImage(ci, from: extent) else { return nil }
         lock.withLock { renderCount += 1 }
         let out = NSImage(cgImage: cg, size: extent.size)
-        cache.setObject(out, forKey: key, cost: cg.bytesPerRow * cg.height)
+        let cost = cg.bytesPerRow * cg.height
+        lock.withLock { held[ObjectIdentifier(out)] = cost }
+        cache.setObject(out, forKey: key, cost: cost)
         return out
     }
 }

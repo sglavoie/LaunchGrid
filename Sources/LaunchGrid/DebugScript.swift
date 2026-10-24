@@ -193,7 +193,7 @@ enum DebugScript {
                     // As if the Space changed.
                     NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
                 case "renders":
-                    print("renders: blurs=\(ImageBlurCache.shared.renders) wallpaperLookups=\(BackgroundView.wallpaperLookups)")
+                    print("renders: blurs=\(ImageBlurCache.shared.renders) evicted=\(ImageBlurCache.shared.evictions) heldMB=\(ImageBlurCache.shared.heldBytes >> 20) wallpaperLookups=\(BackgroundView.wallpaperLookups)")
                     fflush(stdout)
                 case "keys":
                     // Comma-separated virtual key codes or literal characters, each optionally after
@@ -435,6 +435,10 @@ enum DebugScript {
                     // "followmove:/old/A.app>/new/A.app", as when a bookmark finds a moved app.
                     let n = arg.components(separatedBy: ">")
                     if n.count == 2 { state.followMovedApps([n[0]: n[1]]) }
+                case "motion":
+                    // Whether Reduce Motion turns the animations off, as the views ask it.
+                    print("motion: reduce=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) drag=\(AppState.dragMotion(.default) != nil) page=\(AppState.pageAnimation != nil)")
+                    fflush(stdout)
                 case "volumes":
                     let listed = (try? FileManager.default.contentsOfDirectory(atPath: "/Volumes"))?.sorted()
                     print("volumes: \(Volume.mountedNames().map { $0.sorted() } ?? []) listing=\(listed.map { "\($0)" } ?? "denied")")
