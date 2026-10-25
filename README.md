@@ -17,7 +17,7 @@ scripts/install.sh           # build, quit the installed copy, replace /Applicat
 swift test                   # core and app-state tests
 ```
 
-With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just sandbox` (the build signed with the Mac App Store sandbox, so its layout and settings live in its container; quit the installed copy first), `just test`, `just test-app-store`, `just ci` and `just clean`.
+With [just](https://github.com/casey/just), `just` lists shortcuts for these: `just install`, `just uninstall` (removes the login item, quits and deletes the app, keeps your layout and settings), `just run`, `just scratch` (a throwaway layout and separate settings, beside the installed copy, logs in the terminal), `just sandbox` (the build signed with the Mac App Store sandbox, run as a first launch: its container is set aside and put back when it quits, and `just sandbox --keep` keeps it instead; quit the installed copy first), `just test`, `just test-app-store`, `just ci` and `just clean`.
 
 CI (`.github/workflows/ci.yml`) builds, tests and bundles on macOS 26, runs the tests again against the Mac App Store variant (`just test-app-store`) and checks `scripts/*.sh` with shellcheck.
 

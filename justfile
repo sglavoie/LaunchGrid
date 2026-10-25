@@ -31,10 +31,10 @@ run config="release": (bundle config)
 scratch config="debug": (bundle config)
     scripts/scratch.sh
 
-# Bundle with the Mac App Store build's sandbox and run it, with logs in the terminal. Its layout
-# and settings live in its container; quit the installed copy first, or that one takes over
-sandbox config="debug":
-    scripts/sandbox.sh {{config}}
+# Its container is set aside and put back on quit. Quit the installed copy first, or that one takes over
+# Run the sandboxed build as a first launch, logs in the terminal (--keep: use its container as it is)
+sandbox *args:
+    scripts/sandbox.sh {{args}}
 
 # Build and install into /Applications, then relaunch (pass --no-open to skip)
 install *args:
