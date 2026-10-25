@@ -208,10 +208,12 @@ final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
         defer { try? handle.close() }
         let chunk = 64 * 1024
         var hasher = Hasher()
-        hasher.combine((try? handle.read(upToCount: chunk)) ?? Data())
+        // By its bytes: `Data`'s own hash takes only the first 80 on some Foundation versions.
+        func combine(_ data: Data?) { data.map { $0.withUnsafeBytes { hasher.combine(bytes: $0) } } }
+        combine(try? handle.read(upToCount: chunk))
         if let end = try? handle.seekToEnd(), end > UInt64(chunk) {
             try? handle.seek(toOffset: max(end - UInt64(chunk), UInt64(chunk)))
-            hasher.combine((try? handle.read(upToCount: chunk)) ?? Data())
+            combine(try? handle.read(upToCount: chunk))
         }
         return hasher.finalize()
     }
