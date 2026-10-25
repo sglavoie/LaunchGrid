@@ -212,6 +212,14 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
                 "the moved Xcode is the tile's; the beta is still missing")
     }
 
+    @Test func aTileOnAnEjectedVolumeHidesNoInstalledCopy() {
+        let ext = AppRef(bundleID: "com.foo", path: "/Volumes/Ext/Foo.app", name: "Foo")
+        let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(ext)])])
+        let local = installed("Foo", id: "com.foo")
+        #expect(Reconciler.missingApps(in: g, installed: [local], isReachable: { !$0.hasPrefix("/Volumes/Ext/") }) == [local])
+        #expect(Reconciler.missingApps(in: g, installed: [local]).isEmpty, "reachable and gone: it moved there")
+    }
+
     @Test func aRestoredAppWhoseNeighboursAreAllGoneGoesToTheStart() {
         let ids = (0..<3).map { _ in UUID() }
         #expect(Grid.slot(after: [UUID(), UUID(), UUID(), UUID()], fallback: 3, in: ids) == 0,
@@ -401,6 +409,16 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.pages.map(titles) == [["A"], ["F"], ["C"], []])
         #expect(g.pages[1].title == "Games")
         #expect(g.pages[1].items[0].folder?.apps.map(\.name) == ["B"])
+    }
+
+    @Test func theOnlyPageComesBackWithoutABlankOneBeside() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        var g = Grid(rows: 2, columns: 2, pages: [Page(title: "Mine", items: [.app(app("A"))])])
+        _ = Reconciler.reconcile(&g, installed: [installed("B")], autoAdd: false, now: t0)
+        #expect(g.pages.map(titles) == [[]])
+        _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("B")], autoAdd: false, now: t0 + 5)
+        #expect(g.pages.map(titles) == [["A"]])
+        #expect(g.pages[0].title == "Mine")
     }
 
     @Test func pagesEmptiedTogetherComeBackInPlaceWhateverTheOrder() {

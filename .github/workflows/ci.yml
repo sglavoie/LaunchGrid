@@ -90,6 +90,12 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :DTXcode' build/LaunchGrid.app/Contents/Info.plist
           codesign --verify --strict --verbose=2 build/LaunchGrid.app
           codesign -d --entitlements - build/LaunchGrid.app | grep -q com.apple.security.app-sandbox
+          # The debug scripts are compiled out (-DAPP_STORE): their environment variables, read
+          # only by DebugScript.swift and the code in AppDelegate.swift that starts it, are absent.
+          if strings -a build/LaunchGrid.app/Contents/MacOS/LaunchGrid | grep -E 'LAUNCHGRID_DEBUG_(SCRIPT|DIR)'; then
+            echo "::error::The Mac App Store binary contains debug-script code."
+            exit 1
+          fi
       - name: Save build products
         # Only from main: a cache saved by every pull request push would evict the useful ones.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

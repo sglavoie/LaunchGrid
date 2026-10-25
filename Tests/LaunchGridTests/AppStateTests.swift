@@ -390,6 +390,10 @@ func installed(_ name: String) -> InstalledApp {
         #expect(FolderWatcher.isRelevant("/Users/me/Downloads/Tools/Foo.app/", roots: roots))
         #expect(!FolderWatcher.isRelevant("/Users/me/Downloads/a/b/c/Foo.app/", roots: roots), "not scanned there")
         #expect(FolderWatcher.isRelevant("/private/elsewhere/x/y/z/", roots: roots), "outside the roots: rescan to be safe")
+        let xcode = ["/Applications/Xcode.app/Contents/Applications"]
+        #expect(FolderWatcher.isRelevant("/Applications/Xcode.app/Contents/Applications/", roots: xcode))
+        #expect(FolderWatcher.isRelevant("/Applications/Xcode.app/Contents/Applications/Instruments.app/Contents/", roots: xcode))
+        #expect(!FolderWatcher.isRelevant("/Applications/Xcode.app/Contents/Applications/Instruments.app/Contents/Resources/", roots: xcode))
     }
 
     @MainActor @Test func aFolderCreatedAfterWatchingStartsIsNoticed() async throws {
@@ -1154,5 +1158,78 @@ func installed(_ name: String) -> InstalledApp {
         let folder = try #require(state.openFolder)
         #expect(state.currentPage == 0 && folder.name == "F")
         #expect(folder.apps[state.focusIndex ?? -1].title == "App5")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct PageShownTests {
+    /// One page per app.
+    func onePagePerApp(_ names: [String]) -> AppState {
+        let state = makeState(names)
+        state.apply { g in g.pages = g.allApps.map { Page(items: [.app($0)]) } }
+        return state
+    }
+
+    @Test func thePageShownStaysWhenAnEarlierOneGoes() {
+        let state = onePagePerApp(["X", "F", "Y"])
+        state.goToPage(1)
+        state.apply { $0.pages.remove(at: 0) } // as a rescan can
+        #expect(state.currentItems.map(\.title) == ["F"])
+    }
+
+    @Test func endingASearchReopensTheFolderOnItsPage() throws {
+        let state = onePagePerApp(["X", "A", "B", "Y"])
+        state.apply { g in
+            g.pages[1].items += g.pages[2].items
+            g.pages.remove(at: 2)
+            _ = g.group(g.pages[1].items.map(\.id), name: "F")
+        }
+        let folder = try #require(state.grid.pages[1].items.first?.folder)
+        state.goToPage(1)
+        state.openFolder(folder.id)
+        state.folderBeforeSearch = (folder.id, 0) // as typing does
+        state.openFolderID = nil
+        state.query = "y"
+        state.apply { $0.pages.remove(at: 0) }
+        state.currentPage = 1 // wherever the view was left
+        state.endSearch()
+        #expect(state.openFolderID == folder.id)
+        #expect(state.currentItems.first?.id == folder.id, "over its own page")
+    }
+
+    @Test func undoingAPageDeletionShowsThePage() {
+        let state = onePagePerApp(["A", "B", "C"])
+        state.goToPage(1)
+        state.deleteCurrentPage()
+        #expect(state.currentPage == 0)
+        state.undo()
+        #expect(state.currentItems.map(\.title) == ["B"])
+        state.redo()
+        #expect(state.grid.pages.count == 2)
+    }
+
+    @Test func undoingAMoveThatEmptiedAPageShowsThatPage() throws {
+        let state = onePagePerApp(["A", "B", "C"])
+        let c = try #require(state.grid.pages[2].items.first?.id)
+        state.moveToPage([c], page: 0)
+        #expect(state.grid.pages.count == 2)
+        state.undo()
+        #expect(state.currentItems.map(\.title) == ["C"])
+    }
+
+    @Test func undoingAChangeOnThePageShownStaysThere() throws {
+        let state = onePagePerApp(["A", "B", "C"])
+        state.goToPage(2)
+        let c = try #require(state.currentItems.first?.id)
+        state.apply { $0.rename(c, to: "Renamed") }
+        state.undo()
+        #expect(state.currentPage == 2)
+    }
+
+    @Test func movingNothingLeftToANewPageAddsNoPage() {
+        let state = makeState(["A"])
+        let undoable = state.canUndo
+        state.moveToPage([UUID()], pageID: nil)
+        #expect(state.grid.pages.count == 1)
+        #expect(state.canUndo == undoable)
     }
 }

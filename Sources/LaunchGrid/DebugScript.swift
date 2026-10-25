@@ -182,6 +182,18 @@ enum DebugScript {
                     print("bookmarks: \((Preferences.appDefaults.dictionary(forKey: "bookmarks") ?? [:]).keys.sorted())")
                     fflush(stdout)
                 case "undo": state.undo()
+                case "redo": state.redo()
+                case "deletepage": state.deleteCurrentPage()
+                case "launch":
+                    // Opens app N of the current page, as a click does.
+                    if case .app(let a)? = state.currentItems[safe: Int(arg) ?? 0] { state.launch(a) }
+                case "front":
+                    // The app in front, and whether we are active or hidden.
+                    print("front: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-") active=\(NSApp.isActive) hidden=\(NSApp.isHidden)")
+                    fflush(stdout)
+                case "closewin":
+                    // Closes the window titled `arg`, as its close button does.
+                    NSApp.windows.first { $0.title == arg && $0.isVisible }?.performClose(nil)
                 case "bg":
                     // "bg:wallpaper", or "bg:/path/to/picture" for a custom image.
                     if arg.hasPrefix("/") {
@@ -216,7 +228,8 @@ enum DebugScript {
                     fflush(stdout)
                 case "keys":
                     // Comma-separated virtual key codes or literal characters, each optionally after
-                    // modifiers, e.g. "keys:n,o,125,opt+51,ctrl+a,36".
+                    // modifiers, e.g. "keys:n,o,125,opt+51,ctrl+a,36". "char@code" sends both, as a
+                    // layout does where that key types another letter: "cmd+я@6" is ⌘Z on Russian.
                     guard let window = overlay.window else { break }
                     let modifierNames: [String: NSEvent.ModifierFlags] = ["cmd": .command, "opt": .option, "ctrl": .control, "shift": .shift]
                     for var token in arg.split(separator: ",").map(String.init) {
@@ -226,8 +239,11 @@ enum DebugScript {
                             flags.insert(flag)
                             token = String(token[token.index(after: plus)...])
                         }
-                        let code = UInt16(token).flatMap { token.count > 1 ? $0 : nil }
-                        let chars = code == nil ? token : ""
+                        var code = UInt16(token).flatMap { token.count > 1 ? $0 : nil }
+                        var chars = code == nil ? token : ""
+                        if let at = token.lastIndex(of: "@"), at != token.startIndex, let c = UInt16(token[token.index(after: at)...]) {
+                            (chars, code) = (String(token[..<at]), c)
+                        }
                         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
                                                      windowNumber: window.windowNumber, context: nil, characters: chars,
                                                      charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code ?? 0)
@@ -469,6 +485,10 @@ enum DebugScript {
                 case "apps":
                     // Every app on the grid whose name contains `arg`, with its path.
                     print("apps: \(state.grid.allApps.filter { $0.name.localizedCaseInsensitiveContains(arg) }.map(\.path))")
+                    fflush(stdout)
+                case "missingapps":
+                    // Add Missing Apps' list, names containing `arg`.
+                    print("missingapps: \(state.missingApps.map(\.path).filter { arg.isEmpty || $0.localizedCaseInsensitiveContains(arg) })")
                     fflush(stdout)
                 case "followmove":
                     // "followmove:/old/A.app>/new/A.app", as when a bookmark finds a moved app.

@@ -217,16 +217,17 @@ public struct InstalledApp: Equatable, Hashable, Sendable {
     }
 }
 
-// Lenient decoding: missing optional keys fall back to defaults so hand-edited
-// or older files still load, and an entry that can't be read is skipped, not the whole file.
+// Lenient decoding: missing or malformed optional keys (an ID that isn't a UUID, a number for a
+// title) fall back to defaults so hand-edited or older files still load, and an entry that can't
+// be read (an app without a path) is skipped, not the whole file.
 extension Grid {
     private enum CodingKeys: String, CodingKey { case version, rows, columns, pages, removedBundleIDs, recentlyPruned }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            rows: try c.decodeIfPresent(Int.self, forKey: .rows) ?? 5,
-            columns: try c.decodeIfPresent(Int.self, forKey: .columns) ?? 7,
+            rows: (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? 5,
+            columns: (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7,
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
             removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs) ?? []),
             // Disposable: an unreadable list is dropped rather than failing the whole file.
@@ -254,8 +255,8 @@ extension Page {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
-            title: try c.decodeIfPresent(String.self, forKey: .title),
+            id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
+            title: try? c.decodeIfPresent(String.self, forKey: .title),
             items: try c.decodeLossily(GridItem.self, forKey: .items) ?? []
         )
     }
@@ -267,11 +268,11 @@ extension AppRef {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
-            bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID),
+            id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
+            bundleID: try? c.decodeIfPresent(String.self, forKey: .bundleID),
             path: try c.decode(String.self, forKey: .path),
-            name: try c.decodeIfPresent(String.self, forKey: .name),
-            displayName: try c.decodeIfPresent(String.self, forKey: .displayName)
+            name: try? c.decodeIfPresent(String.self, forKey: .name),
+            displayName: try? c.decodeIfPresent(String.self, forKey: .displayName)
         )
     }
 }
@@ -282,8 +283,8 @@ extension Folder {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
-            name: try c.decodeIfPresent(String.self, forKey: .name) ?? String(localized: "Folder"),
+            id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
+            name: (try? c.decodeIfPresent(String.self, forKey: .name)) ?? String(localized: "Folder"),
             apps: try c.decodeLossily(AppRef.self, forKey: .apps) ?? []
         )
     }

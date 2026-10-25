@@ -7,7 +7,8 @@ public enum Search {
     /// a different word of the name, in any order ("word micro" finds "Microsoft Word"), and
     /// as initials when its words, in order, start words or spell their initials ("vs code").
     /// Separators other than spaces don't count towards a prefix, so "wifi" finds "Wi-Fi Explorer"
-    /// and "visual-" finds "Visual Studio Code" as if typed without them. A space typed in the
+    /// and "visual-" finds "Visual Studio Code" as if typed without them, a little below a prefix
+    /// as typed: "c++" is "c" that way, and "C++ Builder" must still come before "Chess". A space typed in the
     /// query may be skipped ("wi fi" finds "WiFiman"), but one in the name may not: "apps" isn't
     /// a prefix of "App Store".
     /// Returns nil when there is no match.
@@ -23,7 +24,7 @@ public enum Search {
         let queryWords = q.split(whereSeparator: isSeparator)
         let (nameKey, queryKey) = (spacedWords(n), spacedWords(q))
         if !queryKey.isEmpty, nameKey.hasPrefix(queryKey) || nameKey.hasPrefix(queryKey.filter { $0 != " " }) {
-            return 900 - min(n.count, 99)
+            return 850 - min(n.count, 99)
         }
         if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
@@ -118,31 +119,43 @@ public enum Search {
 
     /// Whether each query word starts a different word of the name, so "word word" doesn't
     /// find "Microsoft Word" through its one "Word".
+    /// A matching of query words to name words, grown one query word at a time by moving
+    /// earlier ones aside, so a long query of like words takes steps, not every assignment.
     static func startsDistinctWords(_ queryWords: [Substring], of words: [String]) -> Bool {
-        var used = Array(repeating: false, count: words.count)
-        func assign(_ i: Int) -> Bool {
-            guard i < queryWords.count else { return true }
-            for (k, word) in words.enumerated() where !used[k] && word.hasPrefix(queryWords[i]) {
-                used[k] = true
-                if assign(i + 1) { return true }
-                used[k] = false
+        guard queryWords.count <= words.count else { return false }
+        // For each name word, the query word that starts it.
+        var owner = [Int?](repeating: nil, count: words.count)
+        func place(_ i: Int, _ seen: inout [Bool]) -> Bool {
+            for (k, word) in words.enumerated() where !seen[k] && word.hasPrefix(queryWords[i]) {
+                seen[k] = true
+                if owner[k].map({ place($0, &seen) }) ?? true {
+                    owner[k] = i
+                    return true
+                }
             }
             return false
         }
-        return assign(0)
+        return queryWords.indices.allSatisfy { i in
+            var seen = [Bool](repeating: false, count: words.count)
+            return place(i, &seen)
+        }
     }
 
     /// Whether the query words, in order, each start a word of the name or spell the initials
     /// of a run of its words ("vs code" for "Visual Studio Code"); words in between may be skipped.
     static func startsWordsOrInitials(_ queryWords: [Substring], of words: [String]) -> Bool {
+        // Positions already found not to match, so each is tried once.
+        var failed = Set<[Int]>()
         func match(_ i: Int, _ j: Int) -> Bool {
             guard i < queryWords.count else { return true }
-            guard j < words.count else { return false }
+            guard j < words.count, !failed.contains([i, j]) else { return false }
             let w = queryWords[i]
             if words[j].hasPrefix(w), match(i + 1, j + 1) { return true }
             if w.count > 1, j + w.count <= words.count,
                zip(w, words[j...]).allSatisfy({ $0 == $1.first }), match(i + 1, j + w.count) { return true }
-            return match(i, j + 1)
+            if match(i, j + 1) { return true }
+            failed.insert([i, j])
+            return false
         }
         return match(0, 0)
     }

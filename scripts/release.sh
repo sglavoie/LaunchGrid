@@ -18,10 +18,18 @@ ZIP="$OUT_DIR/LaunchGrid.zip"
 require_clean_tree
 require_gh
 require_pushed_head
+require_green_ci
 # Building and notarising takes minutes, and publish.sh would then refuse a version that is
 # already released.
 if [ -n "$(released_commit)" ]; then
     echo "Release v$VERSION already exists; bump VERSION in scripts/bundle.sh and commit first." >&2
+    exit 1
+fi
+# One version, one build: an App Store upload of this version from another commit would share
+# its number with a different binary.
+UPLOADED="$(uploaded_commit)"
+if [ -n "$UPLOADED" ] && [ "$UPLOADED" != "$(git rev-parse HEAD)" ]; then
+    echo "v$VERSION was uploaded to the App Store from another commit; bump VERSION in scripts/bundle.sh and commit first." >&2
     exit 1
 fi
 
@@ -35,7 +43,8 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
 fi
 export SIGN_IDENTITY
 
-UNIVERSAL=1 scripts/bundle.sh release
+# Not the App Store variant or its sandbox, whatever the shell has set.
+env -u APP_STORE -u SANDBOX -u ENTITLEMENTS UNIVERSAL=1 scripts/bundle.sh release
 codesign --verify --strict --verbose=2 build/LaunchGrid.app
 
 # From here on, work only on copies in build/release: other recipes rebuild build/LaunchGrid.app,

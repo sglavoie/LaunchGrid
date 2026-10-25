@@ -124,7 +124,8 @@ struct BlurredImage: View {
             return
         }
         // Off the main thread: a picture on a stalled network volume mustn't hang the overlay.
-        let identity = await Task.detached(priority: .userInitiated) { ImageBlurCache.identity(of: url) }.value
+        // One at a time, so shows while it stalls queue behind it rather than each hold a thread.
+        let identity = await Disk.run(on: ImageBlurCache.queue) { ImageBlurCache.identity(of: url) }
         guard !Task.isCancelled else { return }
         let target = ImageBlurCache.Target(radius: radius, size: size, pixelScale: displayScale)
         if let hit = ImageBlurCache.shared.cached(identity: identity, target) { show(hit, identity); return }
@@ -136,9 +137,9 @@ struct BlurredImage: View {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
         }
-        let made = await Task.detached(priority: .userInitiated) {
+        let made = await Disk.run(on: ImageBlurCache.queue) {
             ImageBlurCache.shared.image(url: url, identity: identity, target).map(SendableImage.init)
-        }.value?.image
+        }?.image
         guard !Task.isCancelled else { return }
         show(made, made == nil ? nil : identity)
     }
@@ -157,6 +158,8 @@ struct BlurredImage: View {
 
 final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
     static let shared = ImageBlurCache()
+    /// Where pictures are read and blurred.
+    static let queue = DispatchQueue(label: "launchgrid.pictures", qos: .userInitiated)
     private let cache = NSCache<NSString, NSImage>()
     private let context = CIContext()
 

@@ -32,7 +32,7 @@ Guideline 2.1(a) rejects "empty websites and other temporary content", so deploy
 
 ### 1. App Sandbox
 
-The App Store build is signed with the sandbox, `files.user-selected.read-write` (the save and open panels) and `files.bookmarks.app-scope`. The downloadable build stays unsandboxed; the code checks `Sandbox.isActive` at run time, so both builds share it.
+The App Store build is signed with the sandbox, `files.user-selected.read-write` (the save and open panels), `files.bookmarks.app-scope` and `temporary-exception.files.home-relative-path.read-only` for `/Applications/` (`~/Applications`; see below). The downloadable build stays unsandboxed; the code checks `Sandbox.isActive` at run time, so both builds share it.
 
 | Feature | Inside the sandbox |
 | --- | --- |

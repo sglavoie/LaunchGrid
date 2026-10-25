@@ -56,9 +56,19 @@ app-store *args:
 publish *notes:
     scripts/publish.sh {{quote(notes)}}
 
-# Build, test and bundle (universal), as CI does
+# Run CI's checks: build, test and bundle both variants, verify the bundles, shellcheck (leaves the App Store one in build/)
 ci: build test test-app-store
-    UNIVERSAL=1 scripts/bundle.sh release
+    env -u APP_STORE -u SANDBOX -u ENTITLEMENTS UNIVERSAL=1 scripts/bundle.sh release
+    plutil -lint {{app}}/Contents/Info.plist scripts/PrivacyInfo.xcprivacy scripts/LaunchGrid.entitlements
+    codesign --verify --strict --verbose=2 {{app}}
+    touch build/stand-in.provisionprofile
+    env -u ENTITLEMENTS APP_STORE=1 SANDBOX=1 PROVISIONING_PROFILE=build/stand-in.provisionprofile scripts/bundle.sh release
+    plutil -lint {{app}}/Contents/Info.plist
+    /usr/libexec/PlistBuddy -c 'Print :DTXcode' {{app}}/Contents/Info.plist
+    codesign --verify --strict --verbose=2 {{app}}
+    codesign -d --entitlements - {{app}} | grep -q com.apple.security.app-sandbox
+    ! strings -a {{app}}/Contents/MacOS/LaunchGrid | grep -E 'LAUNCHGRID_DEBUG_(SCRIPT|DIR)'
+    shellcheck scripts/*.sh
 
 # Serve the website (launchgrid.sglavoie.com) locally with the Workers runtime
 website:

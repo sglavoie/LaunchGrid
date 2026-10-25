@@ -231,11 +231,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
     // MARK: NSWindowDelegate
 
     // Saved once a resize or move comes to rest, not at each of its many steps.
+    // Not for `placePanel`'s own moves: the save would run once `placing` is over.
     func windowDidResize(_ notification: Notification) {
-        if panel?.inLiveResize != true { scheduleFrameSave() }
+        if panel?.inLiveResize != true, !placing { scheduleFrameSave() }
     }
     func windowDidEndLiveResize(_ notification: Notification) { saveWindowFrame() }
-    func windowDidMove(_ notification: Notification) { scheduleFrameSave() }
+    func windowDidMove(_ notification: Notification) {
+        if !placing { scheduleFrameSave() }
+    }
 
     private func scheduleFrameSave() {
         frameSaveTask?.cancel()
@@ -335,7 +338,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let cmd = mods.contains(.command)
         // Mid-drag, only Esc (cancel) and ⌘1…9 (carry the items to a page) do anything.
         if state.drag.active && code != kVK_Escape {
-            if cmd, let digit = event.charactersIgnoringModifiers.flatMap(Int.init), (1...9).contains(digit) {
+            if cmd, let digit = Int(Self.shortcutKey(event)), (1...9).contains(digit) {
                 state.dragGoToPage(digit - 1)
             }
             return nil
@@ -424,7 +427,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
 
         if cmd {
-            let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            let key = Self.shortcutKey(event)
             switch key {
             case "z": mods.contains(.shift) ? state.redo() : state.undo()
             case "e": state.editing.toggle()
@@ -457,7 +460,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if mods.contains(.control) {
             guard !state.query.isEmpty else { return event }
             // The Emacs keys every macOS text field takes.
-            switch event.charactersIgnoringModifiers?.lowercased() ?? "" {
+            switch Self.shortcutKey(event) {
             case "a": editSearch { $0.moveToStart() }
             case "e": editSearch { $0.moveToEnd() }
             case "b": editSearch { $0.moveLeft() }
@@ -492,6 +495,39 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Types into the search at its caret. Starting one closes an open folder, remembering it
     /// for `AppState.endSearch()`.
+    private static let topRowDigits: [Int: String] = [
+        kVK_ANSI_1: "1", kVK_ANSI_2: "2", kVK_ANSI_3: "3", kVK_ANSI_4: "4", kVK_ANSI_5: "5",
+        kVK_ANSI_6: "6", kVK_ANSI_7: "7", kVK_ANSI_8: "8", kVK_ANSI_9: "9",
+    ]
+
+    /// The key a ⌘ or ⌃ shortcut names, lowercased, as menus read it. A layout without Latin
+    /// letters (Russian, Greek) names its keys by the Latin layout the person also uses, and
+    /// the top row's keys are its digits wherever they are, so ⌘1 works where that key types
+    /// "&" (French).
+    static func shortcutKey(_ event: NSEvent) -> String {
+        if let digit = topRowDigits[Int(event.keyCode)] { return digit }
+        let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        guard !typed.unicodeScalars.allSatisfy(\.isASCII) else { return typed }
+        return latinKey(event.keyCode) ?? typed
+    }
+
+    /// What `keyCode` types, unshifted, on the current ASCII-capable layout.
+    private static func latinKey(_ keyCode: UInt16) -> String? {
+        guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let layoutData = Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(layoutData) else { return nil }
+        var deadKeys: UInt32 = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        var length = 0
+        let status = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) {
+            UCKeyTranslate($0, keyCode, UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+                           OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, chars.count, &length, &chars)
+        }
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: chars, count: length).lowercased()
+    }
+
     private func insertIntoSearch(_ text: String) {
         guard !text.isEmpty else { return }
         if state.query.isEmpty {

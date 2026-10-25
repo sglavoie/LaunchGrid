@@ -1051,7 +1051,8 @@ struct MenuEntry {
             entries.append(.button(String(localized: "Open")) { state.launch(a) })
             entries.append(.button(String(localized: "Show in Finder")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: a.path)])
-                state.onHide()
+                // Finder comes forward like a launched app: an app opened behind mustn't cover it.
+                state.onHideForLaunch()
             })
         } else if case .folder(let f) = item {
             entries.append(.button(String(localized: "Open Folder")) { state.openFolder(f.id) })

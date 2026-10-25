@@ -278,6 +278,7 @@ struct AppearanceSettings: View {
                     // Shows how see-through the colour really is, not the setting's raw value.
                     ValueSlider(title: "Transparency", value: $prefs.backgroundOpacity, range: 0...0.9,
                                 valueText: percent(1 - BackgroundView.solidOpacity(prefs.backgroundOpacity, reduceTransparency: reduceTransparency)))
+                        .disabled(reduceTransparency)
                     if reduceTransparency {
                         Text("Reduce Transparency is on in Accessibility settings, so the colour is opaque.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -399,6 +400,7 @@ struct LayoutSettings: View {
                     Spacer()
                     Button("Sort Everything…") { confirmSort = true }
                 }
+                .announcing(sortStatus)
                 .task(id: sortStatus) {
                     guard sortStatus != nil else { return }
                     try? await Task.sleep(for: .seconds(4))
@@ -439,6 +441,8 @@ struct LibrarySettings: View {
     @State private var confirmRebuild: BuildStyle?
     /// Feedback for Rescan Now and Regenerate Icons.
     @State private var libraryStatus: String?
+    /// While one of them runs, its status stays until it calls back.
+    @State private var libraryBusy = false
     /// The grid file last saved from here, to confirm it and show it in Finder.
     @State private var savedFile: URL?
     /// What the last load or import from here brought in.
@@ -457,20 +461,21 @@ struct LibrarySettings: View {
                 }
                 HStack {
                     Button("Rescan Now") {
-                        libraryStatus = String(localized: "Rescanning…")
-                        state.rescan { libraryStatus = String(localized: "Found \(state.installed.count) apps") }
+                        (libraryBusy, libraryStatus) = (true, String(localized: "Rescanning…"))
+                        state.rescan { (libraryBusy, libraryStatus) = (false, String(localized: "Found \(state.installed.count) apps")) }
                     }
                     Button("Regenerate Icons") {
-                        libraryStatus = String(localized: "Regenerating icons…")
-                        state.regenerateIcons { libraryStatus = String(localized: "Icons regenerated") }
+                        (libraryBusy, libraryStatus) = (true, String(localized: "Regenerating icons…"))
+                        state.regenerateIcons { (libraryBusy, libraryStatus) = (false, String(localized: "Icons regenerated")) }
                     }
                     if let libraryStatus {
                         Text(libraryStatus).font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                .announcing(libraryStatus)
                 .task(id: libraryStatus) {
                     // A result stays a few seconds; work in progress until it calls back.
-                    guard let status = libraryStatus, !status.hasSuffix("…") else { return }
+                    guard libraryStatus != nil, !libraryBusy else { return }
                     try? await Task.sleep(for: .seconds(4))
                     if !Task.isCancelled { libraryStatus = nil }
                 }
@@ -539,12 +544,21 @@ struct LibrarySettings: View {
                             .buttonStyle(.link)
                     }
                     .font(.caption)
+                    .announcing(String(localized: "Saved \(savedFile.lastPathComponent)"))
                 }
+                let (appGrid, launchpad) = (LaunchpadImporter.appGridDatabaseURL != nil, LaunchpadImporter.launchpadDatabaseURL != nil)
                 HStack {
                     Button("Import from AppGrid…") { actions.importAppGrid { importStatus = $0 } }
-                        .disabled(LaunchpadImporter.appGridDatabaseURL == nil)
+                        .disabled(!appGrid)
                     Button("Import from Launchpad…") { actions.importLaunchpad { importStatus = $0 } }
-                        .disabled(LaunchpadImporter.launchpadDatabaseURL == nil)
+                        .disabled(!launchpad)
+                }
+                // Why a button is dimmed: macOS 26 no longer keeps Launchpad's layout.
+                switch (appGrid, launchpad) {
+                case (false, false): Text("No AppGrid or Launchpad layout was found on this Mac; macOS 26 no longer keeps Launchpad’s.").font(.caption).foregroundStyle(.secondary)
+                case (false, true): Text("No AppGrid layout was found on this Mac.").font(.caption).foregroundStyle(.secondary)
+                case (true, false): Text("No Launchpad layout was found on this Mac; macOS 26 no longer keeps one.").font(.caption).foregroundStyle(.secondary)
+                case (true, true): EmptyView()
                 }
                 if let importStatus {
                     HStack(spacing: 6) {
@@ -553,6 +567,7 @@ struct LibrarySettings: View {
                         Text(importStatus)
                     }
                     .font(.caption)
+                    .announcing(importStatus)
                 }
                 Button("Show Data Folder in Finder") { state.showDataFolder() }
                 Text("Loading or importing replaces the current layout; ⌘Z in the grid undoes it.")
@@ -635,7 +650,8 @@ struct AddMissingAppsView: View {
             }
         }
         .padding(20)
-        .frame(width: 560, height: 520)
+        // The window can grow, to show more of each path.
+        .frame(minWidth: 560, minHeight: 520)
     }
 
     /// Adds apps from anywhere on disk, along with those already ticked in the list.
@@ -837,5 +853,14 @@ struct FirstRunView: View {
         }
         .buttonStyle(.plain)
         .disabled(requiresScan && state.installed.isEmpty)
+    }
+}
+
+extension View {
+    /// Reads `message` out to VoiceOver whenever it appears or changes, as the grid's toasts are.
+    func announcing(_ message: String?) -> some View {
+        onChange(of: message, initial: true) { _, message in
+            if let message { AccessibilityNotification.Announcement(message).post() }
+        }
     }
 }

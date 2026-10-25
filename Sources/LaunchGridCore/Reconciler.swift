@@ -223,8 +223,11 @@ public enum Reconciler {
     }
 
     /// Installed apps that are not on the grid, for "Add Missing Apps…". A copy sharing its
-    /// bundle ID with one on the grid (Xcode-beta beside Xcode) counts as missing.
+    /// bundle ID with one on the grid (Xcode-beta beside Xcode) counts as missing. As in
+    /// `reconcile`, a ref out of reach (its volume ejected) isn't taken to have moved, so it
+    /// doesn't hide an installed copy until it comes back.
     public static func missingApps(in grid: Grid, installed: [InstalledApp],
+                                   isReachable: (String) -> Bool = { _ in true },
                                    wasInstalledBefore: (String) -> Bool = { _ in false }) -> [InstalledApp] {
         let paths = Set(grid.allApps.map(\.path))
         let installedPaths = Set(installed.map(\.path))
@@ -233,7 +236,7 @@ public enum Reconciler {
         let offGrid = installed.filter { !paths.contains($0.path) }
         let byKey = Dictionary(grouping: offGrid, by: \.key)
         var claimed = Set<String>()
-        for ref in grid.allApps where !installedPaths.contains(ref.path) {
+        for ref in grid.allApps where !installedPaths.contains(ref.path) && isReachable(ref.path) {
             let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) }
             if let copy = likelyMove(of: ref, among: free, wasInstalledBefore: wasInstalledBefore) { claimed.insert(copy.path) }
         }
@@ -366,6 +369,11 @@ extension Grid {
             insert([item], page: p, at: Self.slot(after: entry.before, fallback: entry.index, in: pages[p].items.map(\.id)))
         } else if entry.pageEmptied == true {
             let page = Page(id: entry.pageID, title: entry.pageTitle, items: [item])
+            // Its page was the only one, so `normalize` left a blank page in its place.
+            if pages.count == 1, pages[0].items.isEmpty, pages[0].title == nil {
+                pages = [page]
+                return
+            }
             let at = Self.slot(after: entry.pageBefore, fallback: entry.pageIndex ?? pages.count, in: pages.map(\.id))
             pages.insert(page, at: min(max(0, at), pages.count))
         } else {

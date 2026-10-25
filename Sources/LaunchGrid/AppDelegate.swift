@@ -580,6 +580,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Closed without choosing: start with the category layout.
             state.build(style: .byCategory)
         }
+        // Without a Dock icon, nothing of ours is left to type into: hand focus back to the
+        // app before, as hiding the grid does. Next turn, once the window is gone.
+        DispatchQueue.main.async { [self] in
+            // The About panel counts; the grid's own panel is checked by `isVisible`.
+            let others = NSApp.windows.contains { $0.isVisible && $0.level == .normal && !($0 is OverlayPanel) }
+            if !state.prefs.showInDock, !overlay.isVisible, !others, NSApp.isActive { NSApp.hide(nil) }
+        }
     }
 
     @objc func showOverlay() { overlay.show() }
@@ -698,13 +705,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let installed = state.installed.map(\.path)
         Task {
             // Reading the database and asking Launch Services about every app can take a while.
-            let outcome = await Task.detached(priority: .userInitiated) {
+            let outcome = await Disk.run {
                 Result {
                     try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed) { id in
                         NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
                     }
                 }
-            }.value
+            }
             switch outcome {
             case .failure(let error):
                 showError(String(localized: "Could not import from \(source)"), error.localizedDescription)
@@ -791,14 +798,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// Reads and checks a layout file; nil, after saying why, when it can't be loaded.
     private func readLayout(at url: URL) async -> OpenedLayout? {
-        let outcome = await Task.detached(priority: .userInitiated) {
+        let outcome = await Disk.run {
             Result { () throws -> OpenedLayout in
                 let data = try Data(contentsOf: url)
                 if data.prefix(16) == Data("SQLite format 3\0".utf8) { return .database }
                 let (grid, skipped) = try GridStore.decodeCountingSkipped(data)
                 return .grid(grid, skipped: skipped)
             }
-        }.value
+        }
         switch outcome {
         case .success(let layout): return layout
         case .failure(let error):

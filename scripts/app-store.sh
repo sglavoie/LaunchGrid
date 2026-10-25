@@ -12,6 +12,10 @@
 #     AuthKey_<key ID>.p8 in ~/.appstoreconnect/private_keys, and ASC_KEY_ID and ASC_ISSUER_ID
 #     set or in private/app-store-connect.env.
 # SIGN_IDENTITY and INSTALLER_IDENTITY default to the keychain's only identity of each kind.
+# An upload records its commit as the tag app-store/vVERSION, pushed to origin so every clone
+# sees it: release.sh, and a later upload, refuse that version from any other commit, as two
+# binaries would share its number. A Transporter upload isn't recorded; tag it the same way:
+#   git tag app-store/vVERSION COMMIT && git push origin app-store/vVERSION
 set -eu
 cd "$(dirname "$0")/.."
 BUNDLE_ID=com.sglavoie.launchgrid
@@ -39,11 +43,17 @@ fi
 require_clean_tree
 require_gh
 require_pushed_head
-# One version, one build: the App Store build of a version already released on GitHub has to
-# come from that release's commit, or two different binaries would share its number.
+require_green_ci
+# One version, one build: the App Store build of a version already released on GitHub, or
+# already uploaded, has to come from that commit, or two different binaries would share its number.
 RELEASED="$(released_commit)"
 if [ -n "$RELEASED" ] && [ "$RELEASED" != "$(git rev-parse HEAD)" ]; then
     echo "v$VERSION was released from another commit; bump VERSION in scripts/bundle.sh and commit first." >&2
+    exit 1
+fi
+UPLOADED="$(uploaded_commit)"
+if [ -n "$UPLOADED" ] && [ "$UPLOADED" != "$(git rev-parse HEAD)" ]; then
+    echo "v$VERSION was uploaded from another commit; bump VERSION in scripts/bundle.sh and commit first." >&2
     exit 1
 fi
 if [ ! -f "$PROFILE" ]; then
@@ -103,6 +113,12 @@ PLIST="$OUT_DIR/LaunchGrid.app/Contents/Info.plist"
 BUILT="$OUT_DIR/LaunchGrid.pkg (version $($PB -c 'Print CFBundleShortVersionString' "$PLIST"), build $($PB -c 'Print CFBundleVersion' "$PLIST"))"
 if [ "$UPLOAD" = 1 ]; then
     xcrun altool --upload-package "$OUT_DIR/LaunchGrid.pkg" --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID"
+    # Recorded once uploaded, for release.sh and later uploads (see this script's header).
+    TAG="app-store/v$VERSION"
+    [ -n "$UPLOADED" ] || git tag "$TAG" HEAD
+    if ! git push -q origin "refs/tags/$TAG"; then
+        echo "Couldn't push the tag $TAG; push it with: git push origin $TAG" >&2
+    fi
     echo "Uploaded $BUILT; App Store Connect emails you once it has processed it."
 else
     echo "Built $BUILT; upload it with Transporter, or run again with --upload."

@@ -144,7 +144,7 @@ final class AppState {
     // MARK: Hooks wired by the app delegate
 
     @ObservationIgnored var onHide: () -> Void = {}
-    /// Hides without handing focus back, so the app being launched can take it.
+    /// Hides without handing focus back, so the app being launched (or Finder) can take it.
     @ObservationIgnored var onHideForLaunch: () -> Void = {}
     /// An app opened behind the grid, which stayed up: it comes forward when the grid hides.
     @ObservationIgnored var onLaunchedBehind: (NSRunningApplication) -> Void = { _ in }
@@ -255,8 +255,9 @@ final class AppState {
         undoStack.append(grid)
         if undoStack.count > Self.undoLimit { undoStack.removeFirst() }
         redoStack.removeAll()
+        let old = grid
         grid = g
-        afterChange()
+        afterChange(from: old)
     }
 
     /// Replaces the whole grid (import, rebuild, load) as one undo step.
@@ -265,8 +266,9 @@ final class AppState {
             // Nothing worth undoing back to (first run). Redo history would replay edits of
             // the empty grid over the new one.
             redoStack.removeAll()
+            let old = grid
             grid = new
-            afterChange()
+            afterChange(from: old)
         } else {
             apply { $0 = new }
         }
@@ -289,8 +291,10 @@ final class AppState {
     func undo() {
         guard let previous = undoStack.popLast() else { return }
         redoStack.append(grid)
+        let old = grid
         grid = previous
-        afterChange()
+        afterChange(from: old)
+        showChange(from: old)
         // The snapshot predates later scans; bring it up to date with the disk.
         reconcile()
     }
@@ -298,14 +302,36 @@ final class AppState {
     func redo() {
         guard let next = redoStack.popLast() else { return }
         undoStack.append(grid)
+        let old = grid
         grid = next
-        afterChange()
+        afterChange(from: old)
+        showChange(from: old)
         reconcile()
     }
 
-    private func afterChange() {
+    /// After an undo or redo, goes to a page it brought back (a deleted page, one a move
+    /// emptied), else to the page it changed when the page shown is untouched, so the step is seen.
+    private func showChange(from old: Grid) {
+        guard query.isEmpty, grid.pages.indices.contains(currentPage) else { return }
+        let before = Dictionary(old.pages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let back = grid.pages.indices.filter { before[grid.pages[$0].id] == nil }
+        let changed = grid.pages.indices.filter { before[grid.pages[$0].id] != grid.pages[$0] }
+        let target = back.contains(currentPage) ? nil
+            : back.first ?? (changed.contains(currentPage) ? nil : changed.first)
+        guard let page = target else { return }
+        if openFolderID != nil { openFolderID = nil }
+        goToPage(page)
+    }
+
+    private func afterChange(from old: Grid) {
         canUndo = !undoStack.isEmpty
         canRedo = !redoStack.isEmpty
+        // The page shown stays the same page when pages before it come or go (a rescan
+        // emptying one), not whichever now has its number.
+        if old.pages.indices.contains(currentPage),
+           let p = grid.pages.firstIndex(where: { $0.id == old.pages[currentPage].id }) {
+            currentPage = p
+        }
         currentPage = min(currentPage, grid.pages.count - 1)
         if let id = openFolderID, grid.folder(id) == nil { openFolderID = nil }
         // A folder that lost its last page's apps shrinks; don't leave the view on a page it no longer has.
@@ -476,12 +502,12 @@ final class AppState {
         let candidates = outsideCandidates()
         Task {
             let started = Date()
-            let (result, outside, disk) = await Task.detached(priority: .utility) {
+            let (result, outside, disk) = await Disk.run(on: .global(qos: .utility)) {
                 let result = scanner(roots)
                 let scanned = Set(result.apps.map(\.path))
                 return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0) && result.aliases[$0] == nil }),
                         DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted))
-            }.value
+            }
             NSLog("LaunchGrid: scanned \(result.apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
             if !result.unlisted.isEmpty {
                 NSLog("LaunchGrid: could not list \(result.unlisted.joined(separator: ", ")); keeping their apps")
@@ -563,7 +589,7 @@ final class AppState {
     private func refreshUpdatedIcons() {
         let paths = grid.allApps.map(\.path)
         Task {
-            let stale = await Task.detached(priority: .utility) { IconProvider.shared.dropStale(paths) }.value
+            let stale = await Disk.run(on: .global(qos: .utility)) { IconProvider.shared.dropStale(paths) }
             guard !stale.isEmpty else { return }
             // Re-render before bumping the generation, so views reload the new icons, not a miss.
             await IconProvider.shared.renderAll(stale)
@@ -640,8 +666,9 @@ final class AppState {
         if !report.isEmpty {
             NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
         }
+        let old = grid
         grid = g
-        afterChange()
+        afterChange(from: old)
         if !report.added.isEmpty || !report.restored.isEmpty {
             IconProvider.shared.prewarm(g.allApps.map(\.path))
         }
@@ -651,7 +678,7 @@ final class AppState {
         guard !paths.isEmpty else { return }
         outsideReading.formUnion(paths)
         Task {
-            let read = await Task.detached(priority: .userInitiated) { Self.readOutsideApps(Array(paths)) }.value
+            let read = await Disk.run { Self.readOutsideApps(Array(paths)) }
             outsideReading.subtract(paths)
             outsideApps.merge(read.apps) { _, new in new }
             outsideChecked.formUnion(read.checked)
@@ -670,7 +697,8 @@ final class AppState {
     }
 
     var missingApps: [InstalledApp] {
-        Reconciler.missingApps(in: grid, installed: installed, wasInstalledBefore: installedBefore.contains)
+        Reconciler.missingApps(in: grid, installed: installed, isReachable: isReachable,
+                               wasInstalledBefore: installedBefore.contains)
     }
 
     /// Installed apps kept off the grid by an exclusion. Not the size of `removedBundleIDs`,
@@ -780,8 +808,9 @@ final class AppState {
     func endSearch() {
         let folder = folderBeforeSearch
         query = ""
-        guard let folder else { return }
-        guard grid.folder(folder.id) != nil else { return }
+        guard let folder, let page = grid.locate(folder.id)?.page else { return }
+        // A rescan meanwhile can have moved it to another page number.
+        goToPage(page)
         openFolder(folder.id)
         let pages = FolderLayout.pageCount(apps: openFolder?.apps.count ?? 0, grid: grid)
         folderPage = min(folder.page, pages - 1)
@@ -804,7 +833,7 @@ final class AppState {
                 if !hides { onLaunchedBehind(running) }
                 // Off the main thread: a stalled volume mustn't hang the app.
                 let gone = path == app.path ? false
-                    : await Task.detached { !FileManager.default.fileExists(atPath: app.path) }.value
+                    : await Disk.run { !FileManager.default.fileExists(atPath: app.path) }
                 if Self.followsLaunch(to: path, of: app, in: grid, isReachable: isReachable, pathExists: { _ in !gone }) {
                     rememberPath(path, of: app.id)
                 }
@@ -850,8 +879,9 @@ final class AppState {
         var g = grid
         g.followMoves(moves)
         guard g != grid else { return }
+        let old = grid
         grid = g
-        afterChange()
+        afterChange(from: old)
     }
 
     /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode
@@ -989,6 +1019,8 @@ final class AppState {
     /// Moves to the page with `pageID`, or a new one when it's nil. By ID, as a menu holding
     /// it can outlive pages a rescan removes; when that page is gone, nothing moves.
     func moveToPage(_ ids: [UUID], pageID: UUID?) {
+        // Nothing left to move (a rescan removed it under an open menu): no blank page either.
+        guard ids.contains(where: { grid.locate($0) != nil }) else { return }
         apply { g in
             let page: Int
             if let pageID {

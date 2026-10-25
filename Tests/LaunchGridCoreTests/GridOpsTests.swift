@@ -417,6 +417,22 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(skipped == 1)
     }
 
+    @Test func aMalformedIDOrNameKeepsTheEntry() throws {
+        let json = #"""
+        {"version": 1, "rows": "five", "pages": [
+          {"id": "nope", "title": 3, "items": [{"type": "app", "app": {"id": 7, "path": "/Applications/A.app", "name": ["A"]}}]},
+          {"items": [{"type": "folder", "folder": {"id": "x", "name": false, "apps": [{"path": "/Applications/B.app", "displayName": 1}]}}]}
+        ]}
+        """#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(skipped == 0)
+        #expect(grid.rows == 5)
+        #expect(grid.pages.count == 2)
+        #expect(grid.pages[0].title == nil)
+        #expect(grid.allApps.map(\.path) == ["/Applications/A.app", "/Applications/B.app"])
+        #expect(Set(grid.pages.map(\.id)).count == 2)
+    }
+
     @Test func rejectsOutOfRangeSize() {
         let data = Data(#"{"version": 1, "rows": 51, "columns": 7, "pages": []}"#.utf8)
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }
@@ -640,6 +656,21 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.results(in: apps, query: "visual-").map(\.name) == ["Visual Studio Code"])
         #expect(Search.results(in: apps, query: "code.").map(\.name) == ["Visual Studio Code"])
         #expect(Search.results(in: apps, query: "wi fi").map(\.name) == ["WiFiman", "Wi-Fi Explorer"])
+    }
+
+    @Test func aNameWithTheSymbolsTypedComesFirst() {
+        let apps = ["C++ Builder Studio", "Clock", "Chess", "Calendar", "F# Interactive", "Finder"].map { app($0) }
+        #expect(Search.results(in: apps, query: "c++").first?.name == "C++ Builder Studio")
+        #expect(Search.results(in: apps, query: "f#").first?.name == "F# Interactive")
+    }
+
+    @Test func manyLikeWordsDontTakeLong() {
+        let name = Array(repeating: "alpha", count: 10).joined(separator: " ")
+        let start = ContinuousClock.now
+        #expect(Search.score(name, query: String(repeating: "a ", count: 11)) == nil)
+        #expect(Search.score(name, query: String(repeating: "a ", count: 10)) != nil)
+        #expect(Search.score(name + " beta", query: String(repeating: "al ", count: 10) + "zz") == nil)
+        #expect(ContinuousClock.now - start < .seconds(1))
     }
 
     @Test func aPrefixDoesNotRunAcrossASpaceInTheName() {

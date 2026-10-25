@@ -5,6 +5,20 @@ import os
 import ServiceManagement
 import LaunchGridCore
 
+// MARK: - Disk
+
+/// Blocking file-system work, run on a dispatch queue rather than Swift's few shared threads:
+/// a read stalled on a volume that stopped answering holds a thread there, so launches, scans
+/// and everything else async keep going.
+enum Disk {
+    static func run<T: Sendable>(on queue: DispatchQueue = .global(qos: .userInitiated),
+                                 _ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: work()) }
+        }
+    }
+}
+
 // MARK: - Launching
 
 enum Launcher {
@@ -26,9 +40,9 @@ enum Launcher {
         config.activates = activates
         // Looked at off the main thread, so a stalled volume doesn't hang the app.
         let path = app.path
-        let (exists, unmounted) = await Task.detached {
+        let (exists, unmounted) = await Disk.run {
             (FileManager.default.fileExists(atPath: path), Volume.unmountedVolume(for: path))
-        }.value
+        }
         // The app is still there and failed to open (damaged, refused by Gatekeeper, cancelled):
         // that's the answer, not a reason to open another copy with its bundle ID.
         if exists {
@@ -499,10 +513,12 @@ final class FolderWatcher: @unchecked Sendable {
     /// folder (Downloads, a project with `.git`) doesn't rescan at every write.
     static func isRelevant(_ path: String, roots: [String] = [], maxDepth: Int = 3) -> Bool {
         let parts = path.split(separator: "/")
-        let bundle = parts.firstIndex(where: { $0.hasSuffix(".app") })
         let root = roots.map { $0.split(separator: "/") }
             .filter { $0.count <= parts.count && parts.starts(with: $0) }
             .max { $0.count < $1.count }
+        // A root can itself be inside a bundle (Xcode.app/Contents/Applications): only a bundle
+        // below it counts.
+        let bundle = parts[(root?.count ?? 0)...].firstIndex(where: { $0.hasSuffix(".app") })
         if let root {
             // The folders between the root and the change (or the bundle it is in).
             let below = parts[root.count..<(bundle ?? parts.count)]
