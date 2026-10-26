@@ -143,14 +143,6 @@ struct ToastLayer: View {
             guard state.isShown else { return }
             AccessibilityNotification.Announcement(editing ? String(localized: "Editing layout") : String(localized: "Done editing")).post()
         }
-        // A folder opening: VoiceOver moves to its title (the panel is modal), which doesn't say
-        // how much is in it. Queued behind the title rather than over it.
-        .onChange(of: state.openFolderID) { _, id in
-            guard state.isShown, id != nil, let folder = state.openFolder else { return }
-            var text = AttributedString(String(localized: "Folder, \(folder.apps.count) apps"))
-            text.accessibilitySpeechAnnouncementPriority = .low
-            AccessibilityNotification.Announcement(text).post()
-        }
     }
 
     /// "Page 2 of 3", with its title if it has one.
@@ -864,6 +856,10 @@ struct FolderPanel: View {
                     .onTapGesture { state.beginRename(folder.id) }
                     .help("Click to rename")
                     .accessibilityAddTraits(.isButton)
+                    // VoiceOver lands here when the folder opens (the panel is modal): with the
+                    // count, it says how much is in it. An announcement at low priority went
+                    // unspoken, and a value is read before the name.
+                    .accessibilityLabel(Text(verbatim: "\(folder.name), ") + Text("\(folder.apps.count) apps"))
                     .accessibilityHint("Renames the folder")
                     .accessibilityAction { state.beginRename(folder.id) }
                 ZStack(alignment: .topLeading) {
