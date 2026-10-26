@@ -313,28 +313,6 @@
         }
       }
     },
-    "Folder, %lld apps": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Folder, %lld app"
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "Folder, %lld apps"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "Found %lld apps": {
       "localizations": {
         "en": {
