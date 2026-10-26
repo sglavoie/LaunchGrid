@@ -18,27 +18,31 @@ public enum Search {
         guard q.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         let n = normalize(name)
         if n == q { return 1000 }
-        if n.hasPrefix(q) { return 900 - min(n.count, 99) }
+        if n.hasPrefix(q) { return 900 - shortness(n) }
         let isSeparator: (Character) -> Bool = { !$0.isLetter && !$0.isNumber }
         let words = n.split(whereSeparator: isSeparator).map(String.init)
         let queryWords = q.split(whereSeparator: isSeparator)
         let (nameKey, queryKey) = (spacedWords(n), spacedWords(q))
         if !queryKey.isEmpty, nameKey.hasPrefix(queryKey) || nameKey.hasPrefix(queryKey.filter { $0 != " " }) {
-            return 850 - min(n.count, 99)
+            return 850 - shortness(n)
         }
-        if words.contains(where: { $0.hasPrefix(q) }) { return 700 - min(n.count, 99) }
-        if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - min(n.count, 99) }
+        if words.contains(where: { $0.hasPrefix(q) }) { return 700 - shortness(n) }
+        if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - shortness(n) }
         // With the humps and without: "qp" is QuickTime Player's initials as much as "qtp" is.
         if acronym(of: name).hasPrefix(q) || acronym(of: name, humps: false).hasPrefix(q) { return 600 }
         if queryWords.count > 1, startsWordsOrInitials(queryWords, of: words) { return 600 }
-        if n.contains(q) { return 500 - min(n.count, 99) }
+        if n.contains(q) { return 500 - shortness(n) }
         // Two characters say more in a script without an alphabet ("网音" for 网易云音乐).
         // Counted as typed: one Hangul syllable is several letters in `q`.
         let minimum = query.contains(where: TextLine.isUnspaced) ? 2 : 3
         let typed = query.precomposedStringWithCanonicalMapping.filter { !$0.isWhitespace }.count
-        if typed >= minimum, q.count >= minimum, isSubsequence(q, of: n) { return 200 - min(n.count, 99) }
+        if typed >= minimum, q.count >= minimum, isSubsequence(q, of: n) { return 200 - shortness(n) }
         return nil
     }
+
+    /// What a longer name loses within a tier, kept under the 50 points between tiers so a long
+    /// name doesn't fall into the tier below.
+    private static func shortness(_ n: String) -> Int { min(n.count, 49) }
 
     /// Apps matching `query`, best first, ties broken alphabetically.
     public static func results(in apps: [AppRef], query: String) -> [AppRef] {
@@ -71,7 +75,7 @@ public enum Search {
             s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap { letterSpellings[$0].map { Array($0.unicodeScalars) } ?? [$0] }))
         }
         // Hangul syllables as their letters, so a syllable still being typed ("하") finds "한글".
-        if s.unicodeScalars.contains(where: { hangulSyllables.contains($0.value) }) {
+        if s.unicodeScalars.contains(where: { hangulSyllables.contains($0.value) || letterParts[$0] != nil }) {
             s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap(hangulLetters)))
         }
         // Hiragana as katakana, so "かめら" finds "カメラ".
@@ -85,16 +89,24 @@ public enum Search {
 
     /// A syllable's letters as compatibility jamo, which unlike the conjoining ones its
     /// canonical decomposition gives are characters of their own, so a prefix can end mid-syllable.
+    /// Compound letters come apart, as they are typed: "고" is on the way to "과", "달" to "닭".
     private static func hangulLetters(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
-        guard hangulSyllables.contains(scalar.value) else { return [scalar] }
+        guard hangulSyllables.contains(scalar.value) else { return letterParts[scalar] ?? [scalar] }
         let s = Int(scalar.value - hangulSyllables.lowerBound)
         let (lead, vowel, tail) = (s / 588, s % 588 / 28, s % 28)
-        return [leadLetters[lead], vowelLetters[vowel]] + (tail > 0 ? [tailLetters[tail - 1]] : [])
+        return ([leadLetters[lead], vowelLetters[vowel]] + (tail > 0 ? [tailLetters[tail - 1]] : []))
+            .flatMap { letterParts[$0] ?? [$0] }
     }
 
     private static let leadLetters = Array("ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ".unicodeScalars)
     private static let vowelLetters = Array("ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ".unicodeScalars)
     private static let tailLetters = Array("ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ".unicodeScalars)
+    /// Letters typed as two keys. ㄲ, ㅆ, ㅐ and the like are one key each, so they stay whole.
+    private static let letterParts: [Unicode.Scalar: [Unicode.Scalar]] = Dictionary(uniqueKeysWithValues: [
+        "ㅘ": "ㅗㅏ", "ㅙ": "ㅗㅐ", "ㅚ": "ㅗㅣ", "ㅝ": "ㅜㅓ", "ㅞ": "ㅜㅔ", "ㅟ": "ㅜㅣ", "ㅢ": "ㅡㅣ",
+        "ㄳ": "ㄱㅅ", "ㄵ": "ㄴㅈ", "ㄶ": "ㄴㅎ", "ㄺ": "ㄹㄱ", "ㄻ": "ㄹㅁ", "ㄼ": "ㄹㅂ", "ㄽ": "ㄹㅅ",
+        "ㄾ": "ㄹㅌ", "ㄿ": "ㄹㅍ", "ㅀ": "ㄹㅎ", "ㅄ": "ㅂㅅ",
+    ].map { (Unicode.Scalar($0.key)!, Array($0.value.unicodeScalars)) })
 
     /// After case folding, so lowercase only.
     private static let letterSpellings: [Unicode.Scalar: String] = [

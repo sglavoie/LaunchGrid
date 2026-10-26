@@ -60,7 +60,7 @@ struct BackgroundView: View {
     private var wallpaperURL: URL? {
         Self.wallpaperLookups += 1
         let screen = NSScreen.screens.first { $0.displayID == state.screenID } ?? NSScreen.main
-        return screen.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+        return screen.flatMap(BackgroundPicture.wallpaperURL)
     }
 }
 
@@ -82,6 +82,23 @@ struct VisualEffect: NSViewRepresentable {
 
 /// An image scaled to fill, blurred once and cached. Falls back to the blurred desktop
 /// while loading, or when the file can't be decoded (e.g. a dynamic or aerial wallpaper).
+enum BackgroundPicture {
+    /// The desktop picture of `screen`, as the Wallpaper background shows it.
+    static func wallpaperURL(for screen: NSScreen) -> URL? {
+        #if !APP_STORE
+        // For the debug scripts: a wallpaper elsewhere without changing the Mac's own.
+        if let path = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_WALLPAPER"] { return URL(fileURLWithPath: path) }
+        #endif
+        return NSWorkspace.shared.desktopImageURL(for: screen)
+    }
+
+    /// Whether the picture at `url` can be read as an image: its header only, not the pixels.
+    static func isReadable(_ url: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
+        return CGImageSourceGetCount(source) > 0
+    }
+}
+
 struct BlurredImage: View {
     let url: URL?
     /// In points on screen, whatever the picture's own size.

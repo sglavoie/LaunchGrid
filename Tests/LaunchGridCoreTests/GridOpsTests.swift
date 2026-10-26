@@ -604,6 +604,25 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("카카오톡", query: "하") == nil)
     }
 
+    @Test func aCompoundLetterStillBeingTypedMatches() {
+        // Each is one keystroke short of the name's first syllable.
+        #expect(Search.score("과자", query: "고") != nil)
+        #expect(Search.score("왜곡", query: "오") != nil)
+        #expect(Search.score("닭갈비", query: "달") != nil)
+        #expect(Search.score("앉다", query: "안") != nil)
+        // A final consonant waiting to become the next syllable's first: 갈 + ㅂ is 갋 until ㅣ.
+        #expect(Search.score("갈비", query: "갋") != nil)
+        #expect(Search.score("과자", query: "과자") == 1000)
+        #expect(Search.score("고양이", query: "과") == nil)
+    }
+
+    @Test func aLongNameStaysInItsTier() {
+        // A true prefix comes before one that only skips a separator, however long the name.
+        let long = "Abc" + String(repeating: "x", count: 60)
+        #expect(Search.score(long, query: "abc")! > Search.score("Ab-c", query: "abc")!)
+        #expect(Search.score("Ab-c " + String(repeating: "y", count: 60), query: "abc")! > Search.score("Xyz Abc", query: "abc")!)
+    }
+
     @Test func aHangulNameInDecomposedFormMatches() {
         let decomposed = "한글".decomposedStringWithCanonicalMapping
         #expect(decomposed.unicodeScalars.count > 2)

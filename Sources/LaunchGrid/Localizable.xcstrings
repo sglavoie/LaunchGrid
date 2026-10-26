@@ -313,6 +313,28 @@
         }
       }
     },
+    "Folder, %lld apps": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Folder, %lld app"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Folder, %lld apps"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Found %lld apps": {
       "localizations": {
         "en": {
@@ -586,6 +608,28 @@
                 "stringUnit": {
                   "state": "translated",
                   "value": "Remove %lld Items"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Removed %lld apps — ⌘Z to undo": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Removed %lld app — ⌘Z to undo"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Removed %lld apps — ⌘Z to undo"
                 }
               }
             }

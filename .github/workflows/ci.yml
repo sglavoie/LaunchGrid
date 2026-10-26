@@ -23,7 +23,7 @@ jobs:
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: diff
@@ -46,7 +46,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history: the bundle's build number is `git rev-list --count HEAD`.
           fetch-depth: 0
@@ -60,7 +60,7 @@ jobs:
           swift --version
           echo "XCODE_BUILD=$(xcodebuild -version | sed -n 's/^Build version //p')" >> "$GITHUB_ENV"
       - name: Restore build products
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .build
           # An exact hit only when nothing changed; otherwise the latest cache makes the build incremental.
@@ -99,7 +99,7 @@ jobs:
       - name: Save build products
         # Only from main: a cache saved by every pull request push would evict the useful ones.
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .build
           key: spm-${{ runner.os }}-${{ env.XCODE_BUILD }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ hashFiles('Sources/**/*.swift', 'Tests/**/*.swift') }}
@@ -110,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the shell scripts
         # Preinstalled on GitHub's Ubuntu runners.
         run: shellcheck scripts/*.sh

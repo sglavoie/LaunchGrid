@@ -380,7 +380,7 @@ enum DebugScript {
                         }
                         if type == .leftMouseDown { try? await Task.sleep(for: .seconds(parts[0] == "click" ? 0.05 : 1)) }
                     }
-                case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "hold", "fhold", "panhold":
+                case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold":
                     // An optional third number grabs the icon that many points right of its centre.
                     let n = arg.split(separator: ",").compactMap { Int($0) }
                     guard let window = overlay.window, let from = n.first else { break }
@@ -446,6 +446,10 @@ enum DebugScript {
                     // Builds the first item's right-click menu now, for "menurun" to choose from later,
                     // as a menu left open while a rescan changes the pages.
                     if let first = state.currentItems.first { heldMenu = MenuEntry.item(first, state: state) }
+                case "pagemenuhold":
+                    // Builds the ⋯ menu (the background's right-click menu) for "menurun", as it is
+                    // over search results or an open folder.
+                    heldMenu = MenuEntry.page(state: state)
                 case "menurun":
                     // Chooses the entry titled `arg` (in a submenu too) of the menu "menuhold" built.
                     func find(_ entries: [MenuEntry]) -> (@MainActor () -> Void)? {
@@ -601,6 +605,14 @@ enum DebugScript {
             for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
             print("gap: \(String(describing: state.drag.gap)) pending=\(String(describing: state.drag.pendingGap))")
             fflush(stdout)
+        case "edgehold":
+            // Flips to the next page at the edge and stays held there, for "release" or Esc.
+            let frame = state.drag.pagerFrame
+            let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)
+            await glide(start, edge)
+            for _ in 0..<12 { send(.leftMouseDragged, edge); try? await Task.sleep(for: .milliseconds(100)) }
+            heldAt = (edge, window)
+            return
         case "edgehide":
             let frame = state.drag.pagerFrame
             let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)

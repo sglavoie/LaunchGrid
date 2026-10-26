@@ -135,6 +135,17 @@ public enum LaunchpadImporter {
         var seen = Set<String>()
         func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
         let spelling = Dictionary(installed.map { (real($0), $0) }, uniquingKeysWith: { a, _ in a })
+        /// Installed copies by bundle ID, read the first time a row has only its bundle ID to go on.
+        var copiesByID: [String: [String]]?
+        func copies(of id: String) -> [String] {
+            if copiesByID == nil {
+                let ids = installed.compactMap { path in
+                    (AppScanner.infoDictionary(ofBundleAt: URL(fileURLWithPath: path))?["CFBundleIdentifier"] as? String).map { ($0, path) }
+                }
+                copiesByID = Dictionary(grouping: ids, by: \.0).mapValues { $0.map(\.1) }
+            }
+            return copiesByID?[id] ?? []
+        }
 
         /// `visited` guards against parent_id cycles in a damaged database.
         func countApps(under id: Int, visited: inout Set<Int>) -> Int {
@@ -159,7 +170,19 @@ public enum LaunchpadImporter {
             if let p = row.customPath, FileManager.default.fileExists(atPath: p) { candidate = p }
             if candidate == nil, let data = row.bookmark, let p = path(ofBookmark: data),
                FileManager.default.fileExists(atPath: p) { candidate = p }
-            if candidate == nil, let b = bundleID { candidate = resolve(b) }
+            if candidate == nil, let b = bundleID {
+                // Launch Services gives one copy per bundle ID. Of several (Xcode and Xcode-beta,
+                // in AppGrid's table, which has no bookmarks), the one named as the row is, else
+                // one not imported yet.
+                let others = copies(of: b)
+                if others.count > 1 {
+                    let file = { (path: String) in URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased() }
+                    candidate = others.first { file($0) == title.lowercased() }
+                        ?? resolve(b).flatMap { seen.contains(real($0)) ? nil : $0 }
+                        ?? others.first { !seen.contains(real($0)) }
+                }
+                if candidate == nil { candidate = resolve(b) }
+            }
             guard let found = candidate else {
                 skipped.append(title)
                 return nil

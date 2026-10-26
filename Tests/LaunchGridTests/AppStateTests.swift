@@ -152,6 +152,26 @@ func installed(_ name: String) -> InstalledApp {
         #expect(try String(contentsOf: notice.file, encoding: .utf8) == original, "the file as it was")
     }
 
+    @Test func aPartlyReadableLayoutIsWrittenBackSoTheNextLaunchDoesNotAskAgain() throws {
+        let original = #"{"version": 1, "rows": 2, "columns": 2, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app", "name": "A"}}, {"type": "app", "app": {"name": "No path"}}]}], "removedBundleIDs": []}"#
+        let first = try load(original)
+        #expect(first.recoveryNotice != nil)
+        first.saveNow() // as the save `init` schedules does, unchanged since
+        #expect(try GridStore.decodeCountingSkipped(Data(contentsOf: first.store.url)).skipped == 0)
+        let next = AppState(prefs: testPreferences(), store: first.store)
+        #expect(next.recoveryNotice == nil)
+        #expect(next.loadProblem == nil)
+        #expect(next.grid.allApps.map(\.title) == ["A"])
+    }
+
+    @Test func aJSONObjectWithoutPagesIsNotAnEmptyLayout() throws {
+        // As a damaged file or another app's JSON: set aside, never read as an empty grid.
+        let state = try load("{}")
+        #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
+        #expect(throws: GridFileError.self) { try GridStore.decode(Data(#"{"rows": 5}"#.utf8)) }
+        #expect(try GridStore.decode(Data(#"{"pages": []}"#.utf8)).allApps.isEmpty, "exclusions only")
+    }
+
     @Test func savesKeepThePreviousOneToRestoreFromWhenTheLastIsUnreadable() throws {
         let first = makeState(["A"])
         first.saveNow()
@@ -343,6 +363,61 @@ func installed(_ name: String) -> InstalledApp {
         state.groupSelection()
         #expect(state.grid.pages[1].items.first?.folder?.apps.map(\.name) == ["A", "C", "D"])
         #expect(state.currentPage == 1 && state.openFolderID == state.grid.pages[1].items.first?.id)
+    }
+
+    @Test func groupingTheLastItemOfAnotherPageRemovesThatPage() {
+        let state = makeState(["A", "B", "C"])
+        state.apply { $0.pages = [Page(items: Array($0.pages[0].items.prefix(1))), Page(items: Array($0.pages[0].items.suffix(2)))] }
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.goToPage(1)
+        state.toggleSelection(id["B"]!)
+        state.groupSelection()
+        #expect(state.grid.pages.count == 1, "no blank page where A was")
+        #expect(state.grid.pages[0].items.map(\.title).contains("C"))
+        #expect(state.currentPage == 0 && state.openFolderID == state.grid.pages[0].items.first { $0.folder != nil }?.id)
+    }
+
+    @Test func removingAFolderSaysHowManyAppsLeave() {
+        let state = makeState(["A", "B", "C"])
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["B"]!)
+        state.groupSelection()
+        let folder = state.grid.pages[0].items.first { $0.folder != nil }!.id
+        state.remove([folder])
+        #expect(state.toast == "Removed 2 apps — ⌘Z to undo")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct PageActionTests {
+    @Test func pageActionsClearTheSearchFirst() {
+        // Over search results the ⋯ menu would otherwise sort a page nobody can see.
+        let state = makeState(["C", "B", "A"])
+        state.query = "a"
+        state.sortCurrentPage()
+        #expect(state.query.isEmpty)
+        #expect(state.grid.pages[0].items.map(\.title) == ["A", "B", "C"])
+    }
+
+    @Test func aNewPageFromTheMenuClosesTheFolderOverIt() {
+        let state = makeState(["A", "B", "C"])
+        let a = state.grid.allApps[0].id, b = state.grid.allApps[1].id
+        state.toggleSelection(a)
+        state.toggleSelection(b)
+        state.groupSelection()
+        #expect(state.openFolderID != nil)
+        state.newPage()
+        #expect(state.openFolderID == nil && state.currentPage == 1)
+    }
+
+    @Test func aCancelledDragLeavesFocusOnThePageShown() {
+        let state = makeState(["A", "B", "C", "D", "E"])
+        state.apply { $0.pages = [Page(items: Array($0.pages[0].items.prefix(4))), Page(items: Array($0.pages[0].items.suffix(1)))] }
+        state.focusIndex = 3
+        state.currentPage = 1 // as an edge flip leaves it
+        state.cancelDrag()
+        #expect(state.focusIndex == 0)
     }
 }
 
@@ -866,6 +941,17 @@ func installed(_ name: String) -> InstalledApp {
         return app.path
     }
 
+    @Test func anAppRenamedInOtherCapitalsIsNotReadAsAnotherAppOutsideTheScan() throws {
+        // The tile's old spelling still opens the app on a disk that ignores case, so reading it
+        // as an app from elsewhere would keep the tile there and add the new spelling beside it.
+        let path = try makeBundle("Zoom.us")
+        let old = (path as NSString).deletingLastPathComponent + "/zoom.us.app"
+        let state = makeState()
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.app(AppRef(bundleID: "com.test.Zoom.us", path: old, name: "zoom.us"))])]))
+        state.catalogScanned([InstalledApp(bundleID: "com.test.Zoom.us", path: path, name: "Zoom.us")])
+        #expect(state.grid.allApps.map(\.path) == [path])
+    }
+
     @Test func rebuildingKeepsAppsAddedFromOutsideTheScanFolders() throws {
         let path = try makeBundle("Outside")
         let state = makeState(["A"])
@@ -891,6 +977,134 @@ func installed(_ name: String) -> InstalledApp {
 
         let reopened = AppState(prefs: testPreferences(), store: GridStore(url: url))
         #expect(reopened.grid.removedBundleIDs.isEmpty)
+    }
+}
+
+/// The sandbox's bookmarks, played out of the sandbox: a bookmark is the path it was made
+/// for, and resolves to wherever `moves` says that item is now.
+@MainActor final class FakeSandbox {
+    var moves: [String: String] = [:]
+    var gone: Set<String> = []
+    private(set) var closed: [String] = []
+    /// Bookmarks resolved and started, by the path each was made for.
+    private(set) var opened: [String] = []
+
+    func install() {
+        let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
+        FileAccess.backend = FileAccess.Backend(
+            isActive: { true },
+            defaults: { defaults },
+            bookmark: { Data($0.path.utf8) },
+            open: { [self] data in
+                let path = String(decoding: data, as: UTF8.self)
+                opened.append(path)
+                let now = moves[path] ?? path
+                guard !gone.contains(now) else { return nil }
+                return (URL(fileURLWithPath: now), now != path)
+            },
+            close: { [self] in closed.append($0.path) }
+        )
+    }
+
+    var saved: [String: Data] {
+        FileAccess.backend.defaults().dictionary(forKey: "bookmarks") as? [String: Data] ?? [:]
+    }
+}
+
+// Serialized: `FileAccess` is one for the whole process.
+@MainActor @Suite(.tempDir, .serialized) struct SandboxFileAccessTests {
+    let sandbox = FakeSandbox()
+
+    @Test func anAppPickedByPathIsUsedThroughItsBookmark() {
+        // Browse hands over a URL made from a path, whose own access can't be started.
+        sandbox.install()
+        defer { FileAccess.reset() }
+        #expect(FileAccess.remember(URL(fileURLWithPath: "/Users/x/Downloads/A.app")))
+        #expect(FileAccess.isGranted("/Users/x/Downloads/A.app"))
+        #expect(sandbox.opened == ["/Users/x/Downloads/A.app"], "access through the bookmark, not the plain URL")
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Downloads/A.app"])
+    }
+
+    @Test func anItemMovedSinceItWasPickedIsFollowed() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        prefs.extraFolders = ["/Users/x/Tools"]
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Tools"))
+        FileAccess.reset()
+        sandbox.install() // a later launch
+        sandbox.moves["/Users/x/Tools"] = "/Users/x/Utilities"
+        #expect(FileAccess.restore(prefs: prefs) == ["/Users/x/Tools": "/Users/x/Utilities"])
+        #expect(FileAccess.isGranted("/Users/x/Utilities") && !FileAccess.isGranted("/Users/x/Tools"))
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Utilities"], "filed under its new path")
+        #expect(prefs.extraFolders == ["/Users/x/Utilities"])
+    }
+
+    @Test func anItemInTheTrashIsNotFollowed() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        prefs.customImagePath = "/Users/x/bg.jpg"
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/bg.jpg"))
+        FileAccess.reset()
+        sandbox.install()
+        sandbox.moves["/Users/x/bg.jpg"] = "/Users/x/.Trash/bg.jpg"
+        #expect(FileAccess.restore(prefs: prefs).isEmpty)
+        #expect(prefs.customImagePath == "/Users/x/bg.jpg")
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/bg.jpg"])
+    }
+
+    @Test func anItemPickedAgainAtItsNewPlaceKeepsOneBookmark() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/A.app"))
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Apps/A.app"))
+        FileAccess.reset()
+        sandbox.install()
+        sandbox.moves["/Users/x/A.app"] = "/Users/x/Apps/A.app"
+        let closedBefore = sandbox.closed.count
+        #expect(FileAccess.restore(prefs: prefs) == ["/Users/x/A.app": "/Users/x/Apps/A.app"])
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Apps/A.app"])
+        #expect(sandbox.closed.dropFirst(closedBefore) == ["/Users/x/Apps/A.app"], "one access for it, not two")
+        #expect(FileAccess.isGranted("/Users/x/Apps/A.app"))
+    }
+
+    @Test func anAppMovedWhileInUseIsFollowed() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Downloads/A.app"))
+        sandbox.moves["/Users/x/Downloads/A.app"] = "/Users/x/Apps/A.app"
+        #expect(FileAccess.followVanished(["/Users/x/Downloads/A.app", "/Applications/B.app"], prefs: prefs)
+            == ["/Users/x/Downloads/A.app": "/Users/x/Apps/A.app"])
+        #expect(FileAccess.isGranted("/Users/x/Apps/A.app"))
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Apps/A.app"])
+    }
+
+    @Test func aStaleBookmarkIsRemadeAndAnUnreachableOneKept() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        FileAccess.remember(URL(fileURLWithPath: "/Volumes/Ext/Apps"))
+        FileAccess.reset()
+        sandbox.install()
+        sandbox.gone = ["/Volumes/Ext/Apps"] // unmounted
+        #expect(FileAccess.restore(prefs: prefs).isEmpty)
+        #expect(!FileAccess.isGranted("/Volumes/Ext/Apps"))
+        #expect(sandbox.saved.keys.sorted() == ["/Volumes/Ext/Apps"], "kept for when it mounts")
+        sandbox.gone = []
+        FileAccess.restore(prefs: prefs)
+        #expect(FileAccess.isGranted("/Volumes/Ext/Apps"))
+    }
+
+    @Test func appsNoLongerOnTheGridLoseTheirBookmarksAndAccess() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        for path in ["/Users/x/A.app", "/Users/x/B.app", "/Users/x/Tools"] { FileAccess.remember(URL(fileURLWithPath: path)) }
+        FileAccess.forgetApps(notIn: ["/Users/x/A.app"])
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/A.app", "/Users/x/Tools"])
+        #expect(sandbox.closed == ["/Users/x/B.app"])
     }
 }
 

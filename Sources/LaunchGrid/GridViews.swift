@@ -143,6 +143,14 @@ struct ToastLayer: View {
             guard state.isShown else { return }
             AccessibilityNotification.Announcement(editing ? String(localized: "Editing layout") : String(localized: "Done editing")).post()
         }
+        // A folder opening: VoiceOver moves to its title (the panel is modal), which doesn't say
+        // how much is in it. Queued behind the title rather than over it.
+        .onChange(of: state.openFolderID) { _, id in
+            guard state.isShown, id != nil, let folder = state.openFolder else { return }
+            var text = AttributedString(String(localized: "Folder, \(folder.apps.count) apps"))
+            text.accessibilitySpeechAnnouncementPriority = .low
+            AccessibilityNotification.Announcement(text).post()
+        }
     }
 
     /// "Page 2 of 3", with its title if it has one.
@@ -161,10 +169,9 @@ struct TopBar: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        ZStack {
+        TopBarLayout {
             SearchField()
             HStack {
-                Spacer()
                 // A selection made with ⌘-click or ⇧-click outside edit mode gets the same actions.
                 // Search results hide the selection: its actions wait until they're cleared.
                 if state.selectionActionable && state.selection.count > 1 {
@@ -197,7 +204,33 @@ struct TopBar: View {
                     state.drag.menuButtonFrame = $0
                 }
             }
+            .fixedSize()
         }
+    }
+}
+
+/// The search field centred and the buttons at the trailing edge. In a narrow window the
+/// field moves left of the buttons, then narrows, rather than going under them.
+struct TopBarLayout: Layout {
+    var gap: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let height = subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+        let width = proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.reduce(gap, +)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let (field, buttons) = (subviews[0], subviews[1])
+        let b = buttons.sizeThatFits(.unspecified)
+        buttons.place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(b))
+        let room = bounds.width - b.width - (b.width > 0 ? gap : 0)
+        let ideal = field.sizeThatFits(.unspecified).width
+        let f = field.sizeThatFits(ProposedViewSize(width: max(0, min(ideal, room)), height: nil))
+        // Centred while that clears the buttons, else just left of them, never past the start.
+        let x = max(bounds.minX, min(bounds.midX - f.width / 2, bounds.minX + room - f.width))
+        field.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(f))
     }
 }
 
@@ -236,7 +269,8 @@ struct SearchField: View {
         }
         .font(.system(size: 14))
         .padding(.horizontal, 10)
-        .frame(width: 240, height: 28)
+        // Narrower only when a small window leaves no room beside the buttons (`TopBarLayout`).
+        .frame(minWidth: 120, idealWidth: 240, maxWidth: 240, minHeight: 28, maxHeight: 28)
         // Dark under the light fill, so the white text reads over a light background too.
         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
         .background(.black.opacity(high ? 0.55 : 0.25), in: RoundedRectangle(cornerRadius: 8))
@@ -416,7 +450,7 @@ struct PageView: View {
 
     var body: some View {
         let layout = GridLayout(size: size, rows: state.grid.rows, columns: state.grid.columns)
-        let icon = layout.iconSize(scale: state.prefs.iconScale)
+        let icon = layout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
         // Read here once, not in every cell: a cell's body then reruns only when its own
         // focus, selection or merge highlight changes, not on every arrow key.
         let entries = entries
@@ -436,6 +470,7 @@ struct PageView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         // VoiceOver follows the keyboard focus, also onto a page drawn afresh with focus on it
         // (⌘4, End, a page dot further away, a search result revealed).
         .onChange(of: focus, initial: true) { _, i in
@@ -505,6 +540,7 @@ struct ItemCell: View {
 
 struct ItemView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.gridLabelsFit) private var labelsFit
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     let item: GridItem
@@ -544,7 +580,7 @@ struct ItemView: View {
                 }
             }
             .modifier(Jiggle(active: editing, seed: item.id.hashValue))
-            if state.prefs.showLabels {
+            if state.prefs.showLabels && labelsFit {
                 Text(item.title)
                     .font(.system(size: max(11, min(13, iconSize * 0.14))))
                     .foregroundStyle(.white)
@@ -678,7 +714,7 @@ struct DragGhost: View {
     let count: Int
 
     var body: some View {
-        let size = state.pageLayout.iconSize(scale: state.prefs.iconScale)
+        let size = state.pageLayout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
         ZStack(alignment: .topTrailing) {
             Group {
                 switch item {
@@ -756,7 +792,7 @@ struct SearchResultsView: View {
     var body: some View {
         GeometryReader { geo in
             let layout = GridLayout(size: geo.size, rows: state.grid.rows, columns: state.grid.columns)
-            let icon = layout.iconSize(scale: state.prefs.iconScale)
+            let icon = layout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
             let results = state.searchResults
             ZStack(alignment: .topLeading) {
                 if results.isEmpty {
@@ -779,6 +815,7 @@ struct SearchResultsView: View {
             .onChange(of: state.focusIndex) { _, i in
                 if let i, results.indices.contains(i) { voiceOverFocus = results[i].id }
             }
+            .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         }
         // VoiceOver hears how many apps match once typing pauses, not on every keystroke.
         .task(id: state.query) {
@@ -793,6 +830,11 @@ struct SearchResultsView: View {
             AccessibilityNotification.Announcement(text).post()
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Whether app names fit under the icons of the grid around (`GridLayout.labelsFit`).
+    @Entry var gridLabelsFit = true
 }
 
 // MARK: - Folder
@@ -879,7 +921,7 @@ struct FolderPageContent: View {
         let layout = GridLayout(size: size, rows: FolderLayout.rows(apps: folder.apps.count, grid: state.grid),
                                 columns: FolderLayout.columns(state.grid))
         let icon = GridLayout(size: state.drag.pagerSize, rows: state.grid.rows, columns: state.grid.columns)
-            .iconSize(scale: state.prefs.iconScale)
+            .iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
         let perPage = FolderLayout.perPage(state.grid)
         var entries: [(id: UUID, app: AppRef?)] = state.remainingFolderApps().map { ($0.id, $0) }
         if state.drag.active, case .folder(let fid) = state.drag.source, fid == folder.id, let gap = state.drag.gap {
@@ -901,6 +943,7 @@ struct FolderPageContent: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         // VoiceOver follows the keyboard focus, also into a folder opened with focus in it.
         .onChange(of: focus, initial: true) { _, i in
             if let i, entries.indices.contains(i), let app = entries[i].app { voiceOverFocus = app.id }

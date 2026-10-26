@@ -51,6 +51,7 @@ public enum Reconciler {
         var report = ReconcileReport()
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         let byBundle = Dictionary(grouping: installed.filter { $0.bundleID != nil }, by: { $0.bundleID! })
+        let byFoldedPath = Dictionary(installed.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
         // Paths some ref already points at; a moved ref must not take over another ref's app.
         let gridPaths = Set(grid.allApps.map(\.path))
         // Never prune when the scan came back empty: that's a failed scan, not an empty Mac.
@@ -73,6 +74,13 @@ public enum Reconciler {
             // An app whose bundle ID can't be read now (a damaged Info.plist) is still the one there.
             if let atPath, ref.bundleID == nil || atPath.bundleID == nil || atPath.bundleID == ref.bundleID {
                 return (atPath, false)
+            }
+            // The same app with its name now in other capitals (zoom.us.app updated into
+            // Zoom.us.app): the case-insensitive disk still finds the old spelling, so the ref
+            // would neither follow it nor be pruned, and the new spelling would be added again.
+            if atPath == nil, let respelt = byFoldedPath[ref.path.lowercased()],
+               ref.bundleID == nil || respelt.bundleID == nil || respelt.bundleID == ref.bundleID {
+                return (respelt, false)
             }
             if let id = ref.bundleID, atPath != nil || (isReachable(ref.path) && !pathExists(ref.path)),
                let other = likelyMove(of: ref, among: byBundle[id]?.filter {
@@ -252,9 +260,10 @@ public enum Reconciler {
                            aliases: [String: String] = [:]) {
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         let apps = apps.map { app in aliases[app.path].flatMap { byPath[$0] } ?? app }
-        var paths = Set(grid.allApps.map(\.path))
+        // Folded, as the disk is: a tile at zoom.us.app is already Zoom.us.app.
+        var paths = Set(grid.allApps.map { $0.path.lowercased() })
         // `insert` also drops an app listed twice in `apps`.
-        let new = apps.filter { paths.insert($0.path).inserted }
+        let new = apps.filter { paths.insert($0.path.lowercased()).inserted }
         let copies = CopyIndex(installed + apps)
         for app in apps { grid.setExcluded(app, false, copies: copies) }
         grid.appendAtEnd(new.map { .app($0.makeRef()) })

@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check that every referenced file and #fragment exists
         run: scripts/check-website.sh
 
@@ -34,7 +34,7 @@ jobs:
       group: website
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         working-directory: website
         run: npx -y wrangler@4.149.0 deploy

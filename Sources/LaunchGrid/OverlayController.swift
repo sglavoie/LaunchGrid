@@ -62,6 +62,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        // An alert or a file panel is waiting for an answer: over it, the grid would take no
+        // clicks and hide the question. Bring that forward instead.
+        if let modal = NSApp.modalWindow {
+            NSApp.activate()
+            modal.makeKeyAndOrderFront(nil)
+            return
+        }
         let mouse = NSEvent.mouseLocation
         screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         let panel = makePanelIfNeeded()
@@ -435,11 +442,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "a": if state.query.isEmpty { selectAll() }
             case "f": if !state.query.isEmpty { state.endSearch() }
             case "g": state.groupSelection()
-            case "n":
-                // The new page is shown, so nothing may stay in front of it.
-                state.query = ""
-                if state.openFolder != nil { state.closeFolder() }
-                state.newPage()
+            case "n": state.newPage() // which clears the search and closes the folder first
             case ",": state.onOpenSettings()
             case "w": hide()
             case "q": NSApp.terminate(nil)

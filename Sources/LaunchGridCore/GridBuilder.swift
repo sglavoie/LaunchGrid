@@ -30,7 +30,8 @@ public enum AppCategory {
 
     public static func name(for uti: String?) -> String {
         guard let uti else { return other }
-        var key = uti.replacingOccurrences(of: "public.app-category.", with: "")
+        // Some apps write it in other capitals ("public.app-category.Utilities").
+        var key = uti.lowercased().replacingOccurrences(of: "public.app-category.", with: "")
         if names[key] == nil, key.hasSuffix("-games") { key = "games" }
         return names[key] ?? other
     }

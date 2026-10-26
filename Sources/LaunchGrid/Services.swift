@@ -582,12 +582,54 @@ final class FolderWatcher: @unchecked Sendable {
 /// Store) build needs it; in the other, every call does nothing.
 @MainActor
 enum FileAccess {
+    /// What the sandbox calls do. Tests, which run outside the sandbox, swap in their own.
+    @MainActor struct Backend {
+        var isActive: () -> Bool
+        var defaults: () -> UserDefaults
+        var bookmark: (URL) -> Data?
+        /// Resolves a bookmark and starts using it: nil when it can't be resolved or used.
+        var open: (Data) -> (url: URL, stale: Bool)?
+        var close: (URL) -> Void
+
+        static var system: Backend { Backend(
+            isActive: { Sandbox.isActive },
+            defaults: { Preferences.appDefaults },
+            bookmark: { url in
+                try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                                      includingResourceValuesForKeys: nil, relativeTo: nil)
+            },
+            open: { data in
+                var stale = false
+                guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutMounting], bookmarkDataIsStale: &stale),
+                      url.startAccessingSecurityScopedResource() else { return nil }
+                return (url, stale)
+            },
+            close: { $0.stopAccessingSecurityScopedResource() }
+        ) }
+    }
+
+    static var backend = Backend.system
     private static let key = "bookmarks"
     /// Bookmarked items in use, by the path they were picked at (or have moved to since).
     private static var granted: [String: URL] = [:]
     /// Called when an item just picked couldn't be bookmarked: access to it ends when
     /// LaunchGrid quits.
     static var onBookmarkFailure: (URL) -> Void = { _ in }
+
+    /// Whether access to `path` is held, for the tests.
+    static func isGranted(_ path: String) -> Bool { granted[path] != nil }
+
+    /// Ends the access held and goes back to the system's calls, for the tests.
+    static func reset() {
+        for url in granted.values { backend.close(url) }
+        granted = [:]
+        backend = .system
+    }
+
+    private static var saved: [String: Data] {
+        get { backend.defaults().dictionary(forKey: key) as? [String: Data] ?? [:] }
+        set { backend.defaults().set(newValue, forKey: key) }
+    }
 
     /// Starts using the saved bookmarks not yet in use. At launch, and when a volume mounts:
     /// a bookmark to an unmounted volume only resolves once it's back. An item renamed or
@@ -596,24 +638,21 @@ enum FileAccess {
     /// for the grid to follow apps added with Browse.
     @discardableResult
     static func restore(prefs: Preferences) -> [String: String] {
-        guard Sandbox.isActive else { return [:] }
-        let d = Preferences.appDefaults
-        var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
+        guard backend.isActive() else { return [:] }
+        var saved = saved
         var moves: [String: String] = [:]
         for (path, data) in saved where granted[path] == nil {
-            var stale = false
-            guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutMounting], bookmarkDataIsStale: &stale),
-                  url.startAccessingSecurityScopedResource() else { continue }
+            guard let (url, stale) = backend.open(data) else { continue }
             let now = url.standardizedFileURL.path
             // Not into the Trash: that's on its way out, and the setting is better left as it was.
             if now != URL(fileURLWithPath: path).standardizedFileURL.path, !Launcher.isInTrash(now) {
                 saved[path] = nil
                 if saved[now] == nil {
-                    saved[now] = bookmark(url) ?? data
+                    saved[now] = backend.bookmark(url) ?? data
                     granted[now] = url
                 } else {
                     // Picked again at its new place: that bookmark has its own access.
-                    url.stopAccessingSecurityScopedResource()
+                    backend.close(url)
                 }
                 moves[path] = now
                 migrate(prefs, from: path, to: now)
@@ -621,9 +660,9 @@ enum FileAccess {
                 continue
             }
             granted[path] = url
-            if stale, let fresh = bookmark(url) { saved[path] = fresh }
+            if stale, let fresh = backend.bookmark(url) { saved[path] = fresh }
         }
-        d.set(saved, forKey: key)
+        self.saved = saved
         return moves
     }
 
@@ -632,15 +671,15 @@ enum FileAccess {
     /// the move, and the bookmark must be filed under the new path, or the next save forgets
     /// it as no longer used. Returns the moves found, as `restore` does.
     static func follow(_ path: String, prefs: Preferences) -> [String: String] {
-        guard Sandbox.isActive, let url = granted.removeValue(forKey: path) else { return [:] }
-        url.stopAccessingSecurityScopedResource()
+        guard backend.isActive(), let url = granted.removeValue(forKey: path) else { return [:] }
+        backend.close(url)
         return restore(prefs: prefs)
     }
 
     /// `follow` for each of `paths`, apps a scan found gone, that has a bookmark in use: one
     /// added with Browse and moved while LaunchGrid ran is followed rather than pruned.
     static func followVanished(_ paths: some Sequence<String>, prefs: Preferences) -> [String: String] {
-        guard Sandbox.isActive else { return [:] }
+        guard backend.isActive() else { return [:] }
         var moves: [String: String] = [:]
         for path in paths where granted[path] != nil {
             moves.merge(follow(path, prefs: prefs)) { found, _ in found }
@@ -663,33 +702,29 @@ enum FileAccess {
     /// when it couldn't be bookmarked, so access to it won't outlast this run.
     @discardableResult
     static func remember(_ url: URL) -> Bool {
-        guard Sandbox.isActive, granted[url.path] == nil else { return true }
-        guard let data = bookmark(url) else {
+        guard backend.isActive(), granted[url.path] == nil else { return true }
+        guard let data = backend.bookmark(url) else {
             NSLog("LaunchGrid: could not bookmark \(url.path); access ends when LaunchGrid quits")
             onBookmarkFailure(url)
             return false
         }
-        let d = Preferences.appDefaults
-        var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
         saved[url.path] = data
-        d.set(saved, forKey: key)
-        if url.startAccessingSecurityScopedResource() { granted[url.path] = url }
+        // Through the bookmark just made: the URL can be one built from a path (an app picked
+        // with Browse), whose own access can't be started, and then a move while LaunchGrid
+        // runs couldn't be followed.
+        if let (scoped, _) = backend.open(data) { granted[url.path] = scoped }
         return true
     }
 
     static func forget(_ path: String) {
-        guard Sandbox.isActive else { return }
-        granted.removeValue(forKey: path)?.stopAccessingSecurityScopedResource()
-        let d = Preferences.appDefaults
-        var saved = d.dictionary(forKey: key) as? [String: Data] ?? [:]
+        guard backend.isActive() else { return }
+        if let url = granted.removeValue(forKey: path) { backend.close(url) }
         saved[path] = nil
-        d.set(saved, forKey: key)
     }
 
     /// Forgets the bookmarks of apps added with Browse that are no longer in `inUse`.
     static func forgetApps(notIn inUse: Set<String>) {
-        guard Sandbox.isActive else { return }
-        let saved = Preferences.appDefaults.dictionary(forKey: key) as? [String: Data] ?? [:]
+        guard backend.isActive() else { return }
         for path in unusedApps(among: saved.keys, inUse: inUse) { forget(path) }
     }
 
@@ -697,11 +732,6 @@ enum FileAccess {
     /// forgotten when their setting changes, not here.
     nonisolated static func unusedApps(among bookmarked: some Sequence<String>, inUse: Set<String>) -> [String] {
         bookmarked.filter { ($0 as NSString).pathExtension == "app" && !inUse.contains($0) }.sorted()
-    }
-
-    private static func bookmark(_ url: URL) -> Data? {
-        try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
-                              includingResourceValuesForKeys: nil, relativeTo: nil)
     }
 }
 

@@ -225,6 +225,11 @@ extension Grid {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Without it, any JSON object (`{}`, another app's settings) would read as an empty
+        // layout. An empty list stays valid: a file may hold only exclusions.
+        guard c.contains(.pages) else {
+            throw DecodingError.keyNotFound(CodingKeys.pages, .init(codingPath: c.codingPath, debugDescription: "No pages"))
+        }
         self.init(
             rows: (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? 5,
             columns: (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7,
