@@ -28,6 +28,26 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.pages.map(titles) == [["A"], ["C", "D", "E", "Y"], ["Z", "X"]], "Add Missing Apps too")
     }
 
+    @Test func anAppRenamedInOtherCapitalsKeepsItsTile() {
+        // The disk ignores case, so the old spelling still exists: it isn't a move nor a prune.
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("zoom.us", id: "us.zoom.xos"))])])
+        let zoom = installed("Zoom.us", id: "us.zoom.xos")
+        let report = Reconciler.reconcile(&g, installed: [zoom], autoAdd: true, pathExists: { _ in true })
+        #expect(g.allApps.map(\.path) == ["/Applications/Zoom.us.app"])
+        #expect(report.added.isEmpty && report.removed.isEmpty)
+
+        // Nor does adding it by hand make a second tile.
+        Reconciler.add([installed("ZOOM.US", id: "us.zoom.xos")], to: &g)
+        #expect(g.allApps.count == 1)
+    }
+
+    @Test func aDuplicateLeftByACaseOnlyRenameIsDropped() {
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("zoom.us", id: "us.zoom.xos")), .app(app("Zoom.us", id: "us.zoom.xos"))])])
+        let report = Reconciler.reconcile(&g, installed: [installed("Zoom.us", id: "us.zoom.xos")], autoAdd: true, pathExists: { _ in true })
+        #expect(g.allApps.map(\.path) == ["/Applications/Zoom.us.app"])
+        #expect(report.duplicatesDropped == 1)
+    }
+
     @Test func doesNotAddWhenAutoAddIsOff() {
         var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))])])
         _ = Reconciler.reconcile(&g, installed: [installed("A"), installed("B")], autoAdd: false)
@@ -794,6 +814,53 @@ func tempDir(_ prefix: String) -> URL {
         let gone = [11: LaunchpadImporter.AppRow(title: "Xcode", bundleID: "com.apple.dt.Xcode", bookmark: Data("junk".utf8))]
         let fallback = LaunchpadImporter.build(items: Array(items.prefix(3)), apps: gone, groupTitles: [:], rows: 5, columns: 7) { _ in xcode.path }
         #expect(fallback.grid.allApps.map(\.path) == [xcode.path])
+    }
+
+    @Test func categoriesHaveFriendlyNames() {
+        #expect(AppCategory.name(for: "public.app-category.developer-tools") == "Developer Tools")
+        #expect(AppCategory.name(for: "public.app-category.Utilities") == "Utilities")
+        #expect(AppCategory.name(for: "public.app-category.puzzle-games") == "Games", "every kind of game")
+        #expect(AppCategory.name(for: "public.app-category.finance") == "Productivity")
+        #expect(AppCategory.name(for: "public.app-category.something-new") == AppCategory.other)
+        #expect(AppCategory.name(for: nil) == AppCategory.other)
+    }
+
+    @Test func choosingAppsExcludesOneCopyByPathAndTheOnlyCopyByBundleID() {
+        let xcode = installed("Xcode", id: "com.apple.dt.Xcode"), beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
+        let notes = installed("Notes")
+        var g = Grid(rows: 1, columns: 3, pages: [Page()])
+        g.setExcluded(include: [], exclude: [beta, notes], among: [xcode, beta, notes])
+        #expect(g.removedBundleIDs == [beta.path, notes.key])
+        #expect(!g.isExcluded(xcode) && g.isExcluded(beta) && g.isExcluded(notes))
+
+        g.setExcluded(include: [beta, notes], exclude: [], among: [xcode, beta, notes])
+        #expect(g.removedBundleIDs.isEmpty)
+
+        // Including one copy when the whole bundle ID was out keeps the other copy out.
+        g.removedBundleIDs = [xcode.key]
+        g.setExcluded(include: [beta], exclude: [], among: [xcode, beta])
+        #expect(g.removedBundleIDs == [xcode.path])
+    }
+
+    @Test func copiesSharingABundleIDWithoutBookmarksAreToldApartByName() throws {
+        // AppGrid's table: no bookmark nor custom_path, so the bundle ID is all there is.
+        let dir = tempDir("import-appgrid")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Xcode.app", id: "com.apple.dt.Xcode", in: dir)
+        try makeFakeApp("Xcode-beta.app", id: "com.apple.dt.Xcode", in: dir)
+        let xcode = dir.appendingPathComponent("Xcode.app"), beta = dir.appendingPathComponent("Xcode-beta.app")
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0), Row(id: 12, type: 4, parent: 10, ordering: 1),
+                     Row(id: 13, type: 4, parent: 10, ordering: 2)]
+        // The beta first, so Launch Services' answer (Xcode) would go to the wrong row.
+        let apps = [11: LaunchpadImporter.AppRow(title: "Xcode-beta", bundleID: "com.apple.dt.Xcode"),
+                    12: LaunchpadImporter.AppRow(title: "Xcode", bundleID: "com.apple.dt.Xcode"),
+                    13: LaunchpadImporter.AppRow(title: "Xcode", bundleID: "com.apple.dt.Xcode")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                        installed: [xcode.path, beta.path]) { _ in xcode.path }
+        #expect(r.grid.allApps.map { ($0.path as NSString).lastPathComponent } == ["Xcode-beta.app", "Xcode.app"])
+        #expect(r.duplicates == ["Xcode"], "a row listed twice is still a duplicate")
     }
 
     @Test func readsChangesStillInTheWriteAheadLog() throws {

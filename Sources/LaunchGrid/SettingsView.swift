@@ -57,8 +57,8 @@ struct LibraryActions: @unchecked Sendable {
     var importAppGrid: (_ done: (@MainActor (String) -> Void)?) -> Void
     var importLaunchpad: (_ done: (@MainActor (String) -> Void)?) -> Void
     var loadFile: (_ done: (@MainActor (String) -> Void)?) -> Void
-    /// Where the layout was saved; nil when cancelled or failed (already reported).
-    var saveFile: () -> URL?
+    /// `done` gets where the layout was saved; not called when cancelled or failed (already reported).
+    var saveFile: (_ done: @escaping @MainActor (URL) -> Void) -> Void
     var addMissing: () -> Void
     var chooseApps: () -> Void
     /// Applies the shortcut in the preferences. A recorded one that macOS refuses is replaced
@@ -226,6 +226,10 @@ struct AppearanceSettings: View {
     @Environment(AppState.self) private var state
     @Environment(\.libraryActions) private var actions
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    /// Why the picture chosen can't be shown (the blurred desktop shows instead), or nil.
+    @State private var pictureProblem: String?
+    /// Bumped on each pick, so picking the same file again looks at it again.
+    @State private var picks = 0
 
     var body: some View {
         @Bindable var prefs = state.prefs
@@ -269,6 +273,9 @@ struct AppearanceSettings: View {
                         }
                     }
                 }
+                if let pictureProblem, prefs.background == .image || prefs.background == .wallpaper {
+                    WarningCaption(Text(pictureProblem))
+                }
                 if prefs.background == .wallpaper || prefs.background == .image {
                     // Whole steps: each radius is blurred and cached separately.
                     ValueSlider(title: "Blur", value: $prefs.blurRadius, range: 0...60, step: 1,
@@ -298,6 +305,9 @@ struct AppearanceSettings: View {
             }
         }
         .formStyle(.grouped)
+        .task(id: "\(prefs.background)|\(prefs.customImagePath ?? "")|\(picks)") {
+            pictureProblem = await Self.pictureProblem(prefs.background, customImage: prefs.customImagePath)
+        }
     }
 
     private func percent(_ value: Double) -> String {
@@ -312,6 +322,28 @@ struct AppearanceSettings: View {
             if let old = state.prefs.customImagePath { FileAccess.forget(old) }
             FileAccess.remember(url)
             state.prefs.customImagePath = url.path
+            picks += 1
+        }
+    }
+
+    /// Without this, a picture that can't be read silently shows as the blurred desktop.
+    static func pictureProblem(_ style: BackgroundStyle, customImage: String?) async -> String? {
+        switch style {
+        case .image:
+            guard let path = customImage else { return nil }
+            let url = URL(fileURLWithPath: path)
+            guard await !Disk.run({ BackgroundPicture.isReadable(url) }) else { return nil }
+            return FileManager.default.fileExists(atPath: path)
+                ? String(localized: "This picture can't be read, so the blurred desktop is shown instead. Choose it again, or another one.")
+                : String(localized: "This picture is no longer there (moved, deleted or on a disconnected drive), so the blurred desktop is shown instead.")
+        case .wallpaper:
+            guard let url = NSScreen.main.flatMap(BackgroundPicture.wallpaperURL) else { return nil }
+            guard await !Disk.run({ BackgroundPicture.isReadable(url) }) else { return nil }
+            return Sandbox.isActive
+                ? String(localized: "This version of LaunchGrid isn't allowed to read your desktop picture, so the blurred desktop is shown instead. To use the picture, choose its file with Custom Image.")
+                : String(localized: "Your desktop picture can't be read, so the blurred desktop is shown instead.")
+        default:
+            return nil
         }
     }
 }
@@ -532,7 +564,7 @@ struct LibrarySettings: View {
             }
             Section("Grid file") {
                 HStack {
-                    Button("Save Grid File…") { if let url = actions.saveFile() { savedFile = url } }
+                    Button("Save Grid File…") { actions.saveFile { savedFile = $0 } }
                     Button("Load Grid File…") { actions.loadFile { importStatus = $0 } }
                 }
                 if let savedFile {

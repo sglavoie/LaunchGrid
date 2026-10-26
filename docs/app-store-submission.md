@@ -39,7 +39,7 @@ The App Store build is signed with the sandbox, `files.user-selected.read-write`
 | Scanning `/Applications` and `/System/Applications`, FSEvents | Work unchanged |
 | Scanning `~/Applications` | The real home comes from `getpwuid` (`Sandbox.realHome`), and the `temporary-exception.files.home-relative-path.read-only` entitlement for `/Applications/` makes it readable. **Explain it in the review notes** (below). If review refuses it, drop the entitlement: people can still add the folder under Extra folders |
 | Extra scan folders, custom background picture, apps added with Browse | Read-only security-scoped bookmarks, saved when picked and reopened at launch and when a volume mounts (`FileAccess` in `Services.swift`) |
-| Wallpaper background | Pictures outside readable locations fall back to the blurred desktop |
+| Wallpaper background | Pictures outside readable locations fall back to the blurred desktop, and Settings says so, suggesting Custom Image |
 | Launchpad and AppGrid imports | Their databases are still found (existence checks work outside the sandbox; the Launchpad folder drops the container's suffix that `confstr` adds). Importing opens a panel on the database's folder; one click on Allow grants it, the database and its write-ahead log |
 | Layout and settings | In `~/Library/Containers/com.sglavoie.launchgrid`, apart from the downloadable build's |
 | Debug scripts (`DebugScript.swift`) | Compiled out (`-DAPP_STORE`), with their synthetic events |

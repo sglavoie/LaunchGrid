@@ -52,6 +52,9 @@ final class AppState {
     @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [AppRef])?
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
+    /// The scan's paths in lower case: the disk ignores case, so a tile at zoom.us.app whose
+    /// app is now Zoom.us.app is the scan's app, not one outside the scan folders.
+    @ObservationIgnored private var installedFoldedPaths: Set<String> = []
     /// Real paths of apps the scan found through a symlink, to the paths it lists them at.
     @ObservationIgnored private var pathAliases: [String: String] = [:]
     /// Paths of apps any scan this run found, and those found before the latest scan: a tile
@@ -231,6 +234,9 @@ final class AppState {
         do {
             try FileManager.default.copyItem(at: file, to: copy)
             NSLog("LaunchGrid: \(skipped) entries of the grid could not be read; kept a copy at \(copy.path)")
+            // The file still holds them, unchanged since loading: count it as unsaved, so the save
+            // `init` schedules writes the rest back and the next launch doesn't ask again.
+            savedGeneration = gridGeneration &- 1
             recoveryNotice = (
                 String(localized: "Part of your layout could not be read"),
                 String(localized: "\(skipped) entries in your saved layout could not be read and were left out. The file as it was is kept as \(copy.lastPathComponent)."),
@@ -504,8 +510,9 @@ final class AppState {
             let started = Date()
             let (result, outside, disk) = await Disk.run(on: .global(qos: .utility)) {
                 let result = scanner(roots)
-                let scanned = Set(result.apps.map(\.path))
-                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0) && result.aliases[$0] == nil }),
+                // Folded, as `isOutside` compares: the disk ignores case.
+                let scanned = Set(result.apps.map { $0.path.lowercased() })
+                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0.lowercased()) && result.aliases[$0] == nil }),
                         DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted))
             }
             NSLog("LaunchGrid: scanned \(result.apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
@@ -533,6 +540,7 @@ final class AppState {
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        installedFoldedPaths = Set(apps.map { $0.path.lowercased() })
         pathAliases = aliases
         installedBefore = everInstalled
         everInstalled.formUnion(apps.map(\.path))
@@ -689,7 +697,7 @@ final class AppState {
 
     /// Whether `path` is outside what the scan found, under its own path or its real one.
     private func isOutside(_ path: String) -> Bool {
-        installedByPath[path] == nil && pathAliases[path] == nil
+        installedByPath[path] == nil && pathAliases[path] == nil && !installedFoldedPaths.contains(path.lowercased())
     }
 
     private func isSelf(_ bundleID: String?) -> Bool {
@@ -711,8 +719,15 @@ final class AppState {
     func addApps(_ apps: [InstalledApp]) {
         let installed = self.installed
         let aliases = pathAliases
+        let before = grid.allApps.count
         apply { Reconciler.add(apps, to: &$0, installed: installed, aliases: aliases) }
-        showToast(apps.count == 1 ? String(localized: "Added \(apps[0].name)") : String(localized: "Added \(apps.count) apps"))
+        // Picked with Browse, an app can already be on the grid: say so rather than "Added".
+        let added = grid.allApps.count - before
+        if added == 0 {
+            showToast(apps.count == 1 ? String(localized: "\(apps[0].name) is already on the grid") : String(localized: "These apps are already on the grid"))
+        } else {
+            showToast(added == 1 && apps.count == 1 ? String(localized: "Added \(apps[0].name)") : String(localized: "Added \(added) apps"))
+        }
     }
 
     func installedApp(for ref: AppRef) -> InstalledApp? {
@@ -933,7 +948,13 @@ final class AppState {
         let clamped = max(0, min(p, grid.pages.count - 1))
         guard clamped != currentPage else { return }
         withAnimationIfShown { currentPage = clamped }
-        focusIndex = focusIndex.map { min($0, max(0, currentItems.count - 1)) }
+        clampFocus()
+    }
+
+    /// Keeps keyboard focus on an item shown: of the open folder, else of the page.
+    func clampFocus() {
+        let count = openFolder?.apps.count ?? currentItems.count
+        focusIndex = focusIndex.map { min($0, max(0, count - 1)) }
     }
 
     func flipPage(_ delta: Int) {
@@ -1005,10 +1026,17 @@ final class AppState {
 
     func remove(_ ids: [UUID]) {
         let count = ids.count
+        // A folder takes all its apps with it: say how many, as they leave the grid too.
+        let folders = ids.compactMap { grid.item($0)?.folder }
+        let apps = folders.reduce(count - folders.count) { $0 + $1.apps.count }
         let installed = self.installed
         apply { g in g.removingEmptiedPages { $0.remove(ids, installed: installed) } }
         selection.subtract(ids)
-        showToast(count == 1 ? String(localized: "Removed — ⌘Z to undo") : String(localized: "Removed \(count) items — ⌘Z to undo"))
+        if !folders.isEmpty {
+            showToast(String(localized: "Removed \(apps) apps — ⌘Z to undo"))
+        } else {
+            showToast(count == 1 ? String(localized: "Removed — ⌘Z to undo") : String(localized: "Removed \(count) items — ⌘Z to undo"))
+        }
     }
 
     /// Moves to the page at `page`, or a new one past the last.
@@ -1047,7 +1075,8 @@ final class AppState {
         let onPage = currentItems.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) }
         let anchor = anchor ?? focused.flatMap { selection.contains($0) ? $0 : nil } ?? onPage.first(where: selection.contains)
         var newID: UUID?
-        apply { newID = $0.group(ids, name: name, anchor: anchor) }
+        // Grouping can take the last item off another page; that page goes, as with a drag.
+        apply { g in g.removingEmptiedPages { newID = $0.group(ids, name: name, anchor: anchor) } }
         selection.removeAll()
         guard let newID else { return }
         // Nothing selected on this page: show the folder's page, so it opens over its own.
@@ -1055,24 +1084,35 @@ final class AppState {
         openFolder(newID)
     }
 
+    /// Clears the search and closes the folder, so the page an action changes is the one in
+    /// view: the ⋯ menu stays reachable over search results and an open folder.
+    private func bringPageForward() {
+        query = ""
+        if openFolder != nil { closeFolder() }
+    }
+
     func newPage() {
+        bringPageForward()
         var index = 0
         apply { index = $0.addPage(after: currentPage) }
         goToPage(index)
     }
 
     func deleteCurrentPage() {
+        bringPageForward()
         let p = currentPage
         apply { $0.deletePage(p) }
         goToPage(p - 1)
     }
 
     func sortCurrentPage() {
+        bringPageForward()
         let p = currentPage
         apply { $0.sortPage(p, folders: prefs.folderPlacement) }
     }
 
     func sortEverything() {
+        bringPageForward()
         let hadTitles = grid.pages.contains { $0.title != nil }
         apply { $0.sortEverything(folders: prefs.folderPlacement) }
         goToPage(0)
@@ -1087,6 +1127,7 @@ final class AppState {
 
     func beginPageTitleEdit(_ page: Int) {
         guard grid.pages.indices.contains(page) else { return }
+        bringPageForward()
         textEdit = TextEditRequest(target: .pageTitle(grid.pages[page].id), title: String(localized: "Page Title"), text: grid.pages[page].title ?? "")
     }
 
@@ -1161,6 +1202,7 @@ final class AppState {
         let (wasActive, source) = (drag.active, drag.source)
         drag.cancel()
         currentPage = min(currentPage, grid.pages.count - 1)
+        clampFocus()
         if reopeningFolder, wasActive, case .folder(let id) = source, openFolderID == nil,
            let loc = grid.locate(id), loc.folderIndex == nil {
             currentPage = loc.page

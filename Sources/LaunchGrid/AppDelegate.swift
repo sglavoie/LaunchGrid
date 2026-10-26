@@ -186,9 +186,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if let url = self.pendingOpen {
                 // Loading needs the catalog, so a file that launched us waits for the first scan.
                 self.pendingOpen = nil
-                self.openLayout(url)
+                // The welcome window only if the file gave no layout (cancelled, unreadable),
+                // not over it while it loads.
+                self.openLayout(url, finished: { [weak self] in
+                    if let self, !self.state.hasGridFile { self.showFirstRun() }
+                })
+            } else if !self.state.hasGridFile {
+                self.showFirstRun()
             }
-            if !self.state.hasGridFile { self.showFirstRun() }
             if CommandLine.arguments.contains("--show") { self.overlay.show() }
         }
         startWatching()
@@ -219,10 +224,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// Loads a layout file, from Finder or the Load Grid File panel, asking before it replaces
     /// a grid that has apps on it. `done` gets what happened, for Settings to show.
-    private func openLayout(_ url: URL, done: (@MainActor (String) -> Void)? = nil) {
+    /// `finished` runs once it's over, whether the layout loaded or not.
+    private func openLayout(_ url: URL, done: (@MainActor (String) -> Void)? = nil,
+                            finished: (@MainActor () -> Void)? = nil) {
         overlay.hide(deactivate: false)
         NSApp.activate()
         Task {
+            var handedOn = false
+            defer { if !handedOn { finished?() } }
             // Read first, off the main thread (a file on a stalled volume mustn't hang the app):
             // a file that can't be loaded shouldn't ask to replace anything.
             guard let layout = await readLayout(at: url) else { return }
@@ -234,7 +243,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     guard allowReading(url, from: url.lastPathComponent, checking: wal) else { return }
                 }
                 // Asks once the database is read, and only when apps in it were found.
-                importDatabase(url, from: url.lastPathComponent, done: done)
+                handedOn = true
+                importDatabase(url, from: url.lastPathComponent, done: done, finished: finished)
             case .grid(let grid, let skipped):
                 let name = url.deletingPathExtension().lastPathComponent
                 // Said before replacing anything, as an unreadable saved layout is.
@@ -532,7 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             importAppGrid: { [weak self] done in self?.importAppGrid(done: done) },
             importLaunchpad: { [weak self] done in self?.importLaunchpad(done: done) },
             loadFile: { [weak self] done in self?.loadGridFile(done: done) },
-            saveFile: { [weak self] in self?.saveGridFile() },
+            saveFile: { [weak self] done in self?.saveGridFile(done: done) },
             addMissing: { [weak self] in self?.showAddMissing() },
             chooseApps: { [weak self] in self?.showChooseApps() },
             hotkeyChanged: { [weak self] fallback in self?.applyHotkey(fallback: fallback) },
@@ -700,10 +710,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Asks before replacing a grid that has apps on it, as loading a grid file does, once the
     /// database is read: there may be nothing in it to import.
     private func importDatabase(_ url: URL, from source: String,
-                                done: (@MainActor (String) -> Void)? = nil) {
+                                done: (@MainActor (String) -> Void)? = nil,
+                                finished: (@MainActor () -> Void)? = nil) {
         let rows = state.grid.rows, columns = state.grid.columns
         let installed = state.installed.map(\.path)
         Task {
+            defer { finished?() }
             // Reading the database and asking Launch Services about every app can take a while.
             let outcome = await Disk.run {
                 Result {
@@ -748,24 +760,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// From the menu bar there's nothing in view to confirm the save in; the grid says so next time it opens.
     @objc func saveGridFileFromMenu() {
-        if let url = saveGridFile() { state.showToast(String(localized: "Saved \(url.lastPathComponent)")) }
+        saveGridFile { [weak self] url in self?.state.showToast(String(localized: "Saved \(url.lastPathComponent)")) }
     }
 
-    /// Saves the layout to a file the person picks; returns where, or nil if cancelled or failed.
-    @discardableResult
-    func saveGridFile() -> URL? {
+    /// Saves the layout to a file the person picks; `done` gets where, unless cancelled or failed.
+    func saveGridFile(done: @escaping @MainActor (URL) -> Void) {
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.launchGridLayout]
         panel.nameFieldStringValue = "LaunchGrid Layout.launchgrid"
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        do {
-            try GridStore.encode(state.grid).write(to: url, options: .atomic)
-            return url
-        } catch {
-            showError(String(localized: "Could not save the grid file"), error.localizedDescription)
-            return nil
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let grid = state.grid
+        Task {
+            // Off the main thread: a stalled network or USB volume mustn't hang the app.
+            let written = await Disk.run { Result { try GridStore.encode(grid).write(to: url, options: .atomic) } }
+            switch written {
+            case .success: done(url)
+            case .failure(let error): showError(String(localized: "Could not save the grid file"), error.localizedDescription)
+            }
         }
     }
 

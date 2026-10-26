@@ -26,9 +26,20 @@ struct GridLayout {
         return r * columns + c
     }
 
-    func iconSize(scale: Double) -> CGFloat {
+    /// Below an icon, for its name: the spacing and one line of text (`ItemView`).
+    static let labelHeight: CGFloat = 22
+
+    /// With `labels`, small enough to leave its name room in the cell, so a short cell (a
+    /// small window, many rows, large icons) doesn't put names over the icons below.
+    func iconSize(scale: Double, labels: Bool = false) -> CGFloat {
         let fit = min(cell.width * 0.62, cell.height * 0.58)
-        return max(24, min(fit * scale, min(cell.width, cell.height) * 0.9, 160))
+        let room = labels ? cell.height - Self.labelHeight : .infinity
+        return max(24, min(fit * scale, min(cell.width, cell.height) * 0.9, 160, room))
+    }
+
+    /// Whether a name fits under an icon of `iconSize`; when not, names are left out.
+    func labelsFit(iconSize: CGFloat) -> Bool {
+        iconSize + Self.labelHeight <= cell.height
     }
 }
 
@@ -218,7 +229,7 @@ extension AppState {
         var hit: UUID?
         var source = DragController.Source.page
         // Only start on the icon itself; elsewhere a drag swipes pages (or does nothing in a folder).
-        let reach = pageLayout.iconSize(scale: prefs.iconScale) * 0.75
+        let reach = pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) * 0.75
         func onIcon(_ local: CGPoint, _ center: CGPoint) -> Bool {
             abs(local.x - center.x) < reach && abs(local.y - center.y) < reach * 1.2
         }
@@ -337,7 +348,7 @@ extension AppState {
             if remaining.indices.contains(r) { shown = remaining[r] }
         }
         let center = pageLayout.center(cell)
-        let radius = pageLayout.iconSize(scale: prefs.iconScale) * 0.42
+        let radius = pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) * 0.42
         let nearCenter = hypot(local.x - center.x, local.y - center.y) < radius
         if let shown, nearCenter, mergeAllowed {
             drag.pendingGap = nil
@@ -401,6 +412,8 @@ extension AppState {
                 drag.gap = nil
                 drag.pendingGap = nil
             }
+            // As `goToPage` does: focus past this page's end would make ← turn the page back.
+            clampFocus()
         }
     }
 
