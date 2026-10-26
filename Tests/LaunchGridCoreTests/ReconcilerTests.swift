@@ -310,6 +310,106 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(titles(g.pages[0]) == ["A", "B", "C", "D"])
     }
 
+    @Test func appsPrunedApartOverSeveralScansComeBackInOrder() {
+        let all = ["A", "B", "C", "D"].map { installed($0) }
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: ["A", "B", "C", "D"].map { .app(app($0)) })])
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        _ = Reconciler.reconcile(&g, installed: [all[1], all[3]], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [all[1]], autoAdd: false, now: t0 + 5)
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: t0 + 10)
+        #expect(titles(g.pages[0]) == ["A", "B", "C", "D"])
+    }
+
+    @Test func appsPrunedFromOneSlotInLaterScansComeBackInOrder() {
+        let names = ["A", "B", "C", "D", "E", "F"]
+        let all = names.map { installed($0) }
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: names.map { .app(app($0)) })])
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        _ = Reconciler.reconcile(&g, installed: all.filter { ["A", "B", "D"].contains($0.name) }, autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: all.filter { ["A", "D"].contains($0.name) }, autoAdd: false, now: t0 + 5)
+        _ = Reconciler.reconcile(&g, installed: [all[0]], autoAdd: false, now: t0 + 10)
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: t0 + 15)
+        #expect(titles(g.pages[0]) == names)
+    }
+
+    @Test func aFolderPrunedInAnEarlierScanKeepsItsPlaceAmongItsNeighbours() {
+        let first = Folder(name: "F1", apps: [app("A"), app("B")]), second = Folder(name: "F2", apps: [app("C")])
+        var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.folder(first), .folder(second), .app(app("E"))]),
+                                                  Page(items: [.app(app("Z"))])])
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        _ = Reconciler.reconcile(&g, installed: [installed("C"), installed("Z")], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [installed("Z")], autoAdd: false, now: t0 + 5)
+        _ = Reconciler.reconcile(&g, installed: ["A", "B", "C", "E", "Z"].map { installed($0) }, autoAdd: false, now: t0 + 10)
+        #expect(titles(g.pages[0]) == ["F1", "F2", "E"])
+    }
+
+    @Test func pagesEmptiedInSeparateScansComeBackInOrder() {
+        let all = ["A", "X", "Y"].map { installed($0) }
+        var g = Grid(rows: 2, columns: 3, pages: all.map { Page(title: "P\($0.name)", items: [.app(app($0.name))]) })
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        _ = Reconciler.reconcile(&g, installed: [all[0], all[2]], autoAdd: false, now: t0)
+        _ = Reconciler.reconcile(&g, installed: [all[0]], autoAdd: false, now: t0 + 5)
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: t0 + 10)
+        #expect(g.pages.map(\.title) == ["PA", "PX", "PY"])
+    }
+
+    @Test func appsPrunedInWavesAndRestoredComeBackAsTheyStood() {
+        struct XorShift: RandomNumberGenerator {
+            var s: UInt64
+            mutating func next() -> UInt64 { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s }
+        }
+        func layout(_ g: Grid) -> [[String]] {
+            g.pages.map { $0.items.map { i in i.folder.map { "[" + $0.apps.map(\.name).joined(separator: ",") + "]" } ?? i.title } }
+        }
+        var failures: [Int] = []
+        for seed in 1...600 {
+            var r = XorShift(s: UInt64(seed) &* 0x9E37_79B9_7F4A_7C15 | 1)
+            let rows = Int.random(in: 1...3, using: &r), columns = Int.random(in: 1...3, using: &r)
+            var apps: [InstalledApp] = []
+            func make() -> AppRef {
+                let a = InstalledApp(bundleID: "com.fuzz.\(apps.count)", path: "/Fuzz/\(apps.count).app", name: "N\(apps.count)")
+                apps.append(a)
+                return a.makeRef()
+            }
+            var pages: [Page] = []
+            for _ in 0..<Int.random(in: 1...4, using: &r) {
+                let items = (0..<Int.random(in: 1...(rows * columns), using: &r)).map { _ -> GridItem in
+                    Int.random(in: 0..<4, using: &r) == 0
+                        ? .folder(Folder(name: "F", apps: (0..<Int.random(in: 1...3, using: &r)).map { _ in make() }))
+                        : .app(make())
+                }
+                pages.append(Page(title: Bool.random(using: &r) ? "T\(pages.count)" : nil, items: items))
+            }
+            var g = Grid(rows: rows, columns: columns, pages: pages)
+            g.normalize()
+            let original = layout(g), titles = g.pages.map(\.title)
+            var gone = Set<String>(), now = Date(timeIntervalSinceReferenceDate: 0)
+            func scan() {
+                now += 10
+                let present = apps.filter { !gone.contains($0.path) }
+                _ = Reconciler.reconcile(&g, installed: present, autoAdd: false, pathExists: { !gone.contains($0) }, now: now)
+            }
+            for _ in 0..<Int.random(in: 1...3, using: &r) {
+                let left = apps.filter { !gone.contains($0.path) }
+                guard left.count > 1 else { break }
+                for a in left.shuffled(using: &r).prefix(Int.random(in: 1...(left.count - 1), using: &r)) { gone.insert(a.path) }
+                scan()
+            }
+            if Bool.random(using: &r) {
+                let back = Array(gone).shuffled(using: &r)
+                for part in [back[..<(back.count / 2)], back[(back.count / 2)...]] where !part.isEmpty {
+                    gone.subtract(part)
+                    scan()
+                }
+            } else {
+                gone = []
+                scan()
+            }
+            if layout(g) != original || g.pages.map(\.title) != titles { failures.append(seed) }
+        }
+        #expect(failures.isEmpty)
+    }
+
     @Test func folderTheUserUngroupedIsNotRecreatedOnRestore() {
         var g = Grid(rows: 2, columns: 3, pages: [Page(items: [.app(app("A")), .app(app("B")), .app(app("C"))])])
         let fid = g.group(g.pages[0].items.map(\.id), name: "F")!
@@ -861,6 +961,40 @@ func tempDir(_ prefix: String) -> URL {
                                         installed: [xcode.path, beta.path]) { _ in xcode.path }
         #expect(r.grid.allApps.map { ($0.path as NSString).lastPathComponent } == ["Xcode-beta.app", "Xcode.app"])
         #expect(r.duplicates == ["Xcode"], "a row listed twice is still a duplicate")
+    }
+
+    @Test func theOneCopyTheScanFoundWinsOverLaunchServices() throws {
+        let dir = tempDir("import-one-copy")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Foo.app", id: "com.test.Foo", in: dir)
+        let foo = dir.appendingPathComponent("Foo.app")
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "Foo", bundleID: "com.test.Foo")]
+        let elsewhere = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                                installed: [foo.path]) { _ in "/Volumes/Foo 2.0/Foo.app" }
+        #expect(elsewhere.grid.allApps.map(\.path) == [foo.path], "not the copy on a disk image")
+        let unknown = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                              installed: [foo.path]) { _ in nil }
+        #expect(unknown.grid.allApps.map(\.path) == [foo.path])
+        #expect(unknown.skipped.isEmpty, "installed, so not skipped")
+    }
+
+    @Test func launchServicesOnlyPicksAmongTheScansCopies() throws {
+        let dir = tempDir("import-copies")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Xcode.app", id: "com.apple.dt.Xcode", in: dir)
+        try makeFakeApp("Xcode-beta.app", id: "com.apple.dt.Xcode", in: dir)
+        let xcode = dir.appendingPathComponent("Xcode.app"), beta = dir.appendingPathComponent("Xcode-beta.app")
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0)]
+        // A title naming neither copy, so the name doesn't decide.
+        let apps = [11: LaunchpadImporter.AppRow(title: "Xcode (old)", bundleID: "com.apple.dt.Xcode")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                        installed: [xcode.path, beta.path]) { _ in "/Users/x/Library/Developer/Xcode.app" }
+        #expect(r.grid.allApps.map(\.path) == [xcode.path])
     }
 
     @Test func readsChangesStillInTheWriteAheadLog() throws {

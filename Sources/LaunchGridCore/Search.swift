@@ -10,7 +10,9 @@ public enum Search {
     /// and "visual-" finds "Visual Studio Code" as if typed without them, a little below a prefix
     /// as typed: "c++" is "c" that way, and "C++ Builder" must still come before "Chess". A space typed in the
     /// query may be skipped ("wi fi" finds "WiFiman"), but one in the name may not: "apps" isn't
-    /// a prefix of "App Store".
+    /// a prefix of "App Store". Its words typed whole and run together are, a little below:
+    /// "appstore", and "appst" once two letters of the next word are in. A word starting at a
+    /// capital inside a word counts too, below one after a separator: "edit" finds "TextEdit".
     /// Returns nil when there is no match.
     public static func score(_ name: String, query: String) -> Int? {
         let q = normalize(query)
@@ -26,8 +28,10 @@ public enum Search {
         if !queryKey.isEmpty, nameKey.hasPrefix(queryKey) || nameKey.hasPrefix(queryKey.filter { $0 != " " }) {
             return 850 - shortness(n)
         }
+        if !q.contains(" "), startsWordsRunTogether(q, words: nameKey.split(separator: " ")) { return 800 - shortness(n) }
         if words.contains(where: { $0.hasPrefix(q) }) { return 700 - shortness(n) }
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - shortness(n) }
+        if humpWords(of: name).contains(where: { $0.hasPrefix(q) }) { return 650 - shortness(n) }
         // With the humps and without: "qp" is QuickTime Player's initials as much as "qtp" is.
         if acronym(of: name).hasPrefix(q) || acronym(of: name, humps: false).hasPrefix(q) { return 600 }
         if queryWords.count > 1, startsWordsOrInitials(queryWords, of: words) { return 600 }
@@ -127,6 +131,37 @@ public enum Search {
             if wordStart || hump { out.append(ch) }
         }
         return normalize(out)
+    }
+
+    /// Whether `q` is the first words typed whole without their spaces, then either nothing or
+    /// at least two letters of the next: "appstore" and "appst" for "App Store", not "apps".
+    static func startsWordsRunTogether(_ q: String, words: [Substring]) -> Bool {
+        var rest = Substring(q)
+        for (k, word) in words.enumerated() {
+            if rest.isEmpty { return k > 1 }
+            if rest.hasPrefix(word) {
+                rest = rest.dropFirst(word.count)
+                continue
+            }
+            return k > 0 && rest.count >= 2 && word.hasPrefix(rest)
+        }
+        return rest.isEmpty && words.count > 1
+    }
+
+    /// The rest of each word from a camel-case hump inside it: "TextEdit" → ["edit"],
+    /// "PDFExpert" → ["expert"], as `acronym` finds the humps.
+    static func humpWords(of name: String) -> [String] {
+        let chars = Array(name)
+        var out: [String] = []
+        for i in chars.indices where i > 0 && TextLine.isWord(chars, i - 1) {
+            let (ch, previous) = (chars[i], chars[i - 1])
+            let next: Character = i + 1 < chars.count ? chars[i + 1] : " "
+            guard ch.isUppercase, previous.isLowercase || (previous.isUppercase && next.isLowercase) else { continue }
+            var end = i
+            while end < chars.count, chars[end].isLetter || chars[end].isNumber { end += 1 }
+            out.append(normalize(String(chars[i..<end])))
+        }
+        return out
     }
 
     /// Whether each query word starts a different word of the name, so "word word" doesn't

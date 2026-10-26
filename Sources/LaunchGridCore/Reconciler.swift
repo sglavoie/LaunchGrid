@@ -123,19 +123,34 @@ public enum Reconciler {
 
         // Apps pruned by earlier passes, which no longer show among their old neighbours.
         let earlier = grid.recentlyPruned
-        /// The IDs before slot `i` among `ids`, nearest last, counting apps an earlier pass
-        /// pruned from just before it (`index` gives such an entry's slot there, if it was in
-        /// this list). One pruned at slot k sat just before the item now at k.
-        func neighbours(_ ids: [UUID], before i: Int, index: (PrunedApp) -> Int?) -> [UUID] {
-            let gone = earlier.compactMap { e in index(e).flatMap { $0 <= i ? (Double($0) - 0.5, e.app.id) : nil } }
-            let here = ids[..<i].enumerated().map { (Double($0.offset), $0.element) }
-            // A stable sort keeps several pruned at one slot oldest first, as they stood.
-            let all = (gone + here).enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }
-            return all.suffix(neighbourMemory).map(\.element.1)
+        /// The IDs before slot `i` among `ids`, nearest last, counting items an earlier pass
+        /// pruned from just before it (`index` gives such an entry's slot there and the ID of
+        /// what stood there, if it was in this list). One pruned at slot k sat just before the
+        /// item now at k.
+        func neighbours(_ ids: [UUID], before i: Int, index: (PrunedApp) -> (slot: Int, id: UUID, before: [UUID]?)?) -> [UUID] {
+            var goneIDs = Set(ids)
+            let gone = earlier.compactMap { e in
+                index(e).flatMap { $0.slot <= i && goneIDs.insert($0.id).inserted ? $0 : nil }
+            }
+            return Self.interleave(here: Array(ids[..<i]), gone: gone).suffix(neighbourMemory)
         }
 
         let pageIDs = grid.pages.map(\.id)
-        func pagesBefore(_ p: Int) -> [UUID] { Array(pageIDs[..<p].suffix(neighbourMemory)) }
+        /// The pages before page `p`, nearest last, counting pages an earlier pass emptied from
+        /// just before it, as `neighbours` does for items.
+        func pagesBefore(_ p: Int) -> [UUID] {
+            var gonePages = Set(pageIDs)
+            let gone = earlier.compactMap { e -> (slot: Int, id: UUID, before: [UUID]?)? in
+                guard e.pageEmptied == true, let at = e.pageIndex, at <= p,
+                      gonePages.insert(e.pageID).inserted else { return nil }
+                return (at, e.pageID, e.pageBefore)
+            }
+            return Self.interleave(here: Array(pageIDs[..<p]), gone: gone).suffix(neighbourMemory)
+        }
+        // Slots this pass removed, as they were before it: on each page, in each folder, and of
+        // the pages themselves. Remembered slots are kept in terms of what is left after the pass.
+        var removedSlots: [UUID: [Int]] = [:], removedFolderSlots: [UUID: [Int]] = [:]
+        var emptiedPageSlots: [Int] = []
 
         for p in grid.pages.indices {
             let pageID = grid.pages[p].id
@@ -143,6 +158,7 @@ public enum Reconciler {
             defer {
                 if !items.isEmpty && grid.pages[p].items.isEmpty {
                     emptiedPages.insert(pageID)
+                    emptiedPageSlots.append(p)
                     for k in pruned.indices where pruned[k].pageID == pageID {
                         pruned[k].pageEmptied = true
                         pruned[k].pageIndex = p
@@ -152,34 +168,62 @@ public enum Reconciler {
                 }
             }
             let itemIDs = items.map(\.id)
-            grid.pages[p].items = items.enumerated().compactMap { i, item in
+            grid.pages[p].items = items.enumerated().compactMap { i, item -> GridItem? in
                 func before() -> [UUID] {
-                    neighbours(itemIDs, before: i) { $0.pageID == pageID && $0.folderID == nil ? $0.index : nil }
+                    // A folder an earlier pass emptied comes back with its ID, so it counts as one.
+                    neighbours(itemIDs, before: i) { e in
+                        guard e.pageID == pageID else { return nil }
+                        if let folderID = e.folderID { return e.folderEmptied == true ? (e.index, folderID, e.before) : nil }
+                        return (e.index, e.app.id, e.before)
+                    }
                 }
+                let kept: GridItem?
                 switch item {
                 case .app(let a):
-                    return refresh(a) { PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before()) }
+                    kept = refresh(a) { PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before()) }
                         .map(GridItem.app)
                 case .folder(var f):
                     let (apps, folderID, folderName) = (f.apps, f.id, f.name)
                     f.apps = apps.enumerated().compactMap { fi, a in
-                        refresh(a) {
+                        let app = refresh(a) {
                             PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,
                                       folderID: folderID, folderName: folderName, folderIndex: fi,
                                       before: before(),
-                                      folderBefore: neighbours(apps.map(\.id), before: fi) { $0.folderID == folderID ? $0.folderIndex : nil })
+                                      folderBefore: neighbours(apps.map(\.id), before: fi) { e in e.folderID == folderID ? e.folderIndex.map { ($0, e.app.id, e.folderBefore) } : nil })
                         }
+                        if app == nil { removedFolderSlots[folderID, default: []].append(fi) }
+                        return app
                     }
-                    guard f.apps.isEmpty else { return .folder(f) }
-                    for k in pruned.indices where pruned[k].folderID == f.id { pruned[k].folderEmptied = true }
-                    emptiedFolders.insert(f.id)
-                    return nil
+                    if f.apps.isEmpty {
+                        for k in pruned.indices where pruned[k].folderID == f.id { pruned[k].folderEmptied = true }
+                        emptiedFolders.insert(f.id)
+                        kept = nil
+                    } else {
+                        kept = .folder(f)
+                    }
                 }
+                if kept == nil { removedSlots[pageID, default: []].append(i) }
+                return kept
             }
         }
 
         let emptied = grid.pages.enumerated().filter { emptiedPages.contains($0.element.id) }
         grid.pages.removeAll { emptiedPages.contains($0.id) }
+
+        // A slot counted before this pass, as one among what is left: less the slots removed
+        // ahead of it. One removed at the slot itself was the item it sat before; it now sits
+        // before the next, at the same slot.
+        func shifted(_ slot: Int, past removed: [Int]?) -> Int {
+            slot - (removed?.count(where: { $0 < slot }) ?? 0)
+        }
+        func settled(_ entry: PrunedApp) -> PrunedApp {
+            var entry = entry
+            entry.index = shifted(entry.index, past: removedSlots[entry.pageID])
+            if let id = entry.folderID, let fi = entry.folderIndex { entry.folderIndex = shifted(fi, past: removedFolderSlots[id]) }
+            if entry.pageEmptied == true, let at = entry.pageIndex { entry.pageIndex = shifted(at, past: emptiedPageSlots) }
+            return entry
+        }
+        pruned = pruned.map(settled)
 
         // Bring back recently pruned apps that reappeared, then remember the newly pruned.
         var memory: [PrunedApp] = []
@@ -191,6 +235,7 @@ public enum Reconciler {
                 (entry.pageEmptied, entry.pageIndex, entry.pageTitle) = (true, p, page.title)
                 entry.pageBefore = pagesBefore(p)
             }
+            entry = settled(entry)
             guard let (found, _) = match(for: entry.app) else {
                 memory.append(entry)
                 continue
@@ -217,6 +262,23 @@ public enum Reconciler {
 
         grid.normalize()
         return report
+    }
+
+    /// `here` with `gone` among them: one gone at slot k sat just before the item now at k.
+    /// Several gone at one slot go in the order their own remembered neighbours give, one
+    /// listing another standing after it; otherwise oldest first, as they stood.
+    static func interleave(here: [UUID], gone: [(slot: Int, id: UUID, before: [UUID]?)]) -> [UUID] {
+        var out: [UUID] = []
+        for k in 0...here.count {
+            var run = gone.filter { $0.slot == k }
+            while !run.isEmpty {
+                let left = Set(run.map(\.id))
+                let next = run.firstIndex { !($0.before ?? []).contains(where: left.contains) } ?? 0
+                out.append(run.remove(at: next).id)
+            }
+            if k < here.count { out.append(here[k]) }
+        }
+        return out
     }
 
     /// Of the copies of a moved app (same bundle ID), the one it most likely moved to: the

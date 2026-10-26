@@ -9,7 +9,7 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 DIR="$(mktemp -d)"
 # Launching registers the build copy with Launch Services; hand .launchgrid files back to
 # the installed copy afterwards, and drop the throwaway layout.
-cleanup() { "$LSREGISTER" -u "$APP" >/dev/null 2>&1; rm -rf "$DIR"; }
+cleanup() { "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true; rm -rf "$DIR"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 LAUNCHGRID_DATA_DIR="$DIR" "$APP/Contents/MacOS/LaunchGrid"

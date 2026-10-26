@@ -165,6 +165,12 @@ final class AppState {
     @ObservationIgnored private var rescanQueued = false
     /// Completions waiting for the queued scan: the one under way may predate what they need.
     @ObservationIgnored private var queuedCompletions: [@MainActor () -> Void] = []
+    /// Bumped by each scan started, so a scan's watchdog knows its own.
+    @ObservationIgnored private var scanGeneration = 0
+    /// Set when the scan under way took too long and what waited for it was let go.
+    @ObservationIgnored private var scanOverdue = false
+    /// How long a scan may take before what waits for it goes ahead without it; tests shorten it.
+    @ObservationIgnored var scanTimeout: Duration = .seconds(60)
     /// The scan itself; tests swap in a fake.
     @ObservationIgnored var scanner: @Sendable ([URL]) -> AppScanner.ScanResult = { AppScanner.scanReporting(roots: $0) }
     /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
@@ -268,9 +274,10 @@ final class AppState {
 
     /// Replaces the whole grid (import, rebuild, load) as one undo step.
     func replaceGrid(_ new: Grid) {
-        if grid.allApps.isEmpty && undoStack.isEmpty {
-            // Nothing worth undoing back to (first run). Redo history would replay edits of
-            // the empty grid over the new one.
+        if !hasGridFile {
+            // Nothing worth undoing back to (first run), whatever was changed before it (the grid
+            // size). Redo history would replay edits of the empty grid over the new one.
+            undoStack.removeAll()
             redoStack.removeAll()
             let old = grid
             grid = new
@@ -334,9 +341,17 @@ final class AppState {
         canRedo = !redoStack.isEmpty
         // The page shown stays the same page when pages before it come or go (a rescan
         // emptying one), not whichever now has its number.
-        if old.pages.indices.contains(currentPage),
-           let p = grid.pages.firstIndex(where: { $0.id == old.pages[currentPage].id }) {
-            currentPage = p
+        if old.pages.indices.contains(currentPage) {
+            let pageIndex = { (id: UUID) in self.grid.pages.firstIndex { $0.id == id } }
+            if let p = pageIndex(old.pages[currentPage].id) {
+                currentPage = p
+            } else {
+                // The page shown went (its last items removed): back to the one before it, as
+                // deleting a page does, with focus on its last item rather than whichever item
+                // now has the focused one's number.
+                currentPage = old.pages[..<currentPage].reversed().lazy.compactMap { pageIndex($0.id) }.first ?? 0
+                if focusIndex != nil, openFolderID == nil, query.isEmpty { focusIndex = Int.max }
+            }
         }
         currentPage = min(currentPage, grid.pages.count - 1)
         if let id = openFolderID, grid.folder(id) == nil { openFolderID = nil }
@@ -498,30 +513,41 @@ final class AppState {
     func rescan(completion: (@MainActor () -> Void)? = nil) {
         if scanning {
             rescanQueued = true
-            if let completion { queuedCompletions.append(completion) }
+            // Behind a scan already overdue, it would wait as long: go ahead with the apps known.
+            if scanOverdue { completion?() } else if let completion { queuedCompletions.append(completion) }
             return
         }
         scanning = true
+        scanGeneration &+= 1
+        let generation = scanGeneration
         let roots = prefs.scanRoots
         let scanner = scanner
         // Apps from elsewhere are checked in the same pass, so reconciling needs no disk access.
         let candidates = outsideCandidates()
+        // Bookmarks of apps added with Browse, resolved again here for those found gone.
+        let inUse = FileAccess.bookmarksInUse
         Task {
             let started = Date()
-            let (result, outside, disk) = await Disk.run(on: .global(qos: .utility)) {
+            let (result, outside, disk, reopened) = await Disk.run(on: .global(qos: .utility)) {
                 let result = scanner(roots)
                 // Folded, as `isOutside` compares: the disk ignores case.
                 let scanned = Set(result.apps.map { $0.path.lowercased() })
-                return (result, Self.readOutsideApps(candidates.filter { !scanned.contains($0.lowercased()) && result.aliases[$0] == nil }),
-                        DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted))
+                let outside = Self.readOutsideApps(candidates.filter { !scanned.contains($0.lowercased()) && result.aliases[$0] == nil })
+                let gone = outside.checked.subtracting(outside.existing)
+                let reopened = inUse.map { inUse in inUse.bookmarks.filter { gone.contains($0.key) }.compactMapValues(inUse.open) }
+                return (result, outside, DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted), reopened)
             }
             NSLog("LaunchGrid: scanned \(result.apps.count) apps in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
+            // Its waiters went ahead already when it was overdue.
+            let served = self.scanOverdue
+            self.scanOverdue = false
             if !result.unlisted.isEmpty {
                 NSLog("LaunchGrid: could not list \(result.unlisted.joined(separator: ", ")); keeping their apps")
             }
             self.scanning = false
-            self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted, aliases: result.aliases, disk: disk)
-            completion?()
+            self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted, aliases: result.aliases, disk: disk,
+                                reopened: reopened)
+            if !served { completion?() }
             if self.rescanQueued {
                 self.rescanQueued = false
                 let waiting = self.queuedCompletions
@@ -529,14 +555,30 @@ final class AppState {
                 self.rescan { for done in waiting { done() } }
             }
         }
+        // A read that doesn't return (a volume that stopped answering) would hold up what
+        // waits for the scan: the welcome window, a file opened at launch. After a while they go
+        // ahead with the apps known so far. The scan keeps its place, so no other piles up behind
+        // the same stalled read; if it ends, it's taken in and the queued one follows.
+        let timeout = scanTimeout
+        Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard let self, self.scanning, self.scanGeneration == generation, !self.scanOverdue else { return }
+            NSLog("LaunchGrid: a scan has taken over \(timeout); going ahead without it")
+            self.scanOverdue = true
+            let waiting = [completion].compactMap { $0 } + self.queuedCompletions
+            self.queuedCompletions = []
+            for done in waiting { done() }
+        }
     }
 
     /// Takes in a finished scan. `outside` holds what was read of the grid's apps outside the
     /// scan folders; any not covered are read in the background when reconciling. `unlisted` holds the folders
     /// the scan couldn't list, and `aliases` the real paths of apps it found through a symlink.
-    /// `outside` and `disk` are what the scan saw of the disk, read now when not given.
+    /// `outside` and `disk` are what the scan saw of the disk, read now when not given, and
+    /// `reopened` the bookmarks of apps found gone, resolved again with them.
     func catalogScanned(_ apps: [InstalledApp], outside: OutsideRead? = nil,
-                        unlisted: [String] = [], aliases: [String: String] = [:], disk: DiskState? = nil) {
+                        unlisted: [String] = [], aliases: [String: String] = [:], disk: DiskState? = nil,
+                        reopened: [String: FileAccess.Opened]? = nil) {
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
@@ -550,7 +592,7 @@ final class AppState {
         outsideExisting = outside.existing
         // Apps added with Browse that moved since they were read: their bookmarks know where
         // to, so they are followed before reconciling would prune them as gone.
-        followMovedApps(FileAccess.followVanished(outside.checked.subtracting(outside.existing), prefs: prefs))
+        followMovedApps(FileAccess.followVanished(outside.checked.subtracting(outside.existing), prefs: prefs, reopened: reopened))
         let disk = disk ?? DiskState.read(roots: prefs.scanRoots.map(\.path), unlisted: unlisted)
         if self.disk != disk { self.disk = disk }
         if unlistedFolders != unlisted { unlistedFolders = unlisted }
@@ -717,6 +759,9 @@ final class AppState {
     }
 
     func addApps(_ apps: [InstalledApp]) {
+        // Before the first layout, one app saved alone would count as the layout: only include
+        // them in the build to come.
+        guard hasGridFile else { return chooseApps(include: apps, exclude: []) }
         let installed = self.installed
         let aliases = pathAliases
         let before = grid.allApps.count
@@ -880,8 +925,15 @@ final class AppState {
     /// Records where a moved app now lives. Not an undo step: like `reconcile()`, it mirrors the disk.
     func rememberPath(_ path: String, of id: UUID) {
         guard let old = grid.item(id)?.app?.path, old != path else { return }
-        // Its bookmark, if added with Browse, follows it too (and may find other moves).
-        followMovedApps(FileAccess.follow(old, prefs: prefs).merging([old: path]) { found, _ in found })
+        // Its bookmark, if added with Browse, follows it too (and may find other moves),
+        // resolved off the main thread where the system's calls go.
+        guard FileAccess.followsInBackground(old) else {
+            return followMovedApps(FileAccess.follow(old, prefs: prefs).merging([old: path]) { found, _ in found })
+        }
+        Task {
+            let found = await FileAccess.followInBackground(old, prefs: prefs)
+            followMovedApps(found.merging([old: path]) { found, _ in found })
+        }
     }
 
     /// Follows apps that moved, old path to new (as found by their sandbox bookmarks), in the
@@ -891,6 +943,12 @@ final class AppState {
         guard !moves.isEmpty else { return }
         for i in undoStack.indices { undoStack[i].followMoves(moves) }
         for i in redoStack.indices { redoStack[i].followMoves(moves) }
+        // Not under a drag, which may be on the extra page past the last that a change would
+        // take the view off: at the drop.
+        if drag.active {
+            movesAfterDrag.merge(moves) { _, new in new }
+            return
+        }
         var g = grid
         g.followMoves(moves)
         guard g != grid else { return }
@@ -1028,7 +1086,10 @@ final class AppState {
         let count = ids.count
         // A folder takes all its apps with it: say how many, as they leave the grid too.
         let folders = ids.compactMap { grid.item($0)?.folder }
-        let apps = folders.reduce(count - folders.count) { $0 + $1.apps.count }
+        // Apps also selected inside a selected folder are among its apps already.
+        let inFolders = Set(folders.flatMap { $0.apps.map(\.id) })
+        let loose = ids.filter { grid.item($0)?.folder == nil && !inFolders.contains($0) }.count
+        let apps = folders.reduce(loose) { $0 + $1.apps.count }
         let installed = self.installed
         apply { g in g.removingEmptiedPages { $0.remove(ids, installed: installed) } }
         selection.subtract(ids)
@@ -1144,6 +1205,13 @@ final class AppState {
     }
 
     func resize(rows: Int, columns: Int) {
+        // Before the first layout only the size is kept, for the build: nothing to undo.
+        guard hasGridFile else {
+            var g = grid
+            g.resize(rows: rows, columns: columns)
+            grid = g
+            return
+        }
         apply { $0.resize(rows: rows, columns: columns) }
     }
 
@@ -1213,9 +1281,16 @@ final class AppState {
 
     /// Set when a scan finished mid-drag; `dragFinished()` applies it.
     @ObservationIgnored private var reconcileAfterDrag = false
+    /// Apps found moved mid-drag, old path to new; `dragFinished()` follows them.
+    @ObservationIgnored private var movesAfterDrag: [String: String] = [:]
 
-    /// After a drop or a cancelled drag: applies a scan that came in meanwhile.
+    /// After a drop or a cancelled drag: applies a scan, or moved apps, that came in meanwhile.
     func dragFinished() {
+        if !movesAfterDrag.isEmpty {
+            let moves = movesAfterDrag
+            movesAfterDrag = [:]
+            followMovedApps(moves)
+        }
         guard reconcileAfterDrag else { return }
         reconcileAfterDrag = false
         reconcile()

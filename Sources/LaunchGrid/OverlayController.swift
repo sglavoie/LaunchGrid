@@ -25,7 +25,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Whether the trackpad gesture under way goes up and down, taken from its first movement
     /// so a slightly slanted swipe doesn't switch axis halfway.
     private var scrollIsVertical: Bool?
-    private var lastWheelFlip = Date.distantPast
+    /// When the last mouse-wheel event came, to tell one burst of them from the next.
+    private var lastWheelEvent = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
     private var visibilityGeneration = 0
     /// The last app opened behind the grid while it stayed up ("Hide after opening an app"
@@ -67,6 +68,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if let modal = NSApp.modalWindow {
             NSApp.activate()
             modal.makeKeyAndOrderFront(nil)
+            return
+        }
+        // Before the first layout the grid is empty: the welcome window is where to choose one.
+        if !state.hasGridFile, let welcome = NSApp.windows.first(where: { $0.identifier?.rawValue == "firstRun" && $0.isVisible }) {
+            NSApp.activate()
+            welcome.makeKeyAndOrderFront(nil)
             return
         }
         let mouse = NSEvent.mouseLocation
@@ -210,8 +217,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.setFrame(screen.visibleFrame, display: true)
         case .window:
             let v = screen.visibleFrame
-            if let saved = savedFrame(for: screen) {
-                var r = NSRectFromString(saved)
+            if var r = savedFrame(for: screen) {
                 if v.intersects(r) {
                     // Pulled fully onto the screen (the Dock or a resolution may have changed
                     // since), no smaller than the minimum size.
@@ -288,20 +294,38 @@ final class OverlayController: NSObject, NSWindowDelegate {
         frameSaveTask = nil
         guard !placing, state.prefs.windowMode == .window, let panel, panel.isVisible, let screen = panel.screen else { return }
         var frames = state.prefs.windowFrames
-        frames[screen.frameKey] = NSStringFromRect(panel.frame)
+        frames[screen.frameKey] = Self.savedFrame(panel.frame, on: screen.frame)
         Self.prune(&frames)
         if frames != state.prefs.windowFrames { state.prefs.windowFrames = frames }
     }
 
-    /// The frame saved for a display. One saved under the old name-and-number key, which
-    /// changed whenever the display reconnected, moves to the stable key the first time.
-    private func savedFrame(for screen: NSScreen) -> String? {
+    /// Marks a frame saved from its display's origin, so it still lands on that display after
+    /// the displays are arranged differently. Earlier ones are in global coordinates.
+    static let relativePrefix = "rel:"
+
+    /// The frame saved for a display, in global coordinates. One saved under the old
+    /// name-and-number key, which changed whenever the display reconnected, moves to the
+    /// stable key the first time.
+    private func savedFrame(for screen: NSScreen) -> NSRect? {
         var frames = state.prefs.windowFrames
-        if let saved = frames[screen.frameKey] { return saved }
-        guard let old = frames.removeValue(forKey: screen.legacyFrameKey) else { return nil }
-        frames[screen.frameKey] = old
-        state.prefs.windowFrames = frames
-        return old
+        var saved = frames[screen.frameKey]
+        if saved == nil, let old = frames.removeValue(forKey: screen.legacyFrameKey) {
+            frames[screen.frameKey] = old
+            state.prefs.windowFrames = frames
+            saved = old
+        }
+        return saved.map { Self.frame(saved: $0, on: screen.frame) }
+    }
+
+    /// `frame` as saved for the display at `display`: from the display's origin.
+    static func savedFrame(_ frame: NSRect, on display: NSRect) -> String {
+        relativePrefix + NSStringFromRect(frame.offsetBy(dx: -display.minX, dy: -display.minY))
+    }
+
+    /// A saved frame in global coordinates, for the display now at `display`.
+    static func frame(saved: String, on display: NSRect) -> NSRect {
+        guard saved.hasPrefix(relativePrefix) else { return NSRectFromString(saved) }
+        return NSRectFromString(String(saved.dropFirst(relativePrefix.count))).offsetBy(dx: display.minX, dy: display.minY)
     }
 
     static let maxSavedFrames = 12
@@ -674,13 +698,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         } else if let folder = state.openFolder {
             guard let app = folder.apps[safe: i] else { return }
             item = .app(app)
-            let c = state.folderLayout.center(i - state.folderPage * FolderLayout.perPage(state.grid))
+            let c = state.iconCenter(i - state.folderPage * FolderLayout.perPage(state.grid), inFolder: true)
             let f = state.drag.folderGridFrame
             center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
         } else {
             guard let found = state.currentItems[safe: i] else { return }
             item = found
-            let c = state.pageLayout.center(i), f = state.drag.pagerFrame
+            let c = state.iconCenter(i, inFolder: false), f = state.drag.pagerFrame
             center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
         }
         popUp(MenuEntry.item(item, state: state), at: center)
@@ -695,7 +719,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Shows a menu at `point`, in root coordinates.
     private func popUp(_ entries: [MenuEntry], at point: CGPoint) {
         guard let host else { return }
-        // Root coordinates run from the top left; the hosting view's may not.
+        // Root coordinates start below the title bar in Window mode, and run from the top left;
+        // the hosting view's may not.
+        let origin = state.drag.rootOrigin
+        let point = CGPoint(x: point.x + origin.x, y: point.y + origin.y)
         let local = host.isFlipped ? point : NSPoint(x: point.x, y: host.bounds.height - point.y)
         MenuEntry.nsMenu(entries).popUp(positioning: nil, at: local, in: host)
     }
@@ -724,9 +751,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func handleScroll(_ event: NSEvent) -> NSEvent? {
+        // A swipe that ends where it's no longer followed (a search typed, a rename or a drag
+        // begun meanwhile) would leave the page part-way: it goes back.
+        let ending = event.phase.contains(.ended) || event.phase.contains(.cancelled)
         // The rename card edits the page it opened on: don't turn pages behind it.
-        guard let panel, event.window === panel, isVisible, !state.drag.active, state.textEdit == nil else { return event }
-        guard state.query.isEmpty else { return nil }
+        guard let panel, event.window === panel, isVisible, !state.drag.active, state.textEdit == nil else {
+            if ending, event.window === panel { settleSwipe() }
+            return event
+        }
+        guard state.query.isEmpty else {
+            if ending { settleSwipe() }
+            return nil
+        }
         let width = max(state.drag.pagerFrame.width, 1)
         if !event.phase.isEmpty || !event.momentumPhase.isEmpty {
             // Trackpad: the pager follows the fingers, then snaps.
@@ -753,6 +789,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
                     // The folder shows one page at a time: the new one comes in where it is.
                     state.folderSwipeOffset = 0
                     state.flipPage(flip)
+                    // A folder opened mid-swipe: the page behind it goes back too.
+                    settleSwipe()
                 } else {
                     withAnimation(AppState.pageAnimation) {
                         if flip != 0 { state.flipPage(flip) }
@@ -764,12 +802,27 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             return nil
         }
-        // Mouse wheel: one page per notch burst.
+        // Mouse wheel: one page per burst of notches, the first after a pause, so a wheel left
+        // spinning freely turns one page, not one every so often while it spins.
         let delta = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) ? event.scrollingDeltaY : event.scrollingDeltaX
-        guard abs(delta) > 0.5, Date().timeIntervalSince(lastWheelFlip) > 0.35 else { return nil }
-        lastWheelFlip = Date()
+        let now = Date()
+        defer { lastWheelEvent = now }
+        guard abs(delta) > 0.5, now.timeIntervalSince(lastWheelEvent) > Self.wheelPause else { return nil }
         state.flipPage(delta < 0 ? 1 : -1)
         return nil
+    }
+
+    /// A pause in mouse-wheel events this long ends a burst.
+    static let wheelPause: TimeInterval = 0.25
+
+    /// Puts a part-way swipe back, page and folder.
+    private func settleSwipe() {
+        scrollAccumulator = 0
+        guard state.swipeOffset != 0 || state.folderSwipeOffset != 0 else { return }
+        withAnimation(AppState.pageAnimation) {
+            state.swipeOffset = 0
+            state.folderSwipeOffset = 0
+        }
     }
 }
 
@@ -784,7 +837,7 @@ extension Array {
 final class SearchComposition {
     static let shared = SearchComposition()
     var marked = ""
-    /// The search field's frame in the overlay's root coordinates, for the candidate window.
+    /// The search field's frame in the hosting view (from its top left), for the candidate window.
     @ObservationIgnored var fieldFrame: CGRect = .zero
 }
 

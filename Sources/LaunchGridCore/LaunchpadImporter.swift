@@ -174,14 +174,22 @@ public enum LaunchpadImporter {
                 // Launch Services gives one copy per bundle ID. Of several (Xcode and Xcode-beta,
                 // in AppGrid's table, which has no bookmarks), the one named as the row is, else
                 // one not imported yet.
+                // Of one, that one: Launch Services may prefer a copy the scan doesn't see (on a
+                // disk image, in Downloads, a build in DerivedData). Its answer only stands for an
+                // app the scan didn't find, or picks among the scan's copies.
                 let others = copies(of: b)
-                if others.count > 1 {
+                if others.count == 1 {
+                    candidate = others[0]
+                } else if others.count > 1 {
                     let file = { (path: String) in URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased() }
+                    let scanned = Set(others.map(real))
                     candidate = others.first { file($0) == title.lowercased() }
-                        ?? resolve(b).flatMap { seen.contains(real($0)) ? nil : $0 }
+                        ?? resolve(b).flatMap { scanned.contains(real($0)) && !seen.contains(real($0)) ? $0 : nil }
                         ?? others.first { !seen.contains(real($0)) }
+                        ?? others[0] // every copy imported already: a duplicate
+                } else {
+                    candidate = resolve(b)
                 }
-                if candidate == nil { candidate = resolve(b) }
             }
             guard let found = candidate else {
                 skipped.append(title)

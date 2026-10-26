@@ -89,8 +89,11 @@ struct GeneralSettings: View {
             Section("Startup & Visibility") {
                 // The toggle shows what the system reports, so a failed change springs back.
                 Toggle("Open at login", isOn: Binding(get: { loginEnabled }, set: { on in
-                    do { try LoginItem.set(on); loginError = nil } catch { loginError = error.localizedDescription }
+                    var failure: String?
+                    do { try LoginItem.set(on) } catch { failure = error.localizedDescription }
                     refreshLoginItem()
+                    // After the refresh, which clears an error once the status changes.
+                    loginError = failure
                 }))
                 LabeledContent("Login item status", value: loginStatus)
                 if loginNeedsApproval {
@@ -130,6 +133,8 @@ struct GeneralSettings: View {
     }
 
     private func refreshLoginItem() {
+        // A change made since (in System Settings) settles what the last error was about.
+        if loginError != nil, LoginItem.statusDescription != loginStatus { loginError = nil }
         loginEnabled = LoginItem.isRequested
         loginStatus = LoginItem.statusDescription
         loginNeedsApproval = LoginItem.needsApproval
@@ -147,6 +152,9 @@ struct HotkeyRecorder: View {
     @State private var timeout: Task<Void, Never>?
     /// The shortcut from before recording, to go back to if macOS refuses the new one.
     @State private var previous: (keyCode: UInt32, modifiers: UInt32)?
+    /// While ⌘, ⌥ or ⌃ is held: whether a key reached us meanwhile. A combination macOS or
+    /// another app takes (⌘Space for Spotlight) never arrives, so nothing would seem to happen.
+    @State private var keyWhileHeld: Bool?
 
     var body: some View {
         let prefs = state.prefs
@@ -166,7 +174,12 @@ struct HotkeyRecorder: View {
         // Switching away mid-recording would leave the shortcut unregistered until Settings
         // came back; so would walking away.
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
-            if recording, note.object as? NSWindow === window { stop() }
+            guard recording, note.object as? NSWindow === window else { return }
+            // Focus went while ⌘, ⌥ or ⌃ was held and no key came: the combination opened
+            // something else (⌘Space, Spotlight). Say so, rather than seem to ignore it.
+            let taken = keyWhileHeld == false
+            stop()
+            if taken { hint = Self.takenHint }
         }
         if prefs.hotkeyEnabled, let conflict = KeyCombo.conflict(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers) {
             let system = KeyCombo.conflictIsSystemSetting(keyCode: prefs.hotkeyKeyCode, modifiers: prefs.hotkeyModifiers)
@@ -192,7 +205,20 @@ struct HotkeyRecorder: View {
             try? await Task.sleep(for: .seconds(30))
             if !Task.isCancelled, recording { stop() }
         }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            let chord = UInt32(cmdKey | optionKey | controlKey)
+            if event.type == .flagsChanged {
+                if KeyCombo.carbonModifiers(event.modifierFlags) & chord != 0 {
+                    if keyWhileHeld == nil { keyWhileHeld = false }
+                } else if keyWhileHeld == false {
+                    keyWhileHeld = nil
+                    hint = Self.takenHint + " " + String(localized: "Esc cancels.")
+                } else {
+                    keyWhileHeld = nil
+                }
+                return event
+            }
+            if keyWhileHeld != nil { keyWhileHeld = true }
             let code = Int(event.keyCode)
             let mods = KeyCombo.carbonModifiers(event.modifierFlags)
             if code == 53 && mods == 0 { // Esc
@@ -200,7 +226,6 @@ struct HotkeyRecorder: View {
                 return nil
             }
             // Shift alone would steal ordinary typing, e.g. ⇧A for a capital A.
-            let chord = UInt32(cmdKey | optionKey | controlKey)
             guard mods & chord != 0 || KeyCombo.functionKeys[code] != nil else { return nil }
             state.prefs.hotkeyKeyCode = UInt32(code)
             state.prefs.hotkeyModifiers = mods
@@ -209,9 +234,14 @@ struct HotkeyRecorder: View {
         }
     }
 
+    private static var takenHint: String {
+        String(localized: "Nothing recorded? macOS or another app already uses that shortcut: try another.")
+    }
+
     private func stop() {
         recording = false
         hint = nil
+        keyWhileHeld = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         window = nil

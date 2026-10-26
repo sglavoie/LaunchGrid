@@ -692,6 +692,25 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(ContinuousClock.now - start < .seconds(1))
     }
 
+    @Test func aWordStartingAtACapitalInsideANameIsAWordStart() {
+        #expect(Search.humpWords(of: "TextEdit") == ["edit"])
+        #expect(Search.humpWords(of: "PDFExpert") == ["expert"])
+        let apps = ["TextEdit", "Script Editor", "Keynote", "OneNote"].map { app($0) }
+        #expect(Search.results(in: apps, query: "edit").map(\.name) == ["Script Editor", "TextEdit"])
+        #expect(Search.results(in: apps, query: "note").first?.name == "OneNote", "a word start before a substring")
+        #expect(Search.score("Some Long Name With Notes In It", query: "notes")! > Search.score("OneNotes", query: "notes")!,
+                "one after a separator still comes first")
+    }
+
+    @Test func aNamesWordsTypedRunTogetherAreNearlyAPrefix() {
+        #expect(Search.score("App Store", query: "appstore")! > 750)
+        #expect(Search.score("App Store", query: "appst")! > 750)
+        #expect(Search.score("App Store", query: "appstore")! < Search.score("App Store", query: "app store")!)
+        #expect(Search.score("Visual Studio Code", query: "visualstudioc") == nil || Search.score("Visual Studio Code", query: "visualstudioc")! < 750,
+                "one letter of the next word isn't enough")
+        #expect(Search.score("Visual Studio Code", query: "visualstudioco")! > 750)
+    }
+
     @Test func aPrefixDoesNotRunAcrossASpaceInTheName() {
         #expect(Search.score("App Store", query: "apps").map { $0 < 500 } ?? true)
         #expect(Search.score("Visual Studio Code", query: "visuals").map { $0 < 500 } ?? true)

@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 import LaunchGridCore
@@ -25,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Set by the debug scripts to act as if VoiceOver were on.
     var attachesStatusMenu = false
     private var watcher: FolderWatcher?
+    /// The folders a watcher is being made for, while their real paths are read.
+    private var watcherPending: [String]?
     private var rescanDebounce: Task<Void, Never>?
     private var periodicRescan: Timer?
     private var windows: [String: NSWindow] = [:]
@@ -107,8 +110,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         state = AppState(prefs: prefs, store: GridStore(url: Self.storeURL))
-        // Before the first scan, so it sees the folders and apps the bookmarks reach.
-        state.followMovedApps(FileAccess.restore(prefs: prefs))
+        #if !APP_STORE
+        // For the debug scripts: the first scan hangs this many seconds, as on a stalled volume.
+        if let hang = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCAN_HANG"].flatMap(Double.init) {
+            let scanner = state.scanner
+            let first = OSAllocatedUnfairLock(initialState: true)
+            state.scanner = { roots in
+                if first.withLock({ let was = $0; $0 = false; return was }) { Thread.sleep(forTimeInterval: hang) }
+                return scanner(roots)
+            }
+        }
+        #endif
+        #if !APP_STORE
+        // For the debug scripts: how long a scan may hang before what waits for it goes ahead.
+        if let s = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCAN_TIMEOUT"].flatMap(Double.init) {
+            state.scanTimeout = .seconds(s)
+        }
+        #endif
+        // Before the first scan, so it sees the folders and apps the bookmarks reach. Resolved
+        // off the main thread: one to a volume that has stopped answering could hang the launch.
+        let restored = Task { await FileAccess.restoreInBackground(prefs: prefs) }
         // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
         if Sandbox.isActive { state.onAppPathsInUse = { FileAccess.forgetApps(notIn: $0) } }
         FileAccess.onBookmarkFailure = { [weak self] url in
@@ -152,9 +173,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    if let self { self.state.followMovedApps(FileAccess.restore(prefs: self.prefs)) }
-                    self?.startWatching(onlyIfChanged: true)
-                    self?.state.rescan()
+                    _ = Task { [weak self] in
+                        guard let prefs = self?.prefs else { return }
+                        // Access to what was on a volume that went is let go, so it is taken up
+                        // again (and followed to a new name) when the volume returns.
+                        FileAccess.releaseUnmounted(mounted: await Disk.run { Volume.mountedNames() })
+                        let moves = await FileAccess.restoreInBackground(prefs: prefs)
+                        self?.state.followMovedApps(moves)
+                        self?.startWatching(onlyIfChanged: true)
+                        self?.state.rescan()
+                    }
                 }
             }
         }
@@ -170,33 +198,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         IconProvider.shared.prewarm(state.grid.allApps.map(\.path))
-        state.rescan { [weak self] in
-            guard let self else { return }
-            self.catalogReady = true
-            #if !APP_STORE
-            if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
-                // A script rebuilds and edits the layout: only against a scratch one.
-                if Preferences.isScratch {
-                    DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
-                    return
+        Task { [self] in
+            state.followMovedApps(await restored.value)
+            state.rescan { [weak self] in
+                guard let self else { return }
+                self.catalogReady = true
+                #if !APP_STORE
+                if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
+                    // A script rebuilds and edits the layout: only against a scratch one.
+                    if Preferences.isScratch {
+                        DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
+                        return
+                    }
+                    FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
                 }
-                FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
+                #endif
+                if let url = self.pendingOpen {
+                    // Loading needs the catalog, so a file that launched us waits for the first scan.
+                    self.pendingOpen = nil
+                    // The welcome window only if the file gave no layout (cancelled, unreadable),
+                    // not over it while it loads.
+                    self.openLayout(url, finished: { [weak self] in
+                        if let self, !self.state.hasGridFile { self.showFirstRun() }
+                    })
+                } else if !self.state.hasGridFile {
+                    self.showFirstRun()
+                }
+                if CommandLine.arguments.contains("--show") { self.overlay.show() }
             }
-            #endif
-            if let url = self.pendingOpen {
-                // Loading needs the catalog, so a file that launched us waits for the first scan.
-                self.pendingOpen = nil
-                // The welcome window only if the file gave no layout (cancelled, unreadable),
-                // not over it while it loads.
-                self.openLayout(url, finished: { [weak self] in
-                    if let self, !self.state.hasGridFile { self.showFirstRun() }
-                })
-            } else if !self.state.hasGridFile {
-                self.showFirstRun()
-            }
-            if CommandLine.arguments.contains("--show") { self.overlay.show() }
+            startWatching()
         }
-        startWatching()
         // Slow fallback in case FSEvents misses something (e.g. network volumes).
         periodicRescan = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -483,14 +514,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// current watcher when that set is the same.
     private func startWatching(onlyIfChanged: Bool = false) {
         let roots = prefs.scanRoots.map(\.path)
-        if onlyIfChanged, let watcher, watcher.paths == roots { return }
-        watcher = FolderWatcher(paths: roots) { [weak self] in
-            // An install produces bursts of events; scan once things settle.
-            self?.rescanDebounce?.cancel()
-            self?.rescanDebounce = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1.5))
-                guard !Task.isCancelled else { return }
-                self?.state.rescan()
+        if onlyIfChanged, (watcherPending ?? watcher?.paths) == roots { return }
+        watcherPending = roots
+        // Where the folders' symlinks lead is read off the main thread: on a volume that has
+        // stopped answering, that waits.
+        Task { [weak self] in
+            let real = await Disk.run { FolderWatcher.resolve(roots) }
+            // A later call (the folders changed again meanwhile) makes its own.
+            guard let self, self.watcherPending == roots else { return }
+            self.watcherPending = nil
+            self.watcher = FolderWatcher(paths: roots, realPaths: real) { [weak self] in
+                // An install produces bursts of events; scan once things settle.
+                self?.rescanDebounce?.cancel()
+                self?.rescanDebounce = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1.5))
+                    guard !Task.isCancelled else { return }
+                    self?.state.rescan()
+                }
             }
         }
     }
@@ -618,6 +658,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func showAddMissing() {
+        // Before the first layout nothing is missing yet: apps are chosen in the welcome window.
+        guard state.hasGridFile else { return showFirstRun() }
         present("addMissing", title: String(localized: "Add Missing Apps"), resizable: true) { close in AddMissingAppsView(close: close) }
     }
 
@@ -769,7 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.launchGridLayout]
-        panel.nameFieldStringValue = "LaunchGrid Layout.launchgrid"
+        panel.nameFieldStringValue = String(localized: "LaunchGrid Layout") + ".launchgrid"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let grid = state.grid
         Task {

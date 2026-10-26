@@ -55,7 +55,8 @@ struct GridRootView: View {
             // after another change (grouping makes the folder, then opens it), `withAnimation`
             // brought the view up to date first and the opening then sometimes never showed,
             // leaving a folder open that nobody could see.
-            .animation(state.isShown ? AppState.pageAnimation : nil, value: state.openFolderID)
+            // With Reduce Motion, a short fade, as for the rename card.
+            .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.openFolderID)
 
             DragLayer()
 
@@ -76,6 +77,9 @@ struct GridRootView: View {
                 .allowsHitTesting(false)
         }
         .coordinateSpace(name: "root")
+        .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: {
+            state.drag.rootOrigin = $0
+        }
         .simultaneousGesture(
             DragGesture(minimumDistance: 6, coordinateSpace: .named("root"))
                 .onChanged { state.dragChanged(start: $0.startLocation, location: $0.location) }
@@ -267,7 +271,7 @@ struct SearchField: View {
         .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
         .background(.black.opacity(high ? 0.55 : 0.25), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(high ? 0.5 : 0.12)))
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("root")) } action: {
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
             SearchComposition.shared.fieldFrame = $0
         }
         .accessibilityElement(children: .ignore)
@@ -383,8 +387,13 @@ struct Pager: View {
             let count = state.grid.pages.count + (state.showsVirtualPage ? 1 : 0)
             // Only pages near the current one are rendered, plus, while a jump (⌘5, a page
             // dot) slides, every page it passes over, so it never slides across blank pages.
+            // From the page before the latest change only: flips in a row (a drag held at the
+            // edge, Tab held down) don't keep every page passed on the way drawn.
             let from = settledPage ?? state.currentPage
             let drawn = (min(from, state.currentPage) - 1)...(max(from, state.currentPage) + 1)
+            #if !APP_STORE
+            let _ = DebugScript.drawnPages = drawn
+            #endif
             HStack(spacing: 0) {
                 ForEach(0..<count, id: \.self) { p in
                     Group {
@@ -411,12 +420,12 @@ struct Pager: View {
         .clipped()
         // Pages run left to right in every language, as the swipes and arrow keys do.
         .environment(\.layoutDirection, .leftToRight)
+        .onChange(of: state.currentPage) { old, _ in settledPage = old }
         .task(id: state.currentPage) {
-            if settledPage == nil { settledPage = state.currentPage; return }
             // Longer than the page spring takes to come to rest.
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
-            settledPage = state.currentPage
+            settledPage = nil
         }
     }
 }
@@ -463,6 +472,7 @@ struct PageView: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
+        .environment(\.gridJiggles, page == state.currentPage)
         // VoiceOver follows the keyboard focus, also onto a page drawn afresh with focus on it
         // (⌘4, End, a page dot further away, a search result revealed).
         .onChange(of: focus, initial: true) { _, i in
@@ -557,16 +567,18 @@ struct ItemView: View {
                     }
                     .scaleEffect(mergeTarget && !reduceMotion ? 1.12 : 1)
                 if editing, let onDelete {
+                    // Smaller on small icons (a dense grid in a small window), so it doesn't hide them.
+                    let badge = min(20, max(10, iconSize * 0.45))
                     Button(action: onDelete) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: badge / 2, weight: .bold))
                             .foregroundStyle(.black.opacity(contrast == .increased ? 1 : 0.75))
-                            .frame(width: 20, height: 20)
+                            .frame(width: badge, height: badge)
                             .background(Circle().fill(.white.opacity(0.92)))
                             .shadow(radius: 2)
                     }
                     .buttonStyle(.plain)
-                    .offset(x: -6, y: -6)
+                    .offset(x: -badge * 0.3, y: -badge * 0.3)
                     // Merged into the item below; its "Remove" action stands in for it.
                     .accessibilityHidden(true)
                 }
@@ -637,6 +649,7 @@ struct AppIcon: View {
 }
 
 struct FolderIcon: View {
+    @Environment(\.colorSchemeContrast) private var contrast
     let folder: Folder
     let size: CGFloat
     var open = false
@@ -644,9 +657,18 @@ struct FolderIcon: View {
     var body: some View {
         let inner = size * 0.8
         let mini = (inner - size * 0.08 * 2) / 3
+        let high = contrast == .increased
         ZStack {
+            // With Increase Contrast, a stronger fill and an edge light and dark, so the tile
+            // stands out on a light background as on a dark one.
             RoundedRectangle(cornerRadius: size * 0.24)
-                .fill(.white.opacity(open ? 0.38 : 0.24))
+                .fill(.white.opacity(open ? (high ? 0.55 : 0.38) : (high ? 0.42 : 0.24)))
+                .overlay {
+                    if high {
+                        RoundedRectangle(cornerRadius: size * 0.24).strokeBorder(.black.opacity(0.6), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: size * 0.24).inset(by: 1).strokeBorder(.white.opacity(0.9), lineWidth: 1)
+                    }
+                }
                 .frame(width: size * 0.92, height: size * 0.92)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(mini), spacing: size * 0.04), count: 3), spacing: size * 0.04) {
                 ForEach(folder.apps.prefix(9)) { app in
@@ -668,9 +690,10 @@ struct Jiggle: ViewModifier {
     let active: Bool
     let seed: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.gridJiggles) private var jiggles
 
     func body(content: Content) -> some View {
-        let on = active && !reduceMotion
+        let on = active && jiggles && !reduceMotion
         // Slightly different periods keep neighbours out of step.
         let period = 0.15 + Double(abs(seed) % 7) * 0.008
         content.keyframeAnimator(initialValue: 0.0, repeating: on) { view, angle in
@@ -827,6 +850,8 @@ struct SearchResultsView: View {
 extension EnvironmentValues {
     /// Whether app names fit under the icons of the grid around (`GridLayout.labelsFit`).
     @Entry var gridLabelsFit = true
+    /// Off on pages out of view (or only peeking in at the sides): their icons keep still in edit mode.
+    @Entry var gridJiggles = true
 }
 
 // MARK: - Folder
@@ -842,10 +867,13 @@ struct FolderPanel: View {
             let pager = state.drag.pagerSize
             let cols = FolderLayout.columns(grid)
             let rows = FolderLayout.rows(apps: folder.apps.count, grid: grid)
-            let cellW = max(pager.width, 400) / CGFloat(grid.columns)
-            let cellH = max(pager.height, 300) / CGFloat(grid.rows)
-            let gridSize = CGSize(width: cellW * CGFloat(cols), height: cellH * CGFloat(rows))
             let pages = FolderLayout.pageCount(apps: folder.apps.count, grid: grid)
+            // The page's cells, but never more than the overlay has room for once the panel's
+            // padding, name and dots are around them (a small window with many rows).
+            let room = CGSize(width: geo.size.width - 64, height: geo.size.height - (pages > 1 ? 150 : 125))
+            let cellW = min(max(pager.width, 400), room.width) / CGFloat(grid.columns)
+            let cellH = min(max(pager.height, 300) / CGFloat(grid.rows), max(room.height, 0) / CGFloat(rows))
+            let gridSize = CGSize(width: max(cellW, 0) * CGFloat(cols), height: max(cellH, 0) * CGFloat(rows))
             VStack(spacing: 10) {
                 Text(folder.name)
                     .font(.system(size: 24, weight: .semibold))
@@ -916,8 +944,7 @@ struct FolderPageContent: View {
     var body: some View {
         let layout = GridLayout(size: size, rows: FolderLayout.rows(apps: folder.apps.count, grid: state.grid),
                                 columns: FolderLayout.columns(state.grid))
-        let icon = GridLayout(size: state.drag.pagerSize, rows: state.grid.rows, columns: state.grid.columns)
-            .iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
+        let icon = state.folderIconSize(layout)
         let perPage = FolderLayout.perPage(state.grid)
         var entries: [(id: UUID, app: AppRef?)] = state.remainingFolderApps().map { ($0.id, $0) }
         if state.drag.active, case .folder(let fid) = state.drag.source, fid == folder.id, let gap = state.drag.gap {

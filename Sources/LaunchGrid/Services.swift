@@ -529,6 +529,17 @@ final class FolderWatcher: @unchecked Sendable {
         return inside == 0 || (inside == 1 && parts[bundle + 1] == "Contents")
     }
 
+    /// `paths` with symlinks resolved too. On a volume that has stopped answering this can
+    /// take a while, so it's read off the main thread.
+    nonisolated static func resolve(_ paths: [String]) -> [String] {
+        paths + paths.compactMap { path in
+            guard let real = realpath(path, nil) else { return nil }
+            defer { free(real) }
+            let s = String(cString: real)
+            return s == path ? nil : s
+        }
+    }
+
     private var stream: FSEventStreamRef?
     private let onChange: @MainActor () -> Void
     /// The folders being watched. One that doesn't exist yet is watched too: with
@@ -538,15 +549,11 @@ final class FolderWatcher: @unchecked Sendable {
     /// `paths` as given and with symlinks resolved, as FSEvents reports them (/private/tmp for /tmp).
     private let realPaths: [String]
 
-    init(paths: [String], latency: TimeInterval = 2.0, onChange: @escaping @MainActor () -> Void) {
+    /// `realPaths` from `resolve(paths)`, read off the main thread: without it they are read here.
+    init(paths: [String], realPaths: [String]? = nil, latency: TimeInterval = 2.0, onChange: @escaping @MainActor () -> Void) {
         self.onChange = onChange
         self.paths = paths
-        realPaths = paths + paths.compactMap { path in
-            guard let real = realpath(path, nil) else { return nil }
-            defer { free(real) }
-            let s = String(cString: real)
-            return s == path ? nil : s
-        }
+        self.realPaths = realPaths ?? Self.resolve(paths)
         guard !paths.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
@@ -590,6 +597,10 @@ enum FileAccess {
         /// Resolves a bookmark and starts using it: nil when it can't be resolved or used.
         var open: (Data) -> (url: URL, stale: Bool)?
         var close: (URL) -> Void
+        /// `open`, safe to call off the main thread, where the system's calls go: resolving a
+        /// bookmark to a volume that has stopped answering would otherwise hang the app. Without
+        /// it (the tests), bookmarks are resolved on the main thread.
+        var openOffMain: (@Sendable (Data) -> Opened?)?
 
         static var system: Backend { Backend(
             isActive: { Sandbox.isActive },
@@ -604,8 +615,20 @@ enum FileAccess {
                       url.startAccessingSecurityScopedResource() else { return nil }
                 return (url, stale)
             },
-            close: { $0.stopAccessingSecurityScopedResource() }
+            close: { $0.stopAccessingSecurityScopedResource() },
+            openOffMain: { data in
+                var stale = false
+                guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutMounting], bookmarkDataIsStale: &stale),
+                      url.startAccessingSecurityScopedResource() else { return nil }
+                return Opened(url: url, stale: stale)
+            }
         ) }
+    }
+
+    /// A bookmark resolved and started, and whether it should be made again.
+    struct Opened: Sendable {
+        var url: URL
+        var stale: Bool
     }
 
     static var backend = Backend.system
@@ -639,10 +662,33 @@ enum FileAccess {
     @discardableResult
     static func restore(prefs: Preferences) -> [String: String] {
         guard backend.isActive() else { return [:] }
+        let opened = pending.compactMapValues { backend.open($0).map { Opened(url: $0.url, stale: $0.stale) } }
+        return use(opened, prefs: prefs)
+    }
+
+    /// `restore`, resolving the bookmarks off the main thread.
+    static func restoreInBackground(prefs: Preferences) async -> [String: String] {
+        guard backend.isActive() else { return [:] }
+        guard let open = backend.openOffMain else { return restore(prefs: prefs) }
+        let pending = pending
+        let opened = await Disk.run { pending.compactMapValues(open) }
+        return use(opened, prefs: prefs)
+    }
+
+    /// The saved bookmarks not in use.
+    private static var pending: [String: Data] { saved.filter { granted[$0.key] == nil } }
+
+    /// Starts using the bookmarks `opened`, by the path each was saved under, as `restore` does.
+    private static func use(_ opened: [String: Opened], prefs: Preferences) -> [String: String] {
         var saved = saved
         var moves: [String: String] = [:]
-        for (path, data) in saved where granted[path] == nil {
-            guard let (url, stale) = backend.open(data) else { continue }
+        for (path, opened) in opened {
+            let (url, stale) = (opened.url, opened.stale)
+            // Taken into use meanwhile (resolved twice), or forgotten while it was resolved.
+            guard granted[path] == nil, let data = saved[path] else {
+                backend.close(url)
+                continue
+            }
             let now = url.standardizedFileURL.path
             // Not into the Trash: that's on its way out, and the setting is better left as it was.
             if now != URL(fileURLWithPath: path).standardizedFileURL.path, !Launcher.isInTrash(now) {
@@ -676,15 +722,56 @@ enum FileAccess {
         return restore(prefs: prefs)
     }
 
+    /// `follow`, resolving the bookmarks off the main thread.
+    static func followInBackground(_ path: String, prefs: Preferences) async -> [String: String] {
+        guard backend.isActive(), let url = granted.removeValue(forKey: path) else { return [:] }
+        backend.close(url)
+        return await restoreInBackground(prefs: prefs)
+    }
+
+    /// Ends the access held to items on volumes no longer mounted (`mounted`, the names in
+    /// /Volumes): it lapsed with the volume. When the volume comes back, `restore` resolves
+    /// their bookmarks again, and follows them if it mounts under another name ("Ext 1").
+    static func releaseUnmounted(mounted: Set<String>?) {
+        guard backend.isActive() else { return }
+        for path in granted.keys where Volume.unmountedVolume(for: path, mounted: mounted) != nil {
+            if let url = granted.removeValue(forKey: path) { backend.close(url) }
+        }
+    }
+
+    /// Whether `path` would be followed through a bookmark resolved off the main thread.
+    static func followsInBackground(_ path: String) -> Bool {
+        backend.isActive() && backend.openOffMain != nil && granted[path] != nil
+    }
+
+    /// For a scan to resolve off the main thread, with `reopenOffMain`, what `followVanished`
+    /// takes: the bookmarks in use, by path. Nil when they are resolved on the main thread.
+    static var bookmarksInUse: (bookmarks: [String: Data], open: @Sendable (Data) -> Opened?)? {
+        guard backend.isActive(), let open = backend.openOffMain else { return nil }
+        return (saved.filter { granted[$0.key] != nil }, open)
+    }
+
     /// `follow` for each of `paths`, apps a scan found gone, that has a bookmark in use: one
     /// added with Browse and moved while LaunchGrid ran is followed rather than pruned.
-    static func followVanished(_ paths: some Sequence<String>, prefs: Preferences) -> [String: String] {
+    /// `reopened` holds their bookmarks as a scan resolved them again (`bookmarksInUse`).
+    static func followVanished(_ paths: some Sequence<String>, prefs: Preferences, reopened: [String: Opened]? = nil) -> [String: String] {
         guard backend.isActive() else { return [:] }
-        var moves: [String: String] = [:]
-        for path in paths where granted[path] != nil {
-            moves.merge(follow(path, prefs: prefs)) { found, _ in found }
+        guard let reopened else {
+            var moves: [String: String] = [:]
+            for path in paths where granted[path] != nil {
+                moves.merge(follow(path, prefs: prefs)) { found, _ in found }
+            }
+            return moves
         }
-        return moves
+        var followed: [String: Opened] = [:]
+        for path in Set(paths) {
+            guard let url = granted.removeValue(forKey: path) else { continue }
+            backend.close(url)
+            followed[path] = reopened[path]
+        }
+        // Resolved for apps that weren't gone after all, or no longer in use: not needed.
+        for (path, opened) in reopened where followed[path] == nil { backend.close(opened.url) }
+        return use(followed, prefs: prefs)
     }
 
     /// Points the settings naming `old` (an extra scan folder, the background picture) at `new`.

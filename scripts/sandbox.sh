@@ -45,9 +45,13 @@ fi
 restore
 SANDBOX=1 scripts/bundle.sh "$CONFIG"
 
+# Set once the real container is out of the way (or there was none): until then, the container
+# in place is the real one, and cleanup leaves it alone.
+FRESH=0
 cleanup() {
-    "$LSREGISTER" -u "$APP" >/dev/null 2>&1
-    if [ "$KEEP" = 1 ]; then
+    # Fails for a bundle that isn't registered (the app never got that far): not a reason to stop.
+    "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+    if [ "$FRESH" = 0 ]; then
         return
     fi
     if [ -e "$BACKUP" ]; then
@@ -60,9 +64,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-if [ "$KEEP" = 0 ] && [ -e "$CONTAINER" ]; then
-    mv "$CONTAINER" "$BACKUP"
-    reload_prefs
-    echo "Fresh container; the previous one is in $BACKUP until LaunchGrid quits."
+if [ "$KEEP" = 0 ]; then
+    if [ -e "$CONTAINER" ]; then
+        mv "$CONTAINER" "$BACKUP"
+        reload_prefs
+        echo "Fresh container; the previous one is in $BACKUP until LaunchGrid quits."
+    fi
+    FRESH=1
 fi
 "$APP/Contents/MacOS/LaunchGrid"
