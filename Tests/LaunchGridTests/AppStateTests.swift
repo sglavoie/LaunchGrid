@@ -832,6 +832,25 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct LayoutExclusionTests {
+    @Test(arguments: [false, true])
+    func loadingOneCopyKeepsOtherCopiesExcluded(exclusionInFile: Bool) {
+        let stable = InstalledApp(bundleID: "com.test.editor", path: "/Applications/Editor.app", name: "Editor")
+        let beta = InstalledApp(bundleID: stable.bundleID, path: "/Applications/Editor-beta.app", name: "Editor Beta")
+        let file = Grid(pages: [Page(items: [.app(stable.makeRef())])],
+                        removedBundleIDs: exclusionInFile ? [stable.key] : [])
+        var merged = AppState.keepingExclusions(exclusionInFile ? [] : [stable.key], in: file, installed: [stable, beta])
+        #expect(!merged.isExcluded(stable))
+        #expect(merged.isExcluded(beta))
+        _ = Reconciler.reconcile(&merged, installed: [stable, beta], autoAdd: true)
+        #expect(merged.allApps.map(\.path) == [stable.path])
+
+        // A layout explicitly containing both copies includes both, regardless of their order.
+        var both = file
+        both.pages[0].items.insert(.app(beta.makeRef()), at: 0)
+        let included = AppState.keepingExclusions([stable.key], in: both, installed: [stable, beta])
+        #expect(included.removedBundleIDs.isEmpty)
+    }
+
     @Test func loadingALayoutKeepsCurrentExclusionsUnlessItHasThoseApps() {
         let a = AppRef(bundleID: "com.test.A", path: "/Applications/A.app", name: "A")
         let c = AppRef(bundleID: "com.test.C", path: "/Applications/C.app", name: "C")

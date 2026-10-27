@@ -784,6 +784,38 @@ func tempDir(_ prefix: String) -> URL {
         #expect(result.aliases[real] == result.apps.first?.path)
     }
 
+    @Test(arguments: [false, true])
+    func alternateAppLinksDoNotCreateDuplicateTiles(realRootFirst: Bool) throws {
+        let fm = FileManager.default
+        let root = tempDir("scan")
+        let elsewhere = tempDir("scan-target")
+        defer { try? fm.removeItem(at: root); try? fm.removeItem(at: elsewhere) }
+        try makeFakeApp("Real.app", id: "t.linked", in: elsewhere)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let real = elsewhere.appendingPathComponent("Real.app")
+        let first = root.appendingPathComponent("First.app")
+        let second = root.appendingPathComponent("Second.app")
+        for link in [first, second] {
+            try fm.createSymbolicLink(at: link, withDestinationURL: real)
+        }
+        let result = AppScanner.scanReporting(roots: realRootFirst ? [elsewhere, root] : [root, elsewhere])
+        let scanned = try #require(result.apps.first)
+        #expect(result.apps.count == 1)
+        #expect(result.aliases[second.path] == scanned.path)
+
+        let ref = AppRef(bundleID: scanned.bundleID, path: second.path, displayName: "My App")
+        var grid = Grid(pages: [Page(items: [.app(ref)])])
+        _ = Reconciler.reconcile(&grid, installed: result.apps, autoAdd: true, aliases: result.aliases)
+        #expect(grid.allApps.map(\.path) == [scanned.path])
+        #expect(grid.allApps.first?.id == ref.id)
+        #expect(grid.allApps.first?.title == "My App")
+
+        var picked = Grid(pages: [Page(items: [.app(scanned.makeRef())])])
+        Reconciler.add([try #require(AppScanner.read(appAt: second))], to: &picked,
+                       installed: result.apps, aliases: result.aliases)
+        #expect(picked.allApps.count == 1)
+    }
+
     @Test func skipsAppsHiddenByDefaultButReadsThemByHand() throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }

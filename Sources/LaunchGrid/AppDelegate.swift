@@ -295,7 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 } else if let leftOut {
                     showError(String(localized: "Some of “\(name)” couldn't be read"), leftOut)
                 }
-                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid))
+                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: grid, installed: state.selectableApps))
                 let message = skipped > 0
                     ? String(localized: "Loaded \(url.lastPathComponent); left out \(skipped) unreadable entries")
                     : String(localized: "Loaded \(url.lastPathComponent)")
@@ -817,7 +817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     alert.addButton(withTitle: String(localized: "Cancel"))
                     guard alert.runModal() == .alertFirstButtonReturn else { return }
                 }
-                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid))
+                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid, installed: state.selectableApps))
                 // Whole sentences, so a translation can order them its own way.
                 let (n, skipped, twice) = (result.imported, result.skipped.count, result.duplicates.count)
                 let message = switch (skipped > 0, twice > 0) {

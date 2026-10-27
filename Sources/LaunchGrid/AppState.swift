@@ -306,10 +306,13 @@ final class AppState {
 
     /// A loaded or imported layout with the user's current exclusions added to its own, minus
     /// the apps it has on it: apps excluded earlier stay out unless the layout includes them.
-    nonisolated static func keepingExclusions(_ current: Set<String>, in new: Grid) -> Grid {
+    nonisolated static func keepingExclusions(_ current: Set<String>, in new: Grid, installed: [InstalledApp] = []) -> Grid {
         var new = new
-        new.removedBundleIDs = current.union(new.removedBundleIDs)
-            .subtracting(new.appKeys.union(new.allApps.map(\.path)))
+        new.removedBundleIDs.formUnion(current)
+        let included = new.allApps.map { InstalledApp(bundleID: $0.bundleID, path: $0.path, name: $0.name) }
+        // Including one copy turns a bundle-wide exclusion into exclusions for the other
+        // known copies, just as Choose Apps does. Clearing the bundle ID alone revives them.
+        new.setExcluded(include: included, exclude: [], among: installed + included)
         return new
     }
 
