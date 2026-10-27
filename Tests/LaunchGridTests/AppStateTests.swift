@@ -1132,7 +1132,7 @@ func installed(_ name: String) -> InstalledApp {
         var entries: [String] = []
     }
 
-    @Test func completionsQueuedDuringAScanRunAfterTheScanThatServesThem() async throws {
+    @Test(.timeLimit(.minutes(1))) func completionsQueuedDuringAScanRunAfterTheScanThatServesThem() async throws {
         let state = makeState()
         let scans = OSAllocatedUnfairLock(initialState: 0)
         state.scanner = { _ in
@@ -1144,19 +1144,21 @@ func installed(_ name: String) -> InstalledApp {
         state.rescan { log.entries.append("first saw \(state.installed.count)") }
         state.rescan { log.entries.append("second saw \(state.installed.count)") }
         state.rescan { log.entries.append("third saw \(state.installed.count)") }
-        let deadline = Date().addingTimeInterval(5)
-        while log.entries.count < 3 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        // Other suites share the main actor. Wait for completion, with the test's time
+        // limit bounding a genuine hang, instead of charging their work to a short deadline.
+        while log.entries.count < 3 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(log.entries == ["first saw 1", "second saw 2", "third saw 2"])
         #expect(scans.withLock { $0 } == 2, "requests during a scan share one more")
     }
 }
 
 @MainActor @Suite(.tempDir) struct HungScanTests {
-    @Test func whatWaitsForAScanThatHangsGoesAheadAndTheScanStillCounts() async throws {
+    @Test(.timeLimit(.minutes(1))) func whatWaitsForAScanThatHangsGoesAheadAndTheScanStillCounts() async throws {
         let state = makeState()
         state.scanTimeout = .milliseconds(200)
         let scans = OSAllocatedUnfairLock(initialState: 0)
         let release = DispatchSemaphore(value: 0)
+        defer { release.signal() } // cancellation must also release the background worker
         state.scanner = { _ in
             let n = scans.withLock { $0 += 1; return $0 }
             // The first hangs, as a read of a volume that stopped answering does, until released.
@@ -1167,17 +1169,17 @@ func installed(_ name: String) -> InstalledApp {
         state.rescan { log.entries.append("launch saw \(state.installed.count)") }
         state.rescan { log.entries.append("queued saw \(state.installed.count)") }
         state.rescan()
-        let deadline = Date().addingTimeInterval(5)
-        while log.entries.count < 2 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        while log.entries.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(log.entries == ["launch saw 0", "queued saw 0"], "they went ahead without it")
-        try await Task.sleep(for: .milliseconds(300))
+        // The watchdog can run before a busy background queue even starts the scan.
+        while scans.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(scans.withLock { $0 } == 1, "no second scan stuck behind the same read")
         state.rescan { log.entries.append("later saw \(state.installed.count)") }
         #expect(log.entries.last == "later saw 0", "one asked for now doesn't wait either")
 
         // It ends after all: taken in, its waiters not run twice, and the queued scan follows.
         release.signal()
-        while state.installed.count < 2 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        while state.installed.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(state.installed.map(\.name) == ["A", "B"])
         #expect(scans.withLock { $0 } == 2)
         #expect(log.entries.count == 3)

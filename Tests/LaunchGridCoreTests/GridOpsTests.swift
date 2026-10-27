@@ -559,6 +559,30 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try store.loadBackup().rows == 3)
     }
 
+    @Test func temporaryFileCleanupLeavesUnrelatedFilesAndLinksAlone() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        try store.save(Grid())
+        let contents = Data("keep me".utf8)
+        let unrelated = [".grid.json.notes.tmp", ".grid.json.bak.manual.tmp", ".other.json.\(UUID().uuidString).tmp"]
+        for name in unrelated { try contents.write(to: dir.appendingPathComponent(name)) }
+        let link = dir.appendingPathComponent(".grid.json.\(UUID().uuidString).tmp")
+        try fm.createSymbolicLink(at: link, withDestinationURL: dir.appendingPathComponent(unrelated[0]))
+        let directory = dir.appendingPathComponent(".grid.json.\(UUID().uuidString).tmp")
+        try fm.createDirectory(at: directory, withIntermediateDirectories: false)
+        let leftovers = [".grid.json.\(UUID().uuidString).tmp", ".grid.json.bak.\(UUID().uuidString).tmp"]
+        for name in leftovers { try contents.write(to: dir.appendingPathComponent(name)) }
+
+        try store.save(Grid(rows: 2))
+
+        for name in unrelated { #expect(try Data(contentsOf: dir.appendingPathComponent(name)) == contents) }
+        #expect(try fm.destinationOfSymbolicLink(atPath: link.path) == dir.appendingPathComponent(unrelated[0]).path)
+        #expect(fm.fileExists(atPath: directory.path))
+        for name in leftovers { #expect(!fm.fileExists(atPath: dir.appendingPathComponent(name).path)) }
+    }
+
     @Test func theFirstBackupOfEachDayIsKeptForAFewDays() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }

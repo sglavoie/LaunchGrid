@@ -129,9 +129,18 @@ public struct GridStore: Sendable {
     static func removeLeftoverTemporaryFiles(beside url: URL) {
         let folder = url.deletingLastPathComponent()
         let prefixes = [".\(url.lastPathComponent).", ".\(url.lastPathComponent).bak."]
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
-        for name in names where name.hasSuffix(".tmp") && prefixes.contains(where: name.hasPrefix) {
-            unlink(folder.appendingPathComponent(name).path)
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(at: folder,
+            includingPropertiesForKeys: Array(keys)) else { return }
+        for file in files {
+            let name = file.lastPathComponent
+            // Both writers use a UUID, not an arbitrary suffix. Nearby editor or manual
+            // temporary files belong to their owners, as do links and directories.
+            guard name.hasSuffix(".tmp"), prefixes.contains(where: { prefix in
+                name.hasPrefix(prefix) && UUID(uuidString: String(name.dropFirst(prefix.count).dropLast(4))) != nil
+            }), let values = try? file.resourceValues(forKeys: keys),
+                  values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            unlink(file.path)
         }
     }
 
