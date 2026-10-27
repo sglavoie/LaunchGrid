@@ -9,6 +9,43 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test func addingAScannedAppAlreadyOnTheGridThroughAnAliasKeepsItsTile() {
+        let scanned = installed("Safari")
+        let real = "/System/Cryptexes/App/System/Applications/Safari.app"
+        let ref = AppRef(bundleID: scanned.bundleID, path: real, name: "Safari", displayName: "Browser")
+        var g = Grid(pages: [Page(items: [.app(ref)])])
+
+        Reconciler.add([scanned], to: &g, installed: [scanned], aliases: [real: scanned.path])
+
+        #expect(g.allApps == [ref], "adding the same app must preserve its tile and custom name")
+    }
+
+    @Test(arguments: [false, true])
+    func addingACopyClearsItsExclusionUnderAnOlderSpelling(throughAlias: Bool) {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID)
+        let oldPath = throughAlias ? "/Tools/Xcode-beta.app" : "/Applications/XCODE-BETA.app"
+        var g = Grid(pages: [Page(items: [.app(original.makeRef())])], removedBundleIDs: [oldPath])
+
+        Reconciler.add([beta], to: &g, installed: [original, beta],
+                       aliases: throughAlias ? [oldPath: beta.path] : [:])
+        _ = Reconciler.reconcile(&g, installed: [original, beta], autoAdd: true)
+
+        #expect(g.removedBundleIDs.isEmpty, "a later rebuild must not exclude the app just added")
+        #expect(g.allApps.map(\.path) == [original.path, beta.path])
+    }
+
+    @Test func addingDistinctScannedCopiesWhosePathsDifferOnlyInCaseKeepsBoth() {
+        // A case-sensitive volume can contain both; the scanner has identified two bundles.
+        let upper = installed("Editor", id: "com.test.editor")
+        let lower = installed("editor", id: upper.bundleID)
+        var g = Grid(pages: [Page(items: [.app(upper.makeRef())])])
+
+        Reconciler.add([lower], to: &g, installed: [upper, lower])
+
+        #expect(g.allApps.map(\.path) == [upper.path, lower.path])
+    }
+
     @Test func addingAnExcludedCopyThroughAnotherCapitalizationClearsItsExclusion() {
         let original = installed("Xcode", id: "com.apple.dt.Xcode")
         let beta = installed("Xcode-beta", id: original.bundleID)

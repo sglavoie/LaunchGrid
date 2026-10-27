@@ -333,15 +333,22 @@ public enum Reconciler {
                            aliases: [String: String] = [:]) {
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         let byFoldedPath = Dictionary(installed.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        func scanned(at path: String) -> InstalledApp? {
+            byPath[path] ?? aliases[path].flatMap { byPath[$0] } ?? byFoldedPath[path.lowercased()]
+        }
         // Use the scan's spelling before clearing exclusions too: a differently capitalized
         // path must clear the same copy's exclusion, or rebuilding would remove it again.
-        let apps = apps.map { app in
-            byPath[app.path] ?? aliases[app.path].flatMap { byPath[$0] } ?? byFoldedPath[app.path.lowercased()] ?? app
-        }
-        // Folded, as the disk is: a tile at zoom.us.app is already Zoom.us.app.
-        var paths = Set(grid.allApps.map { $0.path.lowercased() })
+        let apps = apps.map { scanned(at: $0.path) ?? $0 }
+        grid.removedBundleIDs = Set(grid.removedBundleIDs.map { key in
+            key.hasPrefix("/") ? scanned(at: key)?.path ?? key : key
+        })
+        // Compare existing tiles through the same aliases as the picked apps. Exact scanned
+        // paths stay distinct: a case-sensitive volume can contain both Editor and editor.
+        // Without a scanned match, keep recognizing alternative capitalization as before.
+        func identity(_ path: String) -> String { scanned(at: path)?.path ?? path.lowercased() }
+        var paths = Set(grid.allApps.map { identity($0.path) })
         // `insert` also drops an app listed twice in `apps`.
-        let new = apps.filter { paths.insert($0.path.lowercased()).inserted }
+        let new = apps.filter { paths.insert(identity($0.path)).inserted }
         let copies = CopyIndex(installed + apps)
         for app in apps { grid.setExcluded(app, false, copies: copies) }
         grid.appendAtEnd(new.map { .app($0.makeRef()) })
