@@ -400,6 +400,19 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 }
 
 @Suite struct GridStoreTests {
+    @Test func anExclusionsOnlyFileKeepsReadableChoicesWhenOneIsDamaged() throws {
+        let json = #"{"pages": [], "removedBundleIDs": ["com.test.a", 3, "com.test.b"]}"#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(grid.allApps.isEmpty)
+        #expect(grid.removedBundleIDs == ["com.test.a", "com.test.b"])
+        #expect(skipped == 1)
+    }
+
+    @Test func readableExclusionsDoNotHideAnEntirelyUnreadableLayout() {
+        let json = #"{"pages": [{"items": [{"type": "app", "app": {"name": "No path"}}]}], "removedBundleIDs": ["com.test.a"]}"#
+        #expect(throws: GridFileError.self) { try GridStore.decode(Data(json.utf8)) }
+    }
+
     @Test func aFileWithNoReadableEntryIsBrokenNotEmpty() {
         let json = #"{"version": 1, "pages": [{"items": [{"type": "app", "app": {"name": "No path"}}, {"type": "nope"}]}]}"#
         #expect {

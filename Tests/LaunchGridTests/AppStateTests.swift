@@ -60,6 +60,28 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct UndoTests {
+    @Test(arguments: [false, true])
+    func pruneMemoryInHistoryKeepsItsBookmark(inRedo: Bool) {
+        let state = makeState(["A"])
+        let returning = AppRef(bundleID: "com.test.returning", path: "/Users/x/Apps/Returning.app")
+        let expired = AppRef(bundleID: "com.test.expired", path: "/Users/x/Apps/Expired.app")
+        var remembered = state.grid
+        remembered.recentlyPruned = [
+            PrunedApp(app: returning, prunedAt: Date(), pageID: remembered.pages[0].id, index: 0),
+            PrunedApp(app: expired, prunedAt: Date().addingTimeInterval(-Reconciler.restoreWindow - 60),
+                      pageID: remembered.pages[0].id, index: 0),
+        ]
+        state.replaceGrid(remembered)
+        if inRedo {
+            state.undo()
+        } else {
+            state.apply { $0.recentlyPruned = [] }
+        }
+        #expect(state.grid.recentlyPruned.isEmpty)
+        #expect(state.appPathsInUse.contains(returning.path), "history can restore its slot and needs sandbox access")
+        #expect(!state.appPathsInUse.contains(expired.path), "expired slots no longer need access")
+    }
+
     @Test func rememberingAMovedAppIsNotAnUndoStep() throws {
         let state = makeState(["A", "B"])
         let a = try #require(state.grid.allApps.first)

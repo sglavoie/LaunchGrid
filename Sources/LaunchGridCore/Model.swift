@@ -234,7 +234,7 @@ extension Grid {
             rows: (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? 5,
             columns: (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7,
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
-            removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs) ?? []),
+            removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs, countingLayoutEntries: false) ?? []),
             // Disposable: an unreadable list is dropped rather than failing the whole file.
             recentlyPruned: (try? c.decodeIfPresent([PrunedApp].self, forKey: .recentlyPruned)) ?? []
         )
@@ -298,7 +298,7 @@ extension Folder {
 extension KeyedDecodingContainer {
     /// The array's elements that decode; the others are skipped and logged, so one bad entry
     /// (an app without a path) doesn't make the whole layout unreadable.
-    func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> [T]? {
+    func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key, countingLayoutEntries: Bool = true) throws -> [T]? {
         guard contains(key), try !decodeNil(forKey: key) else { return nil }
         var c = try nestedUnkeyedContainer(forKey: key)
         let decoder = try superDecoder(forKey: key)
@@ -308,7 +308,10 @@ extension KeyedDecodingContainer {
                 out.append(try c.decode(T.self))
             } catch {
                 NSLog("LaunchGrid: skipped an unreadable \(T.self) in the layout: \(error)")
-                (decoder.userInfo[SkippedEntries.key] as? SkippedEntries)?.count += 1
+                if let skipped = decoder.userInfo[SkippedEntries.key] as? SkippedEntries {
+                    skipped.count += 1
+                    if countingLayoutEntries { skipped.layoutCount += 1 }
+                }
                 _ = try c.decode(SkippedEntry.self) // a failed decode doesn't move past the entry
             }
         }
@@ -325,4 +328,6 @@ private struct SkippedEntry: Decodable {
 final class SkippedEntries: @unchecked Sendable {
     static let key = CodingUserInfoKey(rawValue: "skippedEntries")!
     var count = 0
+    /// Excludes malformed exclusions: an exclusions-only file has no app entries to recover.
+    var layoutCount = 0
 }

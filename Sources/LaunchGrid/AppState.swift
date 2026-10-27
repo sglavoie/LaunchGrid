@@ -514,9 +514,13 @@ final class AppState {
     /// Paths of the apps on the grid, in its undo and redo history, and recently pruned (which
     /// can still return to their slot).
     var appPathsInUse: Set<String> {
-        let recent = grid.recentlyPruned.filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
-        var paths = Set(recent.map(\.app.path))
-        for g in [grid] + undoStack + redoStack { paths.formUnion(g.allApps.map(\.path)) }
+        let now = Date()
+        var paths = Set<String>()
+        for g in [grid] + undoStack + redoStack {
+            paths.formUnion(g.allApps.map(\.path))
+            let recent = g.recentlyPruned.filter { (0..<Reconciler.restoreWindow).contains(now.timeIntervalSince($0.prunedAt)) }
+            paths.formUnion(recent.map(\.app.path))
+        }
         return paths
     }
 

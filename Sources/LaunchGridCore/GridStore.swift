@@ -230,8 +230,8 @@ public struct GridStore: Sendable {
             throw GridFileError.invalid(error.localizedDescription)
         }
         // A few bad entries are dropped; with nothing left, the file is broken, not empty.
-        if skipped.count > 0 && grid.allApps.isEmpty {
-            throw GridFileError.invalid("none of its \(skipped.count) entries could be read")
+        if skipped.layoutCount > 0 && grid.allApps.isEmpty {
+            throw GridFileError.invalid("none of its \(skipped.layoutCount) entries could be read")
         }
         guard (1...50).contains(grid.rows), (1...50).contains(grid.columns) else {
             throw GridFileError.invalid("grid size \(grid.rows)×\(grid.columns) is out of range")
