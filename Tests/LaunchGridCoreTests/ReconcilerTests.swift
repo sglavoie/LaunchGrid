@@ -9,6 +9,26 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test(arguments: [false, true])
+    func aGoneCopyCannotTakeATileWhosePathHasAnotherSpelling(throughAlias: Bool) {
+        let gone = installed("Editor", path: "/Applications/Editor.app").makeRef()
+        let kept = installed("Editor", path: "/Applications/Tools/Editor.app")
+        let oldPath = throughAlias ? "/Tools/Editor.app" : "/Applications/Tools/EDITOR.app"
+        let ref = AppRef(bundleID: kept.bundleID, path: oldPath, name: kept.name, displayName: "Work Editor")
+        let folder = Folder(name: "Work", apps: [ref])
+        var g = Grid(pages: [Page(items: [.app(gone), .folder(folder)])])
+
+        let report = Reconciler.reconcile(&g, installed: [kept], autoAdd: true,
+                                          pathExists: { $0 != gone.path },
+                                          aliases: throughAlias ? [oldPath: kept.path] : [:])
+
+        #expect(g.allApps.map(\.id) == [ref.id])
+        #expect(g.folder(folder.id)?.apps.first?.title == "Work Editor")
+        #expect(g.allApps.first?.path == kept.path)
+        #expect(report.removed == [gone.title])
+        #expect(report.moved.isEmpty && report.duplicatesDropped == 0)
+    }
+
     @Test func addingAScannedAppAlreadyOnTheGridThroughAnAliasKeepsItsTile() {
         let scanned = installed("Safari")
         let real = "/System/Cryptexes/App/System/Applications/Safari.app"

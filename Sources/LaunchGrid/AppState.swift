@@ -1139,7 +1139,9 @@ final class AppState {
 
     /// How many selected items aren't in view: on other pages (a selection can span them).
     var selectionOutOfView: Int {
-        let shown = Set((openFolder?.apps.map(\.id) ?? []) + currentItems.map(\.id))
+        let perPage = FolderLayout.perPage(grid)
+        let folderApps = openFolder?.apps.dropFirst(folderPage * perPage).prefix(perPage).map(\.id) ?? []
+        let shown = Set(folderApps + currentItems.map(\.id))
         return selection.subtracting(shown).count
     }
 

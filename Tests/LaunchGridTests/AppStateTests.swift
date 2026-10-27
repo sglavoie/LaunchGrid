@@ -476,6 +476,23 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.selectionOutOfView == 2)
     }
 
+    @Test func aSelectionOnOtherFolderPagesIsCounted() {
+        let state = makeState()
+        let refs = (1...5).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 3, columns: 2, pages: [Page(items: [.folder(folder)])]))
+        state.openFolder(folder.id) // Four apps on the first folder page.
+        state.toggleSelection(refs[0].id)
+        #expect(state.selectionOutOfView == 0)
+
+        state.flipPage(1)
+        #expect(state.selectionOutOfView == 1, "Remove must count selections hidden on another folder page")
+        state.toggleSelection(refs[4].id)
+        #expect(state.selectionOutOfView == 1)
+        state.flipPage(-1)
+        #expect(state.selectionOutOfView == 1)
+    }
+
     @Test func removingOneItemNamesIt() {
         let state = makeState(["Safari", "Mail"])
         state.remove([ids(state)["Mail"]!])

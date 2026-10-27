@@ -59,8 +59,13 @@ public enum Reconciler {
             guard key.hasPrefix("/"), byPath[key] == nil else { return key }
             return aliases[key].flatMap { byPath[$0]?.path } ?? byFoldedPath[key.lowercased()]?.path ?? key
         })
-        // Paths some ref already points at; a moved ref must not take over another ref's app.
-        let gridPaths = Set(grid.allApps.map(\.path))
+        // Reserve the scan's spelling of every tile's path before following moves. A tile
+        // later in visual order can already own a copy through an alias or a case-only
+        // rename; an earlier missing tile must not claim that copy and erase its owner.
+        let gridPaths = Set(grid.allApps.map { ref in
+            byPath[ref.path]?.path ?? aliases[ref.path].flatMap { byPath[$0]?.path }
+                ?? byFoldedPath[ref.path.lowercased()]?.path ?? ref.path
+        })
         // Never prune when the scan came back empty: that's a failed scan, not an empty Mac.
         let prune = pruneMissing && !installed.isEmpty
         // Dedup by path: two copies of one app (Xcode and Xcode-beta) share a bundle ID.
