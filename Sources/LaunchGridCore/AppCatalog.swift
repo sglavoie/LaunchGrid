@@ -65,8 +65,8 @@ public enum AppScanner {
     /// `scan(roots:maxDepth:)`, also reporting the folders it couldn't list.
     public static func scanReporting(roots: [URL], maxDepth: Int = 3) -> ScanResult {
         let fm = FileManager.default
-        // Shallowest depth each directory was walked at: a root nested in another root's
-        // depth limit is walked again from its own, shallower, depth.
+        // Largest remaining depth each directory was walked with. Roots can have different
+        // limits (Homebrew's automatic scan is shallower), so depth alone isn't enough.
         var visited: [String: Int] = [:]
         var results: [InstalledApp] = []
         var paths: [String: String] = [:]
@@ -94,8 +94,9 @@ public enum AppScanner {
             // Even a directory already walked can give saved tiles another spelling of its
             // apps. Remember it before the cycle/repeat guard, without walking it again.
             if real != dir.path { directoryAliases[dir.path] = real }
-            if let seen = visited[real], seen <= depth { return } // symlink cycle or repeat
-            visited[real] = depth
+            let remaining = max(0, limit - depth)
+            if let seen = visited[real], seen >= remaining { return } // symlink cycle or repeat
+            visited[real] = remaining
             // Listing doesn't follow a symlink to a folder (/opt/homebrew/opt/python@3.14): its
             // target is listed, and what's in it keeps the path through the link.
             let linked = real != dir.path
@@ -111,10 +112,15 @@ public enum AppScanner {
                 guard let own = try? child.resourceValues(forKeys: scanKeys) else { continue }
                 let target = own.isSymbolicLink == true ? child.resolvingSymlinksInPath() : nil
                 guard let v = target.map({ try? $0.resourceValues(forKeys: scanKeys) }) ?? own else { continue }
-                if homebrewOpt, let target, isHomebrewAlias(child, target: target) { continue }
                 // Keep the scan root's spelling even when the listing canonicalizes a parent
                 // (e.g. /var to /private/var), so saved paths and alternate links still match.
                 let path = dir.appendingPathComponent(child.lastPathComponent)
+                if homebrewOpt, let target, isHomebrewAlias(child, target: target) {
+                    // Don't scan through a moving formula alias, but recognize apps saved or
+                    // picked through it as the same apps found through the formula's own link.
+                    if v.isDirectory == true { directoryAliases[path.path] = target.path }
+                    continue
+                }
                 // Apps flagged hidden still count: /Applications/Safari.app is a hidden symlink.
                 if child.pathExtension.lowercased() == "app", v.contentType?.conforms(to: .applicationBundle) == true {
                     let inDirectory = (real as NSString).appendingPathComponent(child.lastPathComponent)

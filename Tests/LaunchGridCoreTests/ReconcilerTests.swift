@@ -916,6 +916,51 @@ func tempDir(_ prefix: String) -> URL {
         #expect(!AppScanner.isHomebrewOpt(prefix.appendingPathComponent("Cellar")))
     }
 
+    @Test func homebrewAliasesDoNotCreateDuplicateTiles() throws {
+        let fm = FileManager.default
+        let prefix = tempDir("brew-alias")
+        defer { try? fm.removeItem(at: prefix) }
+        try makeFakeApp("Cellar/python@3.15/3.15.0/IDLE.app", id: "org.python.IDLE", in: prefix)
+        let opt = prefix.appendingPathComponent("opt")
+        try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+        for name in ["python3", "python@3.15"] {
+            try fm.createSymbolicLink(atPath: opt.appendingPathComponent(name).path,
+                                      withDestinationPath: "../Cellar/python@3.15/3.15.0")
+        }
+        let result = AppScanner.scanReporting(roots: [opt])
+        let scanned = try #require(result.apps.first)
+        let alias = opt.appendingPathComponent("python3/IDLE.app")
+        #expect(result.aliases[alias.path] == scanned.path)
+
+        let ref = AppRef(bundleID: scanned.bundleID, path: alias.path, displayName: "My IDLE")
+        var grid = Grid(pages: [Page(items: [.app(ref)])])
+        _ = Reconciler.reconcile(&grid, installed: result.apps, autoAdd: true, aliases: result.aliases)
+        #expect(grid.allApps.map(\.path) == [scanned.path])
+        #expect(grid.allApps.first?.id == ref.id)
+        #expect(grid.allApps.first?.title == "My IDLE")
+
+        Reconciler.add([try #require(AppScanner.read(appAt: alias))], to: &grid,
+                       installed: result.apps, aliases: result.aliases)
+        #expect(grid.allApps.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func extraRootCanScanDeeperThanHomebrewOpt(extraRootFirst: Bool) throws {
+        let fm = FileManager.default
+        let prefix = tempDir("brew-depth")
+        defer { try? fm.removeItem(at: prefix) }
+        try makeFakeApp("Cellar/qt/6.9/libexec/Designer.app", id: "org.qt.designer", in: prefix)
+        let opt = prefix.appendingPathComponent("opt")
+        try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: opt.appendingPathComponent("qt").path,
+                                  withDestinationPath: "../Cellar/qt/6.9")
+        let extra = prefix.appendingPathComponent("Extra")
+        try fm.createSymbolicLink(at: extra, withDestinationURL: opt)
+        #expect(AppScanner.scan(roots: [opt]).isEmpty, "the automatic Homebrew scan stays shallow")
+        let result = AppScanner.scan(roots: extraRootFirst ? [extra, opt] : [opt, extra])
+        #expect(result.map(\.bundleID) == ["org.qt.designer"], "the explicit root has the full depth budget")
+    }
+
     @Test func anAppReachedThroughSymlinksIsFoundOnce() throws {
         let fm = FileManager.default
         let root = tempDir("scan")
