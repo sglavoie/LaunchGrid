@@ -73,7 +73,8 @@ public enum AppScanner {
         var unlisted: [String] = []
         var aliases: [String: String] = [:]
         var directoryAliases: [String: String] = [:]
-        var bundlePaths: [String: String] = [:]
+        var directoryBundles: [String: [String: String]] = [:]
+        var directoryChildren: [String: [String: String]] = [:]
 
         /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
         func consider(_ url: URL, realPath: String) {
@@ -93,7 +94,8 @@ public enum AppScanner {
             let real = dir.resolvingSymlinksInPath().path
             // Even a directory already walked can give saved tiles another spelling of its
             // apps. Remember it before the cycle/repeat guard, without walking it again.
-            if real != dir.path { directoryAliases[dir.path] = real }
+            directoryAliases[dir.path] = real
+            directoryAliases[real] = real
             let remaining = max(0, limit - depth)
             if let seen = visited[real], seen >= remaining { return } // symlink cycle or repeat
             visited[real] = remaining
@@ -129,10 +131,12 @@ public enum AppScanner {
                     // Keep the app's name inside this directory even when the app itself is
                     // a link to somewhere else; directory aliases must cover that spelling too.
                     if let listed = paths[realPath] {
-                        bundlePaths[inDirectory] = listed
+                        directoryBundles[real, default: [:]][child.lastPathComponent] = listed
                         if inDirectory != listed { aliases[inDirectory] = listed }
                     }
                 } else if depth < limit, own.isHidden != true, v.isDirectory == true, v.isPackage != true {
+                    directoryChildren[real, default: [:]][child.lastPathComponent] = target?.path
+                        ?? (real as NSString).appendingPathComponent(child.lastPathComponent)
                     walk(path, depth: depth + 1, limit: limit)
                 }
             }
@@ -143,12 +147,24 @@ public enum AppScanner {
             let homebrewOpt = isHomebrewOpt(root)
             walk(root, depth: 1, limit: homebrewOpt ? min(maxDepth, 2) : maxDepth, homebrewOpt: homebrewOpt)
         }
-        for (directory, real) in directoryAliases {
-            let prefix = real.hasSuffix("/") ? real : real + "/"
-            for (bundle, listed) in bundlePaths where bundle.hasPrefix(prefix) {
-                let alternate = (directory as NSString).appendingPathComponent(String(bundle.dropFirst(prefix.count)))
+        // Replay the directories already read for each spelling. A nested directory link
+        // can lead outside its parent's real path, so a prefix match on bundle paths misses
+        // it. Following the recorded edges needs no more disk reads; the ancestor set stops
+        // cycles without hiding a sibling link to the same directory.
+        func recordAliases(at directory: String, real: String, ancestors: Set<String>) {
+            guard !ancestors.contains(real) else { return }
+            var ancestors = ancestors
+            ancestors.insert(real)
+            for (name, listed) in directoryBundles[real] ?? [:] {
+                let alternate = (directory as NSString).appendingPathComponent(name)
                 if alternate != listed { aliases[alternate] = listed }
             }
+            for (name, child) in directoryChildren[real] ?? [:] {
+                recordAliases(at: (directory as NSString).appendingPathComponent(name), real: child, ancestors: ancestors)
+            }
+        }
+        for (directory, real) in directoryAliases {
+            recordAliases(at: directory, real: real, ancestors: [])
         }
         return ScanResult(apps: results, unlisted: unlisted, aliases: aliases)
     }
@@ -176,7 +192,11 @@ public enum AppScanner {
         let path = url.path
         let bundleID = info["CFBundleIdentifier"] as? String
         var name = FileManager.default.displayName(atPath: path)
-        if name.hasSuffix(".app") { name = String(name.dropLast(4)) }
+        if name.lowercased().hasSuffix(".app") { name = String(name.dropLast(4)) }
+        // Finder can append a lowercase extension to an uppercase bundle filename:
+        // "Shouting.APP.app". Strip the remaining filename extension only when this is
+        // still the exact filename, preserving a real name such as "Notes.app".
+        if name == url.lastPathComponent { name = AppRef.defaultName(forPath: path) }
         let category = info["LSApplicationCategoryType"] as? String
         return InstalledApp(bundleID: bundleID, path: path, name: name, category: category)
     }

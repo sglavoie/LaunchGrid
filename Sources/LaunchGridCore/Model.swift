@@ -132,7 +132,7 @@ public struct AppRef: Codable, Equatable, Identifiable, Sendable {
 
     public static func defaultName(forPath path: String) -> String {
         let last = (path as NSString).lastPathComponent
-        return last.hasSuffix(".app") ? String(last.dropLast(4)) : last
+        return last.lowercased().hasSuffix(".app") ? String(last.dropLast(4)) : last
     }
 }
 

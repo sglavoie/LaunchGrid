@@ -864,12 +864,17 @@ func tempDir(_ prefix: String) -> URL {
         #expect(found.first { $0.bundleID == "t.two" }?.name == "Two")
     }
 
-    @Test func findsAppsWhoseExtensionIsInCapitals() throws {
+    @Test(arguments: ["app", "APP", "App"])
+    func findsAppsWhoseExtensionIsInCapitals(ext: String) throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }
-        try makeFakeApp("Shouting.APP", id: "t.shout", in: root)
-        try makeFakeApp("Plain.app", id: "t.plain", in: root)
-        #expect(Set(AppScanner.scan(roots: [root]).compactMap(\.bundleID)) == ["t.shout", "t.plain"])
+        try makeFakeApp("Shouting.\(ext)", id: "t.shout", in: root)
+        try makeFakeApp("Plain.app.app", id: "t.plain", in: root)
+        let found = AppScanner.scan(roots: [root])
+        #expect(Set(found.compactMap(\.bundleID)) == ["t.shout", "t.plain"])
+        #expect(found.first { $0.bundleID == "t.shout" }?.name == "Shouting")
+        #expect(found.first { $0.bundleID == "t.plain" }?.name == "Plain.app")
+        #expect(AppRef(bundleID: nil, path: root.appendingPathComponent("Shouting.\(ext)").path).name == "Shouting")
     }
 
     @Test func respectsTheDepthLimitButWalksNestedRootsFully() throws {
@@ -962,18 +967,23 @@ func tempDir(_ prefix: String) -> URL {
         #expect(picked.allApps.count == 1)
     }
 
-    @Test(arguments: [false, true], [false, true])
-    func alternateDirectoryLinksDoNotCreateDuplicateTiles(realRootFirst: Bool, linkedApp: Bool) throws {
+    @Test(arguments: [false, true], [0, 1, 2])
+    func alternateDirectoryLinksDoNotCreateDuplicateTiles(realRootFirst: Bool, linkKind: Int) throws {
         let fm = FileManager.default
         let root = tempDir("scan-directory-links")
         defer { try? fm.removeItem(at: root) }
         try makeFakeApp("Real/Nested/App.app", id: "t.linked", in: root)
         let real = root.appendingPathComponent("Real")
-        if linkedApp {
+        if linkKind == 1 {
             let bundle = real.appendingPathComponent("Nested/App.app")
             let target = root.appendingPathComponent("Elsewhere.app")
             try fm.moveItem(at: bundle, to: target)
             try fm.createSymbolicLink(at: bundle, withDestinationURL: target)
+        } else if linkKind == 2 {
+            let nested = real.appendingPathComponent("Nested")
+            let target = root.appendingPathComponent("Elsewhere")
+            try fm.moveItem(at: nested, to: target)
+            try fm.createSymbolicLink(at: nested, withDestinationURL: target)
         }
         let first = root.appendingPathComponent("First")
         let second = root.appendingPathComponent("Second")
@@ -999,6 +1009,27 @@ func tempDir(_ prefix: String) -> URL {
         Reconciler.add([try #require(AppScanner.read(appAt: alternate))], to: &picked,
                        installed: result.apps, aliases: result.aliases)
         #expect(picked.allApps.count == 1)
+
+        var excluded = Grid(removedBundleIDs: [alternate.path])
+        _ = Reconciler.reconcile(&excluded, installed: result.apps, autoAdd: true, aliases: result.aliases)
+        #expect(excluded.allApps.isEmpty, "an excluded app stays excluded through nested links")
+    }
+
+    @Test func directoryAliasCyclesStillRecognizeAppsWithoutRepeatingForever() throws {
+        let fm = FileManager.default
+        let root = tempDir("scan-directory-cycle")
+        defer { try? fm.removeItem(at: root) }
+        try makeFakeApp("Real/App.app", id: "t.cycle", in: root)
+        let real = root.appendingPathComponent("Real")
+        let alias = root.appendingPathComponent("Alias")
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        try fm.createSymbolicLink(at: real.appendingPathComponent("Back"), withDestinationURL: root)
+        let result = AppScanner.scanReporting(roots: [root], maxDepth: 20)
+        let scanned = try #require(result.apps.first)
+        #expect(result.apps.count == 1)
+        let alternate = real.appendingPathComponent("App.app").path
+        #expect(alternate == scanned.path || result.aliases[alternate] == scanned.path)
+        #expect(result.aliases.count < 30, "cycles must not generate unbounded path spellings")
     }
 
     @Test func skipsAppsHiddenByDefaultButReadsThemByHand() throws {
