@@ -86,6 +86,46 @@ func installed(_ name: String) -> InstalledApp {
         state.redo()
         #expect(state.grid.allApps.map(\.title) == ["Renamed"])
     }
+
+    @Test(arguments: [false, true], [false, true])
+    func scansKeepRenamedAppsInTheirSlotWhenUndoingAndRedoing(autoAdd: Bool, prunedFirst: Bool) throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = autoAdd
+        state.catalogScanned([installed("A"), installed("B")])
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Custom") }
+        if prunedFirst { state.catalogScanned([installed("B")]) }
+        let renamed = InstalledApp(bundleID: a.bundleID, path: "/Applications/New A.app", name: "New A")
+        state.catalogScanned([renamed, installed("B")])
+        // By the next scan, the new path is no longer a newly discovered copy.
+        state.catalogScanned([renamed, installed("B")])
+
+        state.undo()
+        #expect(state.grid.allApps.map(\.path) == [renamed.path, installed("B").path])
+        #expect(state.grid.allApps.first?.id == a.id)
+        #expect(state.grid.allApps.first?.title == renamed.name)
+        state.redo()
+        #expect(state.grid.allApps.map(\.path) == [renamed.path, installed("B").path])
+        #expect(state.grid.allApps.first?.id == a.id)
+        #expect(state.grid.allApps.first?.title == "Custom")
+    }
+
+    @Test func scanDetectedMovesKeepRedoExclusionsForAppCopies() throws {
+        let state = makeState()
+        let original = installed("Xcode")
+        let beta = InstalledApp(bundleID: original.bundleID, path: "/Applications/Xcode-beta.app", name: "Xcode-beta")
+        state.catalogScanned([original, beta])
+        let tile = try #require(state.grid.allApps.first { $0.path == beta.path })
+        state.remove([tile.id])
+        state.undo()
+
+        let moved = InstalledApp(bundleID: beta.bundleID, path: "/Applications/Dev/Xcode-beta.app", name: beta.name)
+        state.catalogScanned([original, moved])
+        state.redo()
+
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.grid.removedBundleIDs == [moved.path])
+    }
 }
 
 @MainActor @Suite(.tempDir) struct CatalogTests {
@@ -117,6 +157,7 @@ func installed(_ name: String) -> InstalledApp {
         state.replaceGrid(chosen) // an import or a grid file
         state.catalogScanned(["B", "A"].map(installed))
         #expect(state.grid.pages[0].items.first?.title == "B")
+        #expect(state.grid.allApps.map(\.name) == ["B", "A"], "the chosen layout still receives the completed scan")
     }
 }
 

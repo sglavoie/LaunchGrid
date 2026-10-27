@@ -615,7 +615,7 @@ final class AppState {
         if !hasScanned { hasScanned = true }
         if let style = buildAfterScan {
             buildAfterScan = nil
-            if !hasGridFile { build(style: style) }
+            if !hasGridFile { build(style: style) } else { reconcile() }
         } else if hasGridFile {
             reconcile()
         }
@@ -739,6 +739,15 @@ final class AppState {
             NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
         }
         let old = grid
+        // A scan can discover a move or rename without a sandbox bookmark. Carry its
+        // confirmed paths into history too, including exclusions in a pending redo.
+        let previousPaths = Dictionary((old.allApps + old.recentlyPruned.map(\.app)).map { ($0.id, $0.path) },
+                                       uniquingKeysWith: { first, _ in first })
+        let moves = Dictionary(g.allApps.compactMap { app -> (String, String)? in
+            guard let previous = previousPaths[app.id], previous != app.path else { return nil }
+            return (previous, app.path)
+        }, uniquingKeysWith: { first, _ in first })
+        followMovesInHistory(moves)
         grid = g
         afterChange(from: old)
         if !report.added.isEmpty || !report.restored.isEmpty {
@@ -975,8 +984,7 @@ final class AppState {
     /// undo step: it mirrors the disk.
     func followMovedApps(_ moves: [String: String]) {
         guard !moves.isEmpty else { return }
-        for i in undoStack.indices { undoStack[i].followMoves(moves) }
-        for i in redoStack.indices { redoStack[i].followMoves(moves) }
+        followMovesInHistory(moves)
         // Not under a drag, which may be on the extra page past the last that a change would
         // take the view off: at the drop.
         if drag.active {
@@ -989,6 +997,12 @@ final class AppState {
         let old = grid
         grid = g
         afterChange(from: old)
+    }
+
+    private func followMovesInHistory(_ moves: [String: String]) {
+        guard !moves.isEmpty else { return }
+        for i in undoStack.indices { undoStack[i].followMoves(moves) }
+        for i in redoStack.indices { redoStack[i].followMoves(moves) }
     }
 
     /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode
