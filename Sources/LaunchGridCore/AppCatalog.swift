@@ -71,6 +71,7 @@ public enum AppScanner {
         var results: [InstalledApp] = []
         var paths: [String: String] = [:]
         var unlisted: [String] = []
+        var unlistedDirectories = Set<String>()
         var aliases: [String: String] = [:]
         var directoryAliases: [String: String] = [:]
         var directoryBundles: [String: [String: String]] = [:]
@@ -105,6 +106,7 @@ public enum AppScanner {
             guard let children = try? fm.contentsOfDirectory(at: linked ? URL(fileURLWithPath: real, isDirectory: true) : dir,
                                                              includingPropertiesForKeys: Array(scanKeys)) else {
                 unlisted.append(dir.path)
+                unlistedDirectories.insert(real)
                 return
             }
             for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
@@ -151,8 +153,14 @@ public enum AppScanner {
         // can lead outside its parent's real path, so a prefix match on bundle paths misses
         // it. Following the recorded edges needs no more disk reads; the ancestor set stops
         // cycles without hiding a sibling link to the same directory.
+        var unlistedPaths = Set(unlisted)
         func recordAliases(at directory: String, real: String, ancestors: Set<String>) {
             guard !ancestors.contains(real) else { return }
+            // A failed listing applies to every spelling too. The visited guard can skip
+            // another root or link to this directory; its tiles must remain protected.
+            if unlistedDirectories.contains(real), unlistedPaths.insert(directory).inserted {
+                unlisted.append(directory)
+            }
             var ancestors = ancestors
             ancestors.insert(real)
             for (name, listed) in directoryBundles[real] ?? [:] {
@@ -163,7 +171,7 @@ public enum AppScanner {
                 recordAliases(at: (directory as NSString).appendingPathComponent(name), real: child, ancestors: ancestors)
             }
         }
-        for (directory, real) in directoryAliases {
+        for (directory, real) in directoryAliases.sorted(by: { $0.key < $1.key }) {
             recordAliases(at: directory, real: real, ancestors: [])
         }
         return ScanResult(apps: results, unlisted: unlisted, aliases: aliases)

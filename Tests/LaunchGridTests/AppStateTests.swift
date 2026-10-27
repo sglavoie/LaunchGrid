@@ -378,6 +378,22 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
     }
 
+    @Test func nullPagesRestoresTheBackupInsteadOfStartingAnEmptyLayout() throws {
+        let first = makeState(["A"])
+        #expect(first.saveNow())
+        let a = try #require(first.grid.allApps.first)
+        first.apply { $0.rename(a.id, to: "Renamed") }
+        #expect(first.saveNow())
+        try Data(#"{"version": 1, "pages": null}"#.utf8).write(to: first.store.url)
+
+        let recovered = AppState(prefs: testPreferences(), store: first.store)
+        #expect(recovered.grid.allApps.map(\.title) == ["A"])
+        #expect(recovered.hasGridFile)
+        #expect(recovered.recoveryNotice != nil)
+        #expect(recovered.saveNow())
+        #expect(try recovered.store.load().allApps.map(\.title) == ["A"])
+    }
+
     @Test func aPartlyReadableLayoutIsCopiedAsideAndExplained() throws {
         let original = #"{"version": 1, "rows": 2, "columns": 2, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app", "name": "A"}}, {"type": "app", "app": {"name": "No path"}}, {"type": "app", "app": {"name": "Nor this"}}]}], "removedBundleIDs": []}"#
         let state = try load(original)
@@ -1399,6 +1415,35 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct UnlistedFolderTests {
+    @Test(arguments: [false, true], [false, true])
+    func unreadableDirectoriesProtectTilesThroughEveryAlias(aliasFirst: Bool, nested: Bool) throws {
+        let fm = FileManager.default
+        let root = TempDir.url.appendingPathComponent("Real")
+        let locked = nested ? root.appendingPathComponent("Locked") : root
+        let alias = TempDir.url.appendingPathComponent("Alias")
+        try fm.createDirectory(at: locked, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: root)
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+
+        let roots = aliasFirst ? [alias, root] : [root, alias]
+        let result = AppScanner.scanReporting(roots: roots)
+        let parents = [locked, nested ? alias.appendingPathComponent("Locked") : alias]
+        let refs = parents.enumerated().map { i, parent in
+            AppRef(bundleID: "com.test.locked\(i)", path: parent.appendingPathComponent("App\(i).app").path)
+        }
+        for ref in refs {
+            #expect(!AppState.isReachable(ref.path, unreachableFolders: result.unlisted))
+        }
+        // A successful scan elsewhere must not turn the inaccessible apps into removals.
+        var grid = Grid(pages: [Page(items: refs.map(GridItem.app))])
+        _ = Reconciler.reconcile(&grid, installed: [installed("Other")], autoAdd: false,
+                                isReachable: { AppState.isReachable($0, unreachableFolders: result.unlisted) },
+                                pathExists: { _ in false })
+        #expect(grid.allApps == refs)
+        #expect(grid.recentlyPruned.isEmpty)
+    }
+
     @Test func theScannerReportsFoldersItCouldNotList() throws {
         let root = TempDir.url.appendingPathComponent("Apps")
         let locked = root.appendingPathComponent("Locked")
@@ -1410,8 +1455,8 @@ func installed(_ name: String) -> InstalledApp {
         let result = AppScanner.scanReporting(roots: [root, missing])
         #expect(result.apps.isEmpty)
         // Folders found in a listing are named as the listing names them (/private/var, here).
-        #expect(result.unlisted.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
-            == [locked.resolvingSymlinksInPath().path, missing.path])
+        #expect(Set(result.unlisted.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path })
+            == Set([locked.resolvingSymlinksInPath().path, missing.resolvingSymlinksInPath().path]))
     }
 
     @Test func aTileNotReadYetIsKeptUntilABackgroundReadFindsItGone() async throws {
