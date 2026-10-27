@@ -228,13 +228,15 @@ extension Grid {
         let index = min(target.index - shift, pages[target.page].items.count)
         pages[target.page].items.insert(.folder(folder), at: max(0, index))
         normalize()
+        movePrunedContents(of: taken, to: folder.id, at: 0)
         return folder.id
     }
 
     /// Adds items to an existing folder; folders among them are flattened into it.
     public mutating func addToFolder(_ ids: [UUID], folder folderID: UUID, at index: Int? = nil) {
         let moving = ids.filter { $0 != folderID }
-        let apps = detach(moving).flatMap(\.apps)
+        let taken = detach(moving)
+        let apps = taken.flatMap(\.apps)
         guard let loc = locate(folderID), loc.folderIndex == nil,
               case .folder(var f) = pages[loc.page].items[loc.index] else {
             // Folder vanished (or the ID isn't a folder); put the apps back somewhere visible.
@@ -246,6 +248,38 @@ extension Grid {
         f.apps.insert(contentsOf: apps, at: i)
         pages[loc.page].items[loc.index] = .folder(f)
         normalize()
+        movePrunedContents(of: taken, to: folderID, at: i)
+    }
+
+    /// Flattening a folder also moves the apps an updater temporarily took out of it.
+    /// Their remembered neighbours follow them, preserving their order when they return;
+    /// removing the destination folder meanwhile must exclude them with its visible apps.
+    private mutating func movePrunedContents(of items: [GridItem], to folderID: UUID, at index: Int) {
+        guard !recentlyPruned.isEmpty, let loc = locate(folderID),
+              let destination = folder(folderID) else { return }
+        var offset = index
+        for item in items {
+            defer { offset += item.apps.count }
+            guard let source = item.folder else { continue }
+            let prefix = destination.apps.prefix(offset).map(\.id)
+            for k in recentlyPruned.indices where recentlyPruned[k].folderID == source.id {
+                var entry = recentlyPruned[k]
+                let slot = min(max(0, entry.folderIndex ?? source.apps.count), source.apps.count)
+                entry.folderBefore = prefix + (entry.folderBefore ?? source.apps.prefix(slot).map(\.id))
+                entry.folderIndex = offset + slot
+                entry.folderID = folderID
+                entry.folderName = destination.name
+                entry.folderEmptied = false
+                entry.pageID = pages[loc.page].id
+                entry.index = loc.index
+                entry.before = pages[loc.page].items.prefix(loc.index).map(\.id)
+                entry.pageEmptied = false
+                entry.pageIndex = nil
+                entry.pageTitle = nil
+                entry.pageBefore = nil
+                recentlyPruned[k] = entry
+            }
+        }
     }
 
     /// Replaces a folder by its apps, in place.
@@ -274,6 +308,11 @@ extension Grid {
                 f.apps[fi] = renamed(f.apps[fi])
             } else if !trimmed.isEmpty {
                 f.name = trimmed
+                // If the remaining apps also disappear during an update, the first one
+                // back recreates the folder from its remembered name.
+                for k in recentlyPruned.indices where recentlyPruned[k].folderID == f.id {
+                    recentlyPruned[k].folderName = trimmed
+                }
             }
             pages[loc.page].items[loc.index] = .folder(f)
         }

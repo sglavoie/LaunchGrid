@@ -91,13 +91,22 @@ struct SeededRandom: RandomNumberGenerator {
         }
     }
 
-    @Test func appsThatVanishAndReturnComeBackToTheirPlaces() {
+    @Test(arguments: [false, true])
+    func appsThatVanishAndReturnComeBackToTheirPlaces(withFolders: Bool) {
         let now = Date()
         for seed in UInt64(1)...200 {
             var rng = SeededRandom(state: seed)
             var g = makeGrid(&rng)
+            // Updates also empty folders and their pages, sometimes over several scans.
+            if withFolders {
+                for _ in 0..<3 {
+                    let picked = Array(g.allApps.shuffled(using: &rng).prefix(3))
+                    if picked.count > 1 { g.removingEmptiedPages { $0.group(picked.map(\.id), name: "Folder") } }
+                }
+            }
             let installedApps = g.allApps.map { InstalledApp(bundleID: $0.bundleID, path: $0.path, name: $0.name) }
             let original = g.pages.map { $0.items.map(\.title) }
+            let originalApps = g.allApps.map(\.id)
             var present = Set(installedApps.map(\.path))
             // A few rounds of apps going (an update, a volume) and coming back, in batches. Never
             // all at once: an empty scan is taken as a failed one, and prunes nothing.
@@ -118,6 +127,7 @@ struct SeededRandom: RandomNumberGenerator {
                 }
             }
             #expect(g.pages.map { $0.items.map(\.title) } == original, "seed \(seed): the layout came back as it was")
+            #expect(g.allApps.map(\.id) == originalApps, "seed \(seed): folder contents came back in order")
         }
     }
 

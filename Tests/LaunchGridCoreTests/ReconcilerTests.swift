@@ -9,6 +9,79 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test func renamingAPartlyPrunedFolderSurvivesTheRestOfItsAppsUpdating() {
+        let a = installed("A"), b = installed("B"), c = installed("C")
+        let folder = Folder(name: "Old", apps: [a.makeRef(), b.makeRef()])
+        var g = Grid(pages: [Page(items: [.folder(folder), .app(c.makeRef())])])
+        _ = Reconciler.reconcile(&g, installed: [b, c], autoAdd: false, pathExists: { $0 != a.path })
+        g.rename(folder.id, to: "Renamed")
+        _ = Reconciler.reconcile(&g, installed: [c], autoAdd: false, pathExists: { $0 == c.path })
+        #expect(g.folder(folder.id) == nil)
+
+        _ = Reconciler.reconcile(&g, installed: [a, b, c], autoAdd: false)
+
+        #expect(g.folder(folder.id)?.name == "Renamed")
+        #expect(g.folder(folder.id)?.apps.map(\.name) == ["A", "B"])
+    }
+
+    @Test(arguments: [false, true])
+    func mergingAFolderKeepsItsTemporarilyMissingApps(withExistingFolder: Bool) throws {
+        let a = installed("A"), b = installed("B"), c = installed("C")
+        var ref = a.makeRef()
+        ref.displayName = "My A"
+        let source = Folder(name: "Source", apps: [ref, b.makeRef()])
+        let destination = Folder(name: "Destination", apps: [c.makeRef()])
+        var g = Grid(pages: [Page(items: [.folder(source), .folder(destination)])])
+        _ = Reconciler.reconcile(&g, installed: [b, c], autoAdd: false, pathExists: { $0 != a.path })
+
+        let target: UUID
+        if withExistingFolder {
+            g.addToFolder([source.id], folder: destination.id)
+            target = destination.id
+        } else {
+            let grouped = g.group([source.id, destination.id], name: "Together")
+            target = try #require(grouped)
+        }
+        var removed = g
+        removed.remove([target], installed: [b, c])
+        _ = Reconciler.reconcile(&removed, installed: [a, b, c], autoAdd: true)
+        #expect(removed.allApps.isEmpty, "removing the merged folder must exclude its missing apps too")
+
+        _ = Reconciler.reconcile(&g, installed: [a, b, c], autoAdd: false)
+        let expected = withExistingFolder ? ["C", "My A", "B"] : ["My A", "B", "C"]
+        #expect(g.folder(target)?.apps.map(\.title) == expected)
+        #expect(g.allApps.count == 3)
+        #expect(g.pages.flatMap(\.items).count == 1, "the returning app belongs inside the merged folder")
+        #expect(g.folder(target)?.apps.contains(where: { $0.id == ref.id }) == true)
+    }
+
+    @Test(arguments: [0, 1, 2])
+    func mergedFoldersRestoreMissingAppsInOrderAtTheChosenSlot(slot: Int) {
+        let all = ["A", "B", "C", "D", "E", "F", "X", "Y"].map { installed($0) }
+        let first = Folder(name: "First", apps: all[0..<3].map { $0.makeRef() })
+        let second = Folder(name: "Second", apps: all[3..<6].map { $0.makeRef() })
+        let target = Folder(name: "Target", apps: all[6..<8].map { $0.makeRef() })
+        var g = Grid(pages: [Page(items: [.folder(first), .folder(second), .folder(target)])])
+        let remaining = [all[2], all[5], all[6], all[7]]
+        let paths = Set(remaining.map(\.path))
+        _ = Reconciler.reconcile(&g, installed: remaining, autoAdd: false, pathExists: paths.contains)
+        g.addToFolder([first.id, second.id], folder: target.id, at: slot)
+
+        // The missing apps of the second source return first; A and B return separately.
+        let returning = [all[3], all[4], all[1], all[0]]
+        var present = remaining
+        for app in returning {
+            present.append(app)
+            let paths = Set(present.map(\.path))
+            _ = Reconciler.reconcile(&g, installed: present, autoAdd: false, pathExists: paths.contains)
+        }
+        var expected = ["X", "Y"]
+        expected.insert(contentsOf: ["A", "B", "C", "D", "E", "F"], at: slot)
+        #expect(g.folder(target.id)?.apps.map(\.name) == expected)
+        #expect(g.pages.flatMap(\.items).count == 1)
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
     @Test(arguments: [false, true])
     func removingOneCopyKeepsATemporarilyMissingCopyIncluded(throughChooser: Bool) {
         let a = installed("A"), copy = installed("A-copy", id: "com.test.a")
