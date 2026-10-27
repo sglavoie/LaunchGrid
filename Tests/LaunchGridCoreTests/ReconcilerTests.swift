@@ -233,6 +233,18 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
                 "the moved Xcode is the tile's; the beta is still missing")
     }
 
+    @Test func anExcludedCopyIsStillOfferedByMissingApps() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let excluded = installed("Xcode", id: original.bundleID, path: "/Applications/Old/Xcode.app")
+        let moved = installed("Xcode", id: original.bundleID, path: "/Applications/Dev/Xcode.app")
+        let g = Grid(pages: [Page(items: [.app(original.makeRef())])], removedBundleIDs: [excluded.path])
+
+        #expect(Reconciler.missingApps(in: g, installed: [excluded, moved], pathExists: { _ in false }) == [excluded],
+                "the tile can follow the included copy; the excluded copy must remain available to add")
+        #expect(Reconciler.missingApps(in: g, installed: [excluded], pathExists: { _ in false }) == [excluded],
+                "a stale tile cannot claim a copy the reconciler refuses to follow")
+    }
+
     @Test func anExistingUnscannedAppDoesNotHideAnotherCopyFromMissingApps() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let original = dir.appendingPathComponent("A.app")

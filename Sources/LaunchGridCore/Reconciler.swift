@@ -309,7 +309,9 @@ public enum Reconciler {
         let byKey = Dictionary(grouping: offGrid, by: \.key)
         var claimed = Set<String>()
         for ref in grid.allApps where !installedPaths.contains(ref.path) && isReachable(ref.path) && !pathExists(ref.path) {
-            let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) }
+            // As in reconcile, a stale tile cannot follow an excluded copy. That copy
+            // stays in the picker so the user can explicitly include it again.
+            let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) && !grid.isExcluded($0) }
             if let copy = likelyMove(of: ref, among: free, wasInstalledBefore: wasInstalledBefore) { claimed.insert(copy.path) }
         }
         return offGrid

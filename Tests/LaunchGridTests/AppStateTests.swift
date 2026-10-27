@@ -1446,6 +1446,24 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.last?.path == "/Volumes/Ext/B.app")
         #expect(!state.appPathsInUse.contains("/Users/x/Apps/B.app"), "its old bookmark can go")
     }
+
+    @Test func redoingRemovalAfterACopyMovesKeepsItExcluded() throws {
+        let state = makeState()
+        let original = installed("Xcode")
+        let beta = InstalledApp(bundleID: original.bundleID, path: "/Applications/Xcode-beta.app", name: "Xcode-beta")
+        state.catalogScanned([original, beta])
+        let tile = try #require(state.grid.allApps.first { $0.path == beta.path })
+        state.remove([tile.id])
+        state.undo()
+
+        let moved = InstalledApp(bundleID: beta.bundleID, path: "/Applications/Dev/Xcode-beta.app", name: beta.name)
+        state.followMovedApps([beta.path: moved.path])
+        state.catalogScanned([original, moved])
+        state.redo()
+
+        #expect(state.grid.allApps.map(\.path) == [original.path], "auto-add must not undo the removal")
+        #expect(state.grid.removedBundleIDs == [moved.path])
+    }
 }
 
 @Suite struct LauncherTests {

@@ -263,7 +263,7 @@ extension Grid {
     }
 
     /// Points each app at its new place, `moves` mapping old paths to new; recently pruned ones
-    /// too, so they can still return to their slot from there.
+    /// and path-based exclusions too, so restoring a snapshot preserves those choices.
     public mutating func followMoves(_ moves: [String: String]) {
         guard !moves.isEmpty else { return }
         func moved(_ a: AppRef) -> AppRef {
@@ -283,6 +283,7 @@ extension Grid {
             }
         }
         for i in recentlyPruned.indices { recentlyPruned[i].app = moved(recentlyPruned[i].app) }
+        removedBundleIDs = Set(removedBundleIDs.map { moves[$0] ?? $0 })
     }
 
     // MARK: Pages

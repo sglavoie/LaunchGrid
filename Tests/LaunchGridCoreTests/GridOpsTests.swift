@@ -345,6 +345,14 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 }
 
 @Suite struct FollowMovesTests {
+    @Test func exclusionsFollowMovesWithoutChangingBundleIDs() {
+        let a = "/Applications/A.app", b = "/Applications/B.app"
+        var g = Grid(removedBundleIDs: [a, b, "com.test.excluded"])
+        g.followMoves([a: b, b: "/Applications/C.app"])
+        #expect(g.removedBundleIDs == [b, "/Applications/C.app", "com.test.excluded"],
+                "each original path moves once, including when destinations overlap")
+    }
+
     @Test func appsOnPagesInFoldersAndRecentlyPrunedFollowTheirMoves() {
         let (a, b, c, d) = (app("A"), app("B"), app("C"), app("D"))
         var g = Grid(pages: [Page(items: [.app(a), .folder(Folder(name: "F", apps: [b, c]))])])
