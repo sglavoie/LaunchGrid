@@ -288,6 +288,27 @@ extension Grid {
               case .folder(let f) = pages[loc.page].items[loc.index] else { return }
         pages[loc.page].items.replaceSubrange(loc.index...loc.index, with: f.apps.map(GridItem.app))
         spill(from: loc.page)
+        // An updater may have taken some apps out before the folder was moved or
+        // ungrouped. Their fallback slots now belong among its expanded contents;
+        // their folder neighbours still tell them apart when those contents spill.
+        for k in recentlyPruned.indices where recentlyPruned[k].folderID == folderID {
+            var entry = recentlyPruned[k]
+            let slot = min(max(0, Self.slot(after: entry.folderBefore,
+                fallback: entry.folderIndex ?? f.apps.count, in: f.apps.map(\.id))), f.apps.count)
+            let absolute = loc.index + slot
+            let page = min(loc.page + absolute / capacity, pages.count - 1)
+            let index = min(absolute - (page - loc.page) * capacity, pages[page].items.count)
+            entry.pageID = pages[page].id
+            entry.index = index
+            entry.before = pages[page].items.prefix(index).map(\.id)
+            entry.folderBefore = entry.folderBefore ?? f.apps.prefix(slot).map(\.id)
+            entry.folderEmptied = false
+            entry.pageEmptied = false
+            entry.pageIndex = nil
+            entry.pageTitle = nil
+            entry.pageBefore = nil
+            recentlyPruned[k] = entry
+        }
     }
 
     // MARK: Renaming

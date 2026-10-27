@@ -490,6 +490,16 @@ extension Grid {
             if entry.folderEmptied == true {
                 place(.folder(Folder(id: folderID, name: entry.folderName ?? String(localized: "Folder"), apps: [entry.app])), entry)
             } else {
+                // Ungrouped contents can span pages, especially after earlier apps
+                // return and spill them onward. Follow the nearest former folder
+                // neighbour that is still a top-level item, rather than the old
+                // folder's slot (which would put every returning app before it).
+                for id in (entry.folderBefore ?? []).reversed() {
+                    if let loc = locate(id), loc.folderIndex == nil {
+                        insert([.app(entry.app)], page: loc.page, at: loc.index + 1)
+                        return
+                    }
+                }
                 place(.app(entry.app), entry) // the user ungrouped or emptied it meanwhile
             }
         } else {

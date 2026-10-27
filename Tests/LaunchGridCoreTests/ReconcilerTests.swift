@@ -767,7 +767,39 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         _ = Reconciler.reconcile(&g, installed: ["A", "B", "C"].map { installed($0) }, autoAdd: false, now: t0 + 5)
         #expect(g.folder(fid) == nil)
         #expect(g.pages[0].items.allSatisfy { $0.app != nil })
-        #expect(Set(titles(g.pages[0])) == ["A", "B", "C"])
+        #expect(titles(g.pages[0]) == ["A", "B", "C"])
+    }
+
+    @Test(arguments: [false, true], [2, 6])
+    func ungroupedAppsReturnInOrderOnTheFoldersNewPage(returnLastFirst: Bool, columns: Int) throws {
+        let apps = ["A", "B", "C", "D", "E"].map { installed($0) }
+        let sentinel = installed("Other")
+        let folder = Folder(name: "Work", apps: apps.map { $0.makeRef() })
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        // Missing apps at the beginning, middle and end, including adjacent gaps.
+        for missing in [[0, 1], [1, 3], [3, 4]] {
+            var g = Grid(rows: 1, columns: columns, pages: [
+                Page(items: [.folder(folder), .app(sentinel.makeRef())]), Page(title: "Destination"),
+            ])
+            let kept = apps.enumerated().filter { !missing.contains($0.offset) }.map(\.element) + [sentinel]
+            let present = Set(kept.map(\.path))
+            _ = Reconciler.reconcile(&g, installed: kept, autoAdd: false,
+                                    pathExists: present.contains, now: now)
+            g.move([folder.id], toPage: 1, at: 0)
+            g.ungroup(folder.id)
+            // The remembered positions must survive quitting while an update is underway.
+            g = try GridStore.decode(GridStore.encode(g))
+            let first = apps[returnLastFirst ? missing[1] : missing[0]]
+            let partial = kept + [first]
+            _ = Reconciler.reconcile(&g, installed: partial, autoAdd: false,
+                                    pathExists: Set(partial.map(\.path)).contains, now: now + 5)
+            _ = Reconciler.reconcile(&g, installed: apps + [sentinel], autoAdd: false, now: now + 10)
+
+            #expect(g.pages[0].items.map(\.title) == ["Other"])
+            #expect(g.pages.dropFirst().flatMap(\.items).map(\.id) == folder.apps.map(\.id))
+            #expect(g.pages.allSatisfy { $0.items.count <= g.capacity })
+            #expect(g.recentlyPruned.isEmpty)
+        }
     }
 
     @Test func restoreSkipsAReplacementTheUserRemoved() {
