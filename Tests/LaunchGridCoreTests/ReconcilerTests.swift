@@ -9,6 +9,41 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test func pathExclusionsFollowCaseOnlyRenames() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID)
+        var g = Grid(pages: [Page(items: [.app(original.makeRef()), .app(beta.makeRef())])])
+        g.remove([g.allApps[1].id], installed: [original, beta])
+        let renamed = installed("Xcode-Beta", id: original.bundleID)
+
+        let report = Reconciler.reconcile(&g, installed: [original, renamed], autoAdd: true)
+
+        #expect(g.allApps.map(\.path) == [original.path])
+        #expect(g.removedBundleIDs == [renamed.path])
+        #expect(report.added.isEmpty)
+        Reconciler.add([renamed], to: &g, installed: [original, renamed])
+        #expect(g.removedBundleIDs.isEmpty)
+        #expect(g.allApps.map(\.path) == [original.path, renamed.path])
+    }
+
+    @Test func pathExclusionsFollowScannerAliases() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID, path: "/Tools/Xcode-beta.app")
+        let listed = installed("Xcode-beta", id: original.bundleID)
+        var g = Grid(pages: [Page(items: [.app(original.makeRef()), .app(beta.makeRef())])])
+        g.remove([g.allApps[1].id], installed: [original, beta])
+
+        let report = Reconciler.reconcile(&g, installed: [original, listed], autoAdd: true,
+                                          aliases: [beta.path: listed.path])
+
+        #expect(g.allApps.map(\.path) == [original.path])
+        #expect(g.removedBundleIDs == [listed.path])
+        #expect(report.added.isEmpty)
+        Reconciler.add([beta], to: &g, installed: [original, listed], aliases: [beta.path: listed.path])
+        #expect(g.removedBundleIDs.isEmpty)
+        #expect(g.allApps.map(\.path) == [original.path, listed.path])
+    }
+
     @Test func addsNewAppsWhenAutoAddIsOn() {
         var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))])])
         let report = Reconciler.reconcile(&g, installed: [installed("A"), installed("C"), installed("B")], autoAdd: true)

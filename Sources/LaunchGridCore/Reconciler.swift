@@ -52,6 +52,13 @@ public enum Reconciler {
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         let byBundle = Dictionary(grouping: installed.filter { $0.bundleID != nil }, by: { $0.bundleID! })
         let byFoldedPath = Dictionary(installed.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        // An excluded copy can be found under another spelling just like a visible tile:
+        // a case-only rename or a symlink must not make it a new, unexcluded app. Keep
+        // bundle-wide exclusions and paths the scan can't resolve as they were.
+        grid.removedBundleIDs = Set(grid.removedBundleIDs.map { key in
+            guard key.hasPrefix("/"), byPath[key] == nil else { return key }
+            return aliases[key].flatMap { byPath[$0]?.path } ?? byFoldedPath[key.lowercased()]?.path ?? key
+        })
         // Paths some ref already points at; a moved ref must not take over another ref's app.
         let gridPaths = Set(grid.allApps.map(\.path))
         // Never prune when the scan came back empty: that's a failed scan, not an empty Mac.
