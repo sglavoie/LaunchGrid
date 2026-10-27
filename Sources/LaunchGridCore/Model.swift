@@ -300,7 +300,17 @@ extension KeyedDecodingContainer {
     /// The array's elements that decode; the others are skipped and logged, so one bad entry
     /// (an app without a path) doesn't make the whole layout unreadable.
     func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key, countingLayoutEntries: Bool = true) throws -> [T]? {
-        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        guard contains(key) else { return nil }
+        if try decodeNil(forKey: key) {
+            // A missing list can use an older format's default; an explicit null layout
+            // list is damaged, not empty. Let its containing entry be counted as skipped
+            // so loading preserves the original file or recovers the backup.
+            guard !countingLayoutEntries else {
+                throw DecodingError.valueNotFound([T].self, .init(
+                    codingPath: codingPath + [key], debugDescription: "Null layout list"))
+            }
+            return nil
+        }
         var c = try nestedUnkeyedContainer(forKey: key)
         let decoder = try superDecoder(forKey: key)
         var out: [T] = []

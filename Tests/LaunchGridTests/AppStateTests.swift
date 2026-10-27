@@ -378,13 +378,18 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
     }
 
-    @Test func nullPagesRestoresTheBackupInsteadOfStartingAnEmptyLayout() throws {
+    @Test(arguments: [
+        #"{"version": 1, "pages": null}"#,
+        #"{"version": 1, "pages": [{"items": null}]}"#,
+        #"{"version": 1, "pages": [{"items": [{"type": "folder", "folder": {"apps": null}}]}]}"#,
+    ])
+    func nullLayoutListsRestoreTheBackupInsteadOfStartingAnEmptyLayout(contents: String) throws {
         let first = makeState(["A"])
         #expect(first.saveNow())
         let a = try #require(first.grid.allApps.first)
         first.apply { $0.rename(a.id, to: "Renamed") }
         #expect(first.saveNow())
-        try Data(#"{"version": 1, "pages": null}"#.utf8).write(to: first.store.url)
+        try Data(contents.utf8).write(to: first.store.url)
 
         let recovered = AppState(prefs: testPreferences(), store: first.store)
         #expect(recovered.grid.allApps.map(\.title) == ["A"])
@@ -420,6 +425,8 @@ func installed(_ name: String) -> InstalledApp {
         let notice = try #require(state.recoveryNotice, "told at launch instead")
         #expect(notice.message.hasPrefix("2 entries"))
         #expect(notice.file == url)
+        #expect(!state.saveNow(reportingFailure: false), "recovery blocked saves even before an edit")
+        #expect(state.lastSaveError?.localizedDescription == notice.message)
         let a = try #require(state.grid.allApps.first)
         state.apply { $0.rename(a.id, to: "Renamed") }
         #expect(!state.saveNow(reportingFailure: false))

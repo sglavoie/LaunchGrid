@@ -400,6 +400,24 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 }
 
 @Suite struct GridStoreTests {
+    @Test(arguments: [
+        #"{"items": null}"#,
+        #"{"items": [{"type": "folder", "folder": {"apps": null}}]}"#,
+    ])
+    func nullLayoutListsCountAsDamageAlongsideReadableApps(page: String) throws {
+        let json = #"{"pages": [\#(page), {"items": [{"type": "app", "app": {"path": "/Applications/A.app"}}]}]}"#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(grid.allApps.map(\.name) == ["A"])
+        #expect(skipped == 1, "the app must preserve and explain the partially read file")
+    }
+
+    @Test func emptyAndOmittedListsStillLoadWithoutDamage() throws {
+        let json = #"{"pages": [{}, {"items": []}, {"items": [{"type": "folder", "folder": {}}, {"type": "folder", "folder": {"apps": []}}]}], "removedBundleIDs": null}"#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(grid.allApps.isEmpty)
+        #expect(skipped == 0)
+    }
+
     @Test func anExclusionsOnlyFileKeepsReadableChoicesWhenOneIsDamaged() throws {
         let json = #"{"pages": [], "removedBundleIDs": ["com.test.a", 3, "com.test.b"]}"#
         let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))

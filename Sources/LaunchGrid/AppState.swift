@@ -453,7 +453,6 @@ final class AppState {
         lastSaveError = nil
         lastSaveFailureDetail = nil
         saveTask?.cancel()
-        if savedGeneration == gridGeneration && store.exists { return nil }
         // Before the first layout, exclusions chosen in the welcome window are still worth keeping,
         // and so is emptying them: the file on disk would otherwise keep the last one.
         guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return nil }
@@ -470,6 +469,9 @@ final class AppState {
             savesBlocked = false // moved out of the way since
             savesBlockedDetail = nil
         }
+        // A partially loaded grid can have the same generation as the file, even though
+        // recovery blocked writing it. Report that block before claiming it is saved.
+        if savedGeneration == gridGeneration && store.exists { return nil }
         return gridGeneration
     }
 

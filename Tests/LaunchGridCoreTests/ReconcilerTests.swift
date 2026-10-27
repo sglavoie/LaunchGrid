@@ -9,6 +9,32 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test(arguments: [false, true])
+    func returningCopyKeepsItsOwnTileWhenAnotherCopyDisappears(throughAlias: Bool) {
+        let first = installed("Editor", id: "com.editor", path: "/Applications/Editor.app")
+        let second = installed("Editor", id: "com.editor", path: "/Users/test/Applications/Editor.app")
+        let sentinel = installed("Other")
+        var firstRef = first.makeRef(), secondRef = second.makeRef()
+        firstRef.displayName = "Work Editor"
+        secondRef.displayName = "Personal Editor"
+        let folder = Folder(name: "Personal", apps: [secondRef])
+        var g = Grid(pages: [Page(items: [.app(firstRef), .folder(folder), .app(sentinel.makeRef())])])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: [first, sentinel], autoAdd: false,
+                                pathExists: { $0 != second.path }, now: now)
+        var returned = second
+        if throughAlias { returned.path = "/Applications/Linked Editor.app" }
+        let report = Reconciler.reconcile(&g, installed: [returned, sentinel], autoAdd: false,
+                                         pathExists: { $0 != first.path },
+                                         aliases: throughAlias ? [second.path: returned.path] : [:],
+                                         wasInstalledBefore: { _ in true }, now: now + 5)
+        #expect(g.folder(folder.id)?.apps.map(\.id) == [secondRef.id])
+        #expect(g.folder(folder.id)?.apps.map(\.title) == ["Personal Editor"])
+        #expect(g.recentlyPruned.map(\.app.id) == [firstRef.id])
+        #expect(report.restored == ["Personal Editor"])
+        #expect(report.moved.isEmpty)
+    }
+
     @Test func renamingAPartlyPrunedFolderSurvivesTheRestOfItsAppsUpdating() {
         let a = installed("A"), b = installed("B"), c = installed("C")
         let folder = Folder(name: "Old", apps: [a.makeRef(), b.makeRef()])

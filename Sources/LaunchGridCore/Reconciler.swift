@@ -59,10 +59,16 @@ public enum Reconciler {
             guard key.hasPrefix("/"), byPath[key] == nil else { return key }
             return aliases[key].flatMap { byPath[$0]?.path } ?? byFoldedPath[key.lowercased()]?.path ?? key
         })
+        let returning = grid.recentlyPruned.filter {
+            (0..<restoreWindow).contains(now.timeIntervalSince($0.prunedAt))
+                && !grid.isExcluded(key: $0.app.key, path: $0.app.path)
+        }
         // Reserve the scan's spelling of every tile's path before following moves. A tile
         // later in visual order can already own a copy through an alias or a case-only
         // rename; an earlier missing tile must not claim that copy and erase its owner.
-        let gridPaths = Set(grid.allApps.map { ref in
+        // A temporarily pruned tile owns its returning copy too, including its name and
+        // folder placement; another missing copy must not consume it before restoration.
+        let gridPaths = Set((grid.allApps + returning.map(\.app)).map { ref in
             byPath[ref.path]?.path ?? aliases[ref.path].flatMap { byPath[$0]?.path }
                 ?? byFoldedPath[ref.path.lowercased()]?.path ?? ref.path
         })
@@ -239,8 +245,7 @@ public enum Reconciler {
 
         // Bring back recently pruned apps that reappeared, then remember the newly pruned.
         var memory: [PrunedApp] = []
-        for var entry in grid.recentlyPruned where (0..<restoreWindow).contains(now.timeIntervalSince(entry.prunedAt)) {
-            guard !grid.isExcluded(key: entry.app.key, path: entry.app.path) else { continue }
+        for var entry in returning {
             // Its folder (or page) outlived it until this pass pruned the folder's last app.
             if let id = entry.folderID, emptiedFolders.contains(id) { entry.folderEmptied = true }
             if let (p, page) = emptied.first(where: { $0.element.id == entry.pageID }) {
