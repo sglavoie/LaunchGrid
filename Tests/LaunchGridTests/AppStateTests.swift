@@ -203,7 +203,72 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
+@Suite struct GridHitTests {
+    @Test func anUnmeasuredGridHasNoDropTarget() {
+        let layout = GridLayout(size: .zero, rows: 5, columns: 7)
+        #expect(layout.cellIndex(at: .zero) == nil)
+    }
+
+    @Test func aCollapsedGridHasNoDropTarget() {
+        for size in [CGSize(width: 0, height: 500), CGSize(width: 700, height: 0)] {
+            let layout = GridLayout(size: size, rows: 5, columns: 7)
+            #expect(layout.cellIndex(at: .zero) == nil)
+        }
+    }
+
+    @Test func pointsBeyondTheSidesStillReachTheEdgeCells() {
+        let layout = GridLayout(size: CGSize(width: 700, height: 500), rows: 5, columns: 7)
+        #expect(layout.cellIndex(at: CGPoint(x: -100, y: 150)) == 7)
+        #expect(layout.cellIndex(at: CGPoint(x: 800, y: 150)) == 13)
+        #expect(layout.cellIndex(at: CGPoint(x: 50, y: -100)) == nil)
+    }
+}
+
 @MainActor @Suite(.tempDir) struct DragTests {
+    @Test func losingTheGridMeasurementDuringADragKeepsEveryApp() {
+        let state = makeState(["A", "B", "C"])
+        let before = state.grid
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        state.dragChanged(start: start, location: start)
+        #expect(state.drag.active)
+        state.drag.pagerFrame = .zero
+        state.dragEnded(start: start, location: .zero, predicted: .zero)
+        #expect(state.grid == before)
+        #expect(!state.drag.active)
+    }
+
+    @Test(arguments: [(-200.0, -200.0, 2), (200.0, 200.0, 0),
+                      (-20.0, -400.0, 2), (20.0, 400.0, 0), (20.0, 30.0, 1)])
+    func swipingUsesDistanceOrAShortFlick(dx: Double, flick: Double, page: Int) {
+        let state = makeState()
+        state.replaceGrid(Grid(pages: [Page(), Page(), Page()]))
+        state.currentPage = 1
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = CGPoint(x: 350, y: 250)
+        let release = CGPoint(x: start.x + dx, y: start.y)
+        state.dragChanged(start: start, location: release)
+        state.dragEnded(start: start, location: release, predicted: CGPoint(x: start.x + flick, y: start.y))
+        #expect(state.currentPage == page)
+        #expect(state.swipeOffset == 0)
+    }
+
+    @Test(arguments: [-1.0, 1.0])
+    func reversingAFlickDoesNotTurnThePageTwice(direction: Double) {
+        let state = makeState()
+        state.replaceGrid(Grid(pages: [Page(), Page(), Page()]))
+        state.currentPage = 1
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = CGPoint(x: 350, y: 250)
+        let release = CGPoint(x: start.x + direction * 200, y: start.y)
+        // Enough distance to turn a page, but the last motion predicts a flick back.
+        let predicted = CGPoint(x: start.x - direction * 400, y: start.y)
+        state.dragChanged(start: start, location: release)
+        state.dragEnded(start: start, location: release, predicted: predicted)
+        #expect(state.currentPage == (direction > 0 ? 0 : 2))
+        #expect(state.swipeOffset == 0)
+    }
+
     @Test func draggingAcrossFolderPagesKeepsKeyboardFocusVisible() {
         let state = makeState()
         let refs = (1...30).map { installed("App\($0)").makeRef() }

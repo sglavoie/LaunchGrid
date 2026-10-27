@@ -20,9 +20,13 @@ struct GridLayout {
 
     /// Cell under a point in local coordinates, clamped to the grid.
     func cellIndex(at p: CGPoint) -> Int? {
-        guard p.y >= -cell.height * 0.5, p.y <= size.height + cell.height * 0.5 else { return nil }
-        let c = min(max(Int(p.x / cell.width), 0), columns - 1)
-        let r = min(max(Int(p.y / cell.height), 0), rows - 1)
+        // View measurements can disappear during a drag. Dividing by a zero-sized cell
+        // produces NaN or infinity, which traps when converted to an integer.
+        guard rows > 0, columns > 0, cell.width > 0, cell.height > 0,
+              cell.width.isFinite, cell.height.isFinite, p.x.isFinite, p.y.isFinite,
+              p.y >= -cell.height * 0.5, p.y <= size.height + cell.height * 0.5 else { return nil }
+        let c = Int(min(max(p.x / cell.width, 0), CGFloat(columns - 1)))
+        let r = Int(min(max(p.y / cell.height, 0), CGFloat(rows - 1)))
         return r * columns + c
     }
 
@@ -240,8 +244,13 @@ extension AppState {
             let dx = location.x - start.x, flick = predicted.x - start.x
             withAnimation(Self.pageAnimation) {
                 // Through goToPage, which keeps keyboard focus on the new page.
-                if dx < -w * 0.18 || flick < -w * 0.5 { goToPage(currentPage + 1) }
-                if dx > w * 0.18 || flick > w * 0.5 { goToPage(currentPage - 1) }
+                // Commit a long swipe by distance; a short one can turn by momentum.
+                // A reversal can put those in opposite directions, so choose only one.
+                if abs(dx) > w * 0.18 {
+                    goToPage(currentPage + (dx < 0 ? 1 : -1))
+                } else if abs(flick) > w * 0.5 {
+                    goToPage(currentPage + (flick < 0 ? 1 : -1))
+                }
                 swipeOffset = 0
             }
             return
