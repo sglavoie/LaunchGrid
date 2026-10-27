@@ -332,7 +332,12 @@ public enum Reconciler {
     public static func add(_ apps: [InstalledApp], to grid: inout Grid, installed: [InstalledApp] = [],
                            aliases: [String: String] = [:]) {
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
-        let apps = apps.map { app in aliases[app.path].flatMap { byPath[$0] } ?? app }
+        let byFoldedPath = Dictionary(installed.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        // Use the scan's spelling before clearing exclusions too: a differently capitalized
+        // path must clear the same copy's exclusion, or rebuilding would remove it again.
+        let apps = apps.map { app in
+            byPath[app.path] ?? aliases[app.path].flatMap { byPath[$0] } ?? byFoldedPath[app.path.lowercased()] ?? app
+        }
         // Folded, as the disk is: a tile at zoom.us.app is already Zoom.us.app.
         var paths = Set(grid.allApps.map { $0.path.lowercased() })
         // `insert` also drops an app listed twice in `apps`.

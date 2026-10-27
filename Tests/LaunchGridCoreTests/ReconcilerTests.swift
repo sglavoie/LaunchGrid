@@ -9,6 +9,20 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test func addingAnExcludedCopyThroughAnotherCapitalizationClearsItsExclusion() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID)
+        var g = Grid(pages: [Page(items: [.app(original.makeRef()), .app(beta.makeRef())])])
+        g.remove([g.allApps[1].id], installed: [original, beta])
+        let picked = installed("XCODE-BETA", id: beta.bundleID)
+
+        Reconciler.add([picked], to: &g, installed: [original, beta])
+
+        #expect(!g.isExcluded(beta), "rebuilding must not remove the explicitly re-added copy")
+        #expect(g.allApps.map(\.path) == [original.path, beta.path])
+        #expect(g.allApps.last?.name == beta.name)
+    }
+
     @Test func pathExclusionsFollowCaseOnlyRenames() {
         let original = installed("Xcode", id: "com.apple.dt.Xcode")
         let beta = installed("Xcode-beta", id: original.bundleID)

@@ -162,6 +162,29 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
+    @Test func draggingAcrossFolderPagesKeepsKeyboardFocusVisible() {
+        let state = makeState()
+        let refs = (1...30).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.folder(folder)])]))
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 0, y: 0, width: 700, height: 400)
+        state.drag.folderPanelFrame = CGRect(x: 0, y: 0, width: 700, height: 440)
+        state.openFolder(folder.id)
+        state.focusIndex = 1
+        let start = state.iconCenter(0, inFolder: true)
+        let edge = CGPoint(x: 695, y: start.y)
+        state.dragChanged(start: start, location: edge)
+        state.drag.edgeSince = .distantPast
+        state.drag.timer?.fire()
+
+        #expect(state.folderPage == 1)
+        #expect(state.focusIndex == 29, "Return must act on the folder page now shown")
+        state.dragEnded(start: start, location: edge, predicted: edge)
+        #expect(state.folderPage == 1)
+        #expect(state.focusIndex == 29)
+    }
+
     @Test(arguments: [false, true])
     func releasingOverAnAppMergesOnlyAfterDwelling(dwelled: Bool) {
         let state = makeState(["A", "B", "C"])

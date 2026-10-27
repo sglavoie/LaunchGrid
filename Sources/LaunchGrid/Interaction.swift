@@ -425,7 +425,8 @@ extension AppState {
             let pages = FolderLayout.pageCount(apps: folder.apps.count, grid: grid)
             let target = folderPage + drag.edgeSide
             guard target >= 0, target < pages else { return }
-            withAnimation(Self.pageAnimation) { folderPage = target }
+            // As with a page-dot click, keyboard focus must follow the page now shown.
+            flipPage(target - folderPage)
             // The gap follows the pointer onto the new page.
             drag.pendingGap = nil
             updateFolderGap(drag.iconCenter, immediately: true)
