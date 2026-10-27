@@ -72,6 +72,8 @@ public enum AppScanner {
         var paths: [String: String] = [:]
         var unlisted: [String] = []
         var aliases: [String: String] = [:]
+        var directoryAliases: [String: String] = [:]
+        var bundlePaths: [String: String] = [:]
 
         /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
         func consider(_ url: URL, realPath: String) {
@@ -89,6 +91,9 @@ public enum AppScanner {
         /// `limit` is the depth walked to. In a Homebrew `opt` folder, aliases are skipped.
         func walk(_ dir: URL, depth: Int, limit: Int, homebrewOpt: Bool = false) {
             let real = dir.resolvingSymlinksInPath().path
+            // Even a directory already walked can give saved tiles another spelling of its
+            // apps. Remember it before the cycle/repeat guard, without walking it again.
+            if real != dir.path { directoryAliases[dir.path] = real }
             if let seen = visited[real], seen <= depth { return } // symlink cycle or repeat
             visited[real] = depth
             // Listing doesn't follow a symlink to a folder (/opt/homebrew/opt/python@3.14): its
@@ -112,7 +117,15 @@ public enum AppScanner {
                 let path = dir.appendingPathComponent(child.lastPathComponent)
                 // Apps flagged hidden still count: /Applications/Safari.app is a hidden symlink.
                 if child.pathExtension.lowercased() == "app", v.contentType?.conforms(to: .applicationBundle) == true {
-                    consider(path, realPath: target?.path ?? (real as NSString).appendingPathComponent(child.lastPathComponent))
+                    let inDirectory = (real as NSString).appendingPathComponent(child.lastPathComponent)
+                    let realPath = target?.path ?? inDirectory
+                    consider(path, realPath: realPath)
+                    // Keep the app's name inside this directory even when the app itself is
+                    // a link to somewhere else; directory aliases must cover that spelling too.
+                    if let listed = paths[realPath] {
+                        bundlePaths[inDirectory] = listed
+                        if inDirectory != listed { aliases[inDirectory] = listed }
+                    }
                 } else if depth < limit, own.isHidden != true, v.isDirectory == true, v.isPackage != true {
                     walk(path, depth: depth + 1, limit: limit)
                 }
@@ -123,6 +136,13 @@ public enum AppScanner {
             // A formula installs its app at the top of its keg; its bin, lib and share hold none.
             let homebrewOpt = isHomebrewOpt(root)
             walk(root, depth: 1, limit: homebrewOpt ? min(maxDepth, 2) : maxDepth, homebrewOpt: homebrewOpt)
+        }
+        for (directory, real) in directoryAliases {
+            let prefix = real.hasSuffix("/") ? real : real + "/"
+            for (bundle, listed) in bundlePaths where bundle.hasPrefix(prefix) {
+                let alternate = (directory as NSString).appendingPathComponent(String(bundle.dropFirst(prefix.count)))
+                if alternate != listed { aliases[alternate] = listed }
+            }
         }
         return ScanResult(apps: results, unlisted: unlisted, aliases: aliases)
     }

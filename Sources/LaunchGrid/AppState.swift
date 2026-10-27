@@ -377,6 +377,12 @@ final class AppState {
         if let i = focusIndex {
             let count = !query.isEmpty ? searchResults.count : openFolder?.apps.count ?? currentItems.count
             focusIndex = count > 0 ? min(i, count - 1) : nil
+            // Resizing (including undo/redo) changes how many apps fit on a folder page.
+            // Follow its focused app so keyboard actions still act on an app in view.
+            if query.isEmpty, openFolder != nil, let focusIndex,
+               old.rows != grid.rows || old.columns != grid.columns {
+                folderPage = focusIndex / FolderLayout.perPage(grid)
+            }
         }
         selection = selection.filter { grid.locate($0) != nil }
     }

@@ -995,6 +995,25 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct FolderPageTests {
+    @Test(arguments: [2, 5])
+    func resizingKeepsTheFocusedFolderAppVisible(rows: Int) {
+        let state = makeState()
+        let refs = (1...20).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 3, columns: 2, pages: [Page(items: [.folder(folder)])]))
+        state.openFolder(folder.id)
+        state.folderPage = 1
+        state.focusIndex = 5
+
+        state.resize(rows: rows, columns: 2)
+        #expect(state.focusIndex == 5)
+        #expect(state.folderPage == 5 / FolderLayout.perPage(state.grid))
+        state.undo()
+        #expect(state.folderPage == 1)
+        state.redo()
+        #expect(state.folderPage == 5 / FolderLayout.perPage(state.grid))
+    }
+
     @Test func removingTheLastPagesOnlyAppMovesBackAPage() {
         let state = makeState()
         let refs = (1...29).map { installed("App\($0)").makeRef() }

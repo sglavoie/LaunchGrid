@@ -816,6 +816,45 @@ func tempDir(_ prefix: String) -> URL {
         #expect(picked.allApps.count == 1)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func alternateDirectoryLinksDoNotCreateDuplicateTiles(realRootFirst: Bool, linkedApp: Bool) throws {
+        let fm = FileManager.default
+        let root = tempDir("scan-directory-links")
+        defer { try? fm.removeItem(at: root) }
+        try makeFakeApp("Real/Nested/App.app", id: "t.linked", in: root)
+        let real = root.appendingPathComponent("Real")
+        if linkedApp {
+            let bundle = real.appendingPathComponent("Nested/App.app")
+            let target = root.appendingPathComponent("Elsewhere.app")
+            try fm.moveItem(at: bundle, to: target)
+            try fm.createSymbolicLink(at: bundle, withDestinationURL: target)
+        }
+        let first = root.appendingPathComponent("First")
+        let second = root.appendingPathComponent("Second")
+        for link in [first, second] {
+            try fm.createSymbolicLink(at: link, withDestinationURL: real)
+        }
+        let result = AppScanner.scanReporting(roots: realRootFirst ? [real, first, second] : [first, second, real])
+        let scanned = try #require(result.apps.first)
+        #expect(result.apps.count == 1)
+        let alternate = second.appendingPathComponent("Nested/App.app")
+        #expect(result.aliases[alternate.path] == scanned.path)
+        let canonical = real.appendingPathComponent("Nested").resolvingSymlinksInPath().appendingPathComponent("App.app").path
+        #expect(canonical == scanned.path || result.aliases[canonical] == scanned.path)
+
+        let ref = AppRef(bundleID: scanned.bundleID, path: alternate.path, displayName: "My App")
+        var grid = Grid(pages: [Page(items: [.app(ref)])])
+        _ = Reconciler.reconcile(&grid, installed: result.apps, autoAdd: true, aliases: result.aliases)
+        #expect(grid.allApps.map(\.path) == [scanned.path])
+        #expect(grid.allApps.first?.id == ref.id)
+        #expect(grid.allApps.first?.title == "My App")
+
+        var picked = Grid(pages: [Page(items: [.app(scanned.makeRef())])])
+        Reconciler.add([try #require(AppScanner.read(appAt: alternate))], to: &picked,
+                       installed: result.apps, aliases: result.aliases)
+        #expect(picked.allApps.count == 1)
+    }
+
     @Test func skipsAppsHiddenByDefaultButReadsThemByHand() throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }
