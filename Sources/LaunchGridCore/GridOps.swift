@@ -141,10 +141,16 @@ extension Grid {
     /// move empties still counts, as it's still on screen).
     public mutating func move(_ ids: [UUID], toPage page: Int, at index: Int) {
         let items = detach(ids)
+        // The displayed gap counts folders the move just emptied. Translate it to a slot
+        // among the remaining items before reserving room on the destination page.
+        let target = min(max(0, page), pages.count)
+        func isEmptyFolder(_ item: GridItem) -> Bool { item.folder?.apps.isEmpty == true }
+        let emptiedBefore = target < pages.count
+            ? pages[target].items.prefix(max(0, index)).count(where: isEmptyFolder) : 0
+        for p in pages.indices { pages[p].items.removeAll(where: isEmptyFolder) }
         // The moved items stay on the page asked for: on a full page, the items they
         // displace spill onward instead of them.
-        if !items.isEmpty { _ = place(items, page: page, at: min(index, max(0, capacity - items.count))) }
-        // Drops the folders the move emptied before spilling, so they don't push items over.
+        if !items.isEmpty { _ = place(items, page: page, at: min(index - emptiedBefore, max(0, capacity - items.count))) }
         normalize()
     }
 

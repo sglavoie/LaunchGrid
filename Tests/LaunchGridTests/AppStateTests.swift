@@ -574,6 +574,23 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct PageActionTests {
+    @Test func movingTheLastAppOutOfAFolderToItsOwnPageCanBeUndone() {
+        let state = makeState()
+        let x = installed("X").makeRef()
+        let original = Grid(rows: 1, columns: 3, pages: [Page(items: [
+            .folder(Folder(name: "F", apps: [x])),
+            .app(installed("A").makeRef()), .app(installed("B").makeRef()),
+        ])])
+        state.replaceGrid(original)
+
+        state.moveToPage([x.id], page: 0)
+        #expect(state.grid.pages.map { $0.items.map(\.title) } == [["A", "B", "X"]])
+        state.undo()
+        #expect(state.grid == original)
+        state.redo()
+        #expect(state.grid.pages.map { $0.items.map(\.title) } == [["A", "B", "X"]])
+    }
+
     @Test func pageActionsClearTheSearchFirst() {
         // Over search results the ⋯ menu would otherwise sort a page nobody can see.
         let state = makeState(["C", "B", "A"])

@@ -44,11 +44,45 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(titles) == [["X", "A", "B", "C"], ["D"]])
     }
 
+    @Test(arguments: 0...4)
+    func movingAFoldersLastAppUsesTheDisplayedGap(gap: Int) {
+        let x = app("X")
+        var g = Grid(rows: 1, columns: 4, pages: [
+            Page(items: [.app(app("A")), .folder(Folder(name: "F", apps: [x])), .app(app("B")), .app(app("C"))]),
+            Page(items: [.app(app("D"))]),
+        ])
+        var expected = ["A", "B", "C"]
+        // The displayed gap still counts the folder which moving X empties.
+        expected.insert("X", at: gap > 1 ? gap - 1 : gap)
+        g.move([x.id], toPage: 0, at: gap)
+        #expect(g.pages.map(titles) == [expected, ["D"]])
+    }
+
     @Test func moveAcrossPagesAndMultiSelect() {
         var g = grid([["A", "B", "C"], ["D"]])
         let ids = [g.pages[0].items[0].id, g.pages[0].items[2].id]
         g.move(ids, toPage: 1, at: 1)
         #expect(g.pages.map(titles) == [["B"], ["D", "A", "C"]])
+    }
+
+    @Test func movingAppsOutOfSeveralFoldersUsesTheFreedSlots() {
+        let (x, y) = (app("X"), app("Y"))
+        var g = Grid(rows: 1, columns: 4, pages: [Page(items: [
+            .folder(Folder(name: "F", apps: [x])), .app(app("A")),
+            .folder(Folder(name: "G", apps: [y])), .app(app("B")),
+        ])])
+        g.move([x.id, y.id], toPage: 0, at: 4)
+        #expect(g.pages.map(titles) == [["A", "B", "X", "Y"]])
+    }
+
+    @Test func movingMultipleAppsOutOfAFolderStillSpillsDisplacedItems() {
+        let (x, y) = (app("X"), app("Y"))
+        var g = Grid(rows: 1, columns: 4, pages: [
+            Page(items: [.app(app("A")), .folder(Folder(name: "F", apps: [x, y])), .app(app("B")), .app(app("C"))]),
+            Page(items: [.app(app("D"))]),
+        ])
+        g.move([x.id, y.id], toPage: 0, at: 4)
+        #expect(g.pages.map(titles) == [["A", "B", "X", "Y"], ["C", "D"]])
     }
 
     @Test func itemsMovedOntoTheEndOfAFullPageStayOnIt() {
