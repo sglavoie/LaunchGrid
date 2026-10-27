@@ -247,6 +247,10 @@ extension AppState {
             return
         }
         guard drag.active else { return }
+        // The release may be beyond the last movement event. Recheck both the insertion
+        // gap and any armed merge before committing to where the icon actually landed.
+        drag.location = location
+        updateTargets()
         drop()
     }
 

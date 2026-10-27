@@ -295,9 +295,11 @@ public enum Reconciler {
     /// Installed apps that are not on the grid, for "Add Missing Apps…". A copy sharing its
     /// bundle ID with one on the grid (Xcode-beta beside Xcode) counts as missing. As in
     /// `reconcile`, a ref out of reach (its volume ejected) isn't taken to have moved, so it
-    /// doesn't hide an installed copy until it comes back.
+    /// doesn't hide an installed copy until it comes back. A ref still present outside the
+    /// scan folders doesn't claim another copy either; `pathExists` can use cached disk reads.
     public static func missingApps(in grid: Grid, installed: [InstalledApp],
                                    isReachable: (String) -> Bool = { _ in true },
+                                   pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
                                    wasInstalledBefore: (String) -> Bool = { _ in false }) -> [InstalledApp] {
         let paths = Set(grid.allApps.map(\.path))
         let installedPaths = Set(installed.map(\.path))
@@ -306,7 +308,7 @@ public enum Reconciler {
         let offGrid = installed.filter { !paths.contains($0.path) }
         let byKey = Dictionary(grouping: offGrid, by: \.key)
         var claimed = Set<String>()
-        for ref in grid.allApps where !installedPaths.contains(ref.path) && isReachable(ref.path) {
+        for ref in grid.allApps where !installedPaths.contains(ref.path) && isReachable(ref.path) && !pathExists(ref.path) {
             let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) }
             if let copy = likelyMove(of: ref, among: free, wasInstalledBefore: wasInstalledBefore) { claimed.insert(copy.path) }
         }

@@ -121,6 +121,50 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
+    @Test(arguments: [false, true])
+    func releasingOverAnAppMergesOnlyAfterDwelling(dwelled: Bool) {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        let release = state.iconCenter(1, inFolder: false)
+        let target = state.grid.pages[0].items[1].id
+        state.dragChanged(start: start, location: release)
+        #expect(state.drag.candidate == target)
+        if dwelled { state.drag.mergeTarget = target }
+
+        state.dragEnded(start: start, location: release, predicted: release)
+        let folders = state.grid.pages[0].items.compactMap(\.folder)
+        #expect(folders.count == (dwelled ? 1 : 0))
+        #expect(Set(state.grid.allApps.map(\.name)) == ["A", "B", "C"])
+    }
+
+    @Test func aDropUsesTheReleasePosition() {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        state.dragChanged(start: start, location: start)
+        #expect(state.drag.active)
+
+        // The release can arrive beyond the last movement event, in the gap after C.
+        let release = CGPoint(x: 320, y: start.y)
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.grid.allApps.map(\.name) == ["B", "C", "A"])
+    }
+
+    @Test func releasingAwayFromAMergeTargetDoesNotMakeAFolder() {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        let target = state.grid.pages[0].items[1].id
+        state.dragChanged(start: start, location: state.iconCenter(1, inFolder: false))
+        // The dwell timer has armed the merge before the final motion/release.
+        state.drag.mergeTarget = target
+        let release = CGPoint(x: 320, y: start.y)
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.grid.pages[0].items.compactMap(\.folder).isEmpty)
+        #expect(state.grid.allApps.map(\.name) == ["B", "C", "A"])
+    }
+
     @Test func escapeEndsTheDragForTheRestOfTheGesture() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500) // 100 × 100 cells
@@ -1100,6 +1144,19 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct OutsideAppTests {
+    @Test func missingAppsUsesTheCachedExistenceOfAnOutsideCopy() {
+        let state = makeState()
+        state.prefs.autoAddApps = false
+        let original = InstalledApp(bundleID: "com.test.A", path: "/Elsewhere/A.app", name: "A")
+        let copy = installed("A")
+        state.replaceGrid(Grid(pages: [Page(items: [.app(original.makeRef())])]))
+        state.catalogScanned([copy], outside: AppState.OutsideRead(
+            apps: [original.path: original], checked: [original.path], existing: [original.path]))
+
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.missingApps == [copy], "an existing outside copy does not claim the scanned copy")
+    }
+
     /// A minimal app bundle in the test's folder, outside every scan folder.
     func makeBundle(_ name: String) throws -> String {
         let app = TempDir.url.appendingPathComponent("Elsewhere/\(name).app")

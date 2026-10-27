@@ -181,6 +181,7 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(report.moved.isEmpty && report.removed == ["Xcode"])
         #expect(g.allApps.isEmpty)
         #expect(Reconciler.missingApps(in: Grid(pages: [Page(items: [.app(xcode)])]), installed: [beta],
+                                       pathExists: { _ in false },
                                        wasInstalledBefore: { $0 == beta.path }) == [beta],
                 "nor does it stand for the beta in Add Missing Apps")
 
@@ -228,8 +229,23 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
         let moved = installed("Xcode", id: "com.apple.dt.Xcode", path: "/Applications/Dev/Xcode.app")
         let beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
-        #expect(Reconciler.missingApps(in: g, installed: [beta, moved]) == [beta],
+        #expect(Reconciler.missingApps(in: g, installed: [beta, moved], pathExists: { _ in false }) == [beta],
                 "the moved Xcode is the tile's; the beta is still missing")
+    }
+
+    @Test func anExistingUnscannedAppDoesNotHideAnotherCopyFromMissingApps() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let original = dir.appendingPathComponent("A.app")
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ref = installed("A", path: original.path).makeRef()
+        let grid = Grid(pages: [Page(items: [.app(ref)])])
+        let copy = installed("A")
+
+        #expect(Reconciler.missingApps(in: grid, installed: [copy]) == [copy])
+        try FileManager.default.removeItem(at: original)
+        #expect(Reconciler.missingApps(in: grid, installed: [copy]).isEmpty,
+                "once the original is gone, the tile can represent its moved copy")
     }
 
     @Test func aTileOnAnEjectedVolumeHidesNoInstalledCopy() {
@@ -237,7 +253,8 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(ext)])])
         let local = installed("Foo", id: "com.foo")
         #expect(Reconciler.missingApps(in: g, installed: [local], isReachable: { !$0.hasPrefix("/Volumes/Ext/") }) == [local])
-        #expect(Reconciler.missingApps(in: g, installed: [local]).isEmpty, "reachable and gone: it moved there")
+        #expect(Reconciler.missingApps(in: g, installed: [local], pathExists: { _ in false }).isEmpty,
+                "reachable and gone: it moved there")
     }
 
     @Test func aRestoredAppWhoseNeighboursAreAllGoneGoesToTheStart() {

@@ -766,8 +766,12 @@ final class AppState {
     }
 
     var missingApps: [InstalledApp] {
-        Reconciler.missingApps(in: grid, installed: installed, isReachable: isReachable,
-                               wasInstalledBefore: installedBefore.contains)
+        // As when reconciling, only a path known to be gone can stand for a moved copy.
+        // Use the background reads; inspecting a stalled volume here would block the menu.
+        let exists = knownToExist, checked = outsideChecked
+        return Reconciler.missingApps(in: grid, installed: installed, isReachable: isReachable,
+                                     pathExists: { !checked.contains($0) || exists($0) },
+                                     wasInstalledBefore: installedBefore.contains)
     }
 
     /// Installed apps kept off the grid by an exclusion. Not the size of `removedBundleIDs`,
