@@ -10,6 +10,49 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 
 @Suite struct ReconcilerTests {
     @Test(arguments: [false, true])
+    func ungroupingAPartlyRestoredFolderIsRespectedWhenTheRestReturn(returnLastFirst: Bool) {
+        let a = installed("A"), b = installed("B"), sentinel = installed("Other")
+        let folder = Folder(name: "Folder", apps: [a.makeRef(), b.makeRef()])
+        var g = Grid(pages: [Page(items: [.folder(folder), .app(sentinel.makeRef())])])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: [sentinel], autoAdd: false,
+                                pathExists: { $0 == sentinel.path }, now: now)
+        let first = returnLastFirst ? b : a
+        _ = Reconciler.reconcile(&g, installed: [first, sentinel], autoAdd: false,
+                                pathExists: { $0 == first.path || $0 == sentinel.path }, now: now + 5)
+        g.ungroup(folder.id)
+
+        let report = Reconciler.reconcile(&g, installed: [a, b, sentinel], autoAdd: false, now: now + 10)
+
+        #expect(g.folder(folder.id) == nil)
+        #expect(g.pages.flatMap(\.items).allSatisfy { $0.app != nil })
+        #expect(Set(folder.apps.map(\.id)).isSubset(of: Set(g.allApps.map(\.id))))
+        #expect(Set(g.allApps.map(\.path)) == Set([a.path, b.path, sentinel.path]))
+        #expect(report.restored.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func deletingAPartlyRestoredPageIsRespectedWhenTheRestReturn(returnLastFirst: Bool) {
+        let a = installed("A"), b = installed("B"), sentinel = installed("Other")
+        let page = Page(title: "Temporary", items: [.app(a.makeRef()), .app(b.makeRef())])
+        var g = Grid(pages: [Page(items: [.app(sentinel.makeRef())]), page])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: [sentinel], autoAdd: false,
+                                pathExists: { $0 == sentinel.path }, now: now)
+        let first = returnLastFirst ? b : a
+        _ = Reconciler.reconcile(&g, installed: [first, sentinel], autoAdd: false,
+                                pathExists: { $0 == first.path || $0 == sentinel.path }, now: now + 5)
+        g.deletePage(1)
+
+        let report = Reconciler.reconcile(&g, installed: [a, b, sentinel], autoAdd: false, now: now + 10)
+
+        #expect(g.pages.count == 1)
+        #expect(!g.pages.contains { $0.id == page.id })
+        #expect(Set(g.allApps.map(\.path)) == Set([a.path, b.path, sentinel.path]))
+        #expect(report.restored.count == 1)
+    }
+
+    @Test(arguments: [false, true])
     func returningCopyKeepsItsOwnTileWhenAnotherCopyDisappears(throughAlias: Bool) {
         let first = installed("Editor", id: "com.editor", path: "/Applications/Editor.app")
         let second = installed("Editor", id: "com.editor", path: "/Users/test/Applications/Editor.app")

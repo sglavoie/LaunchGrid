@@ -278,6 +278,19 @@ public enum Reconciler {
         }
 
         grid.normalize()
+        // A partial return can recreate a folder or page while other apps still wait.
+        // Once it exists again, a later disappearance may be the user's edit, so the
+        // remaining records must not recreate it. A new prune can set these flags again.
+        let livePages = Set(grid.pages.map(\.id))
+        let liveFolders = Set(grid.pages.flatMap { $0.items.compactMap(\.folder).map(\.id) })
+        for i in grid.recentlyPruned.indices {
+            if livePages.contains(grid.recentlyPruned[i].pageID) {
+                grid.recentlyPruned[i].pageEmptied = false
+            }
+            if let id = grid.recentlyPruned[i].folderID, liveFolders.contains(id) {
+                grid.recentlyPruned[i].folderEmptied = false
+            }
+        }
         return report
     }
 
