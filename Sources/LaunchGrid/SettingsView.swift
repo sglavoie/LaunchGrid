@@ -116,6 +116,13 @@ struct GeneralSettings: View {
             }
             Section("Behaviour") {
                 Toggle("Add newly installed apps automatically", isOn: $prefs.autoAddApps)
+                    // At once, not at some later scan (or ⌘Z, which looks again too).
+                    .onChange(of: prefs.autoAddApps) { if prefs.autoAddApps { state.rescan() } }
+                // Not the excluded ones, which scans never add back.
+                if !prefs.autoAddApps, case let waiting = state.missingApps.filter({ !state.grid.isExcluded($0) }).count, waiting > 0 {
+                    Text("Turning this on also adds the \(waiting) installed apps that aren't on the grid, at its end.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Hide after opening an app", isOn: $prefs.hideAfterLaunch)
                 if !prefs.hideAfterLaunch {
                     Text("Apps open behind the grid, so you can open several; the last one comes forward when the grid hides.")
@@ -477,13 +484,13 @@ struct LayoutSettings: View {
         // Undo, a load or an import can resize the grid while this tab is open.
         .onChange(of: [grid.rows, grid.columns]) { rows = state.grid.rows; columns = state.grid.columns }
         // The grid, where ⌘Z would undo it, is hidden behind Settings: ask first.
-        .confirmationDialog("Sort every page?", isPresented: $confirmSort) {
+        .confirmationDialog("Sort everything by name?", isPresented: $confirmSort) {
             Button("Sort Everything", role: .destructive) {
                 state.sortEverything()
                 sortStatus = String(localized: "Sorted — ⌘Z in the grid undoes it")
             }
         } message: {
-            Text("Apps and folders are sorted by name and fill each page before the next. Page titles are cleared. You can undo this from the grid with ⌘Z.")
+            Text(state.sortEverythingDetail)
         }
         .confirmationDialog("Re-flow the grid?", isPresented: $confirm) {
             Button("Resize to \(rows) × \(columns)") { apply() }
@@ -549,7 +556,9 @@ struct LibrarySettings: View {
                     Button("Rebuild by Category…") { confirmRebuild = .byCategory }
                     Button("Rebuild Alphabetically…") { confirmRebuild = .alphabetical }
                 }
-                Text("Lays out every installed app that isn't excluded from scratch, the same as the choices on the welcome screen.")
+                .disabled(!state.hasScanned)
+                Text(state.hasScanned ? "Lays out every installed app that isn't excluded from scratch, the same as the choices on the welcome screen."
+                     : "Looking for installed apps…")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extra folders to scan") {
@@ -914,7 +923,7 @@ struct FirstRunView: View {
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .disabled(requiresScan && state.installed.isEmpty)
+        .disabled(requiresScan && (!state.hasScanned || state.installed.isEmpty))
     }
 }
 

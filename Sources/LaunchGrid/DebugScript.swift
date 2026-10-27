@@ -411,6 +411,21 @@ enum DebugScript {
                     fflush(stdout)
                 case "statusmenu": print("statusmenu: \(delegate.makeMenu().items.map(\.title).filter { !$0.isEmpty })"); fflush(stdout)
                 case "rebuildaction": delegate.libraryActions.rebuild(arg == "alpha" ? .alphabetical : .byCategory)
+                case "warnhotkey":
+                    // The alert a shortcut refused at launch brings up; async, as it waits for an answer.
+                    DispatchQueue.main.async { delegate.warnHotkeyFailed() }
+                    print("warnhotkey: dismissed=\(state.prefs.hotkeyWarningDismissed ?? "-")")
+                    fflush(stdout)
+                case "autoadd":
+                    // "autoadd:on" or "off", as the switch in Settings › General does.
+                    state.prefs.autoAddApps = arg == "on"
+                case "sortmenu":
+                    // Sort Everything… in the menu-bar icon's menu; async, as its alert waits for an answer.
+                    DispatchQueue.main.async { delegate.sortEverything() }
+                case "confirmrebuild":
+                    // Rebuild from Scratch… in the menu-bar icon's menu; async, as its alert waits for an answer.
+                    DispatchQueue.main.async { delegate.confirmRebuild() }
+                case "dockmenu": print("dockmenu: \(delegate.applicationDockMenu(NSApp)?.items.map(\.title).filter { !$0.isEmpty } ?? [])"); fflush(stdout)
                 case "about": delegate.showAbout()
                 case "frames": print("frames: \(state.prefs.windowFrames.count) saved (\(Preferences.windowFrameWrites) writes), \(state.prefs.windowFrames)"); fflush(stdout)
                 case "rootframes":

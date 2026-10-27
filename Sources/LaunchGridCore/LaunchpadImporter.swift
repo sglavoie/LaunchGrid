@@ -79,6 +79,7 @@ public enum LaunchpadImporter {
         rows: Int,
         columns: Int,
         installed: [String] = [],
+        keeps: (String) -> Bool = { _ in true },
         resolve: (String) -> String?
     ) throws -> Result {
         // Copy first so a live database is never touched. Its write-ahead log comes along:
@@ -122,12 +123,26 @@ public enum LaunchpadImporter {
         }
 
         return build(items: items, apps: apps, groupTitles: groupTitles, rows: rows, columns: columns,
-                     installed: installed, resolve: resolve)
+                     installed: installed, keeps: keeps, resolve: resolve)
     }
 
+    /// Whether a copy Launch Services found outside the scan folders is one to put on the grid:
+    /// there on disk, and not in the Trash, run from a translocated quarantine copy, or on
+    /// another volume (a disk image, a backup disk), which would leave a tile behind once
+    /// ejected. The old Launchpad database still lists apps deleted long since.
+    public static func isLastingCopy(_ path: String) -> Bool {
+        let parts = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        if parts.contains(where: { $0 == ".Trash" || $0 == ".Trashes" || $0 == "AppTranslocation" }) { return false }
+        if parts.count > 2, parts[1] == "Volumes" { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// `keeps` says whether a copy Launch Services `resolve`s to, for an app the scan didn't
+    /// find, is one to import (`isLastingCopy` for a real database).
     static func build(
         items: [Row], apps: [Int: AppRow], groupTitles: [Int: String],
-        rows: Int, columns: Int, installed: [String] = [], resolve: (String) -> String?
+        rows: Int, columns: Int, installed: [String] = [],
+        keeps: (String) -> Bool = { _ in true }, resolve: (String) -> String?
     ) -> Result {
         let children = Dictionary(grouping: items, by: \.parent).mapValues { $0.sorted { $0.ordering < $1.ordering } }
         var skipped: [String] = [], duplicates: [String] = []
@@ -188,7 +203,7 @@ public enum LaunchpadImporter {
                         ?? others.first { !seen.contains(real($0)) }
                         ?? others[0] // every copy imported already: a duplicate
                 } else {
-                    candidate = resolve(b)
+                    candidate = resolve(b).flatMap { keeps($0) ? $0 : nil }
                 }
             }
             guard let found = candidate else {

@@ -247,6 +247,10 @@ extension AppState {
             return
         }
         guard drag.active else { return }
+        // The release may be beyond the last movement event. Recheck both the insertion
+        // gap and any armed merge before committing to where the icon actually landed.
+        drag.location = location
+        updateTargets()
         drop()
     }
 
@@ -457,6 +461,8 @@ extension AppState {
 
     private func drop() {
         let ids = drag.ids
+        let before = grid
+        let merged = drag.mergeTarget
         let page = currentPage
         // Emptying the source page removes it, which shifts later pages; follow the target by ID.
         let pageID = grid.pages.indices.contains(page) ? grid.pages[page].id : nil
@@ -478,7 +484,12 @@ extension AppState {
             let gap = drag.pendingGap ?? drag.gap ?? remainingItems(page: page).count
             apply { g in g.removingEmptiedPages { $0.move(ids, toPage: page, at: gap) } }
         }
-        selection.removeAll()
+        // The selection is done with once it was moved, or something was dropped on one of it.
+        // An unselected app dragged alone, or a ⌘-click that slipped into a drag and landed
+        // where it started, leaves it as it was.
+        if grid != before && (!selection.isDisjoint(with: ids) || merged.map(selection.contains) == true) {
+            selection.removeAll()
+        }
         // Stay on the page dropped onto. A drop on the extra empty page created a new one;
         // find it through the dropped item.
         if let pageID, let i = grid.pages.firstIndex(where: { $0.id == pageID }) {

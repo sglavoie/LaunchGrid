@@ -92,6 +92,9 @@ import Testing
         mixed.moveToStart()
         mixed.moveWordRight()
         #expect(mixed.caret == 5, "Latin words as before")
+        var thai = TextLine(text: "ภาษาไทยง่ายมาก")
+        thai.moveWordLeft()
+        #expect(thai.caret > 0, "Thai is written without spaces too")
     }
 
     @Test func deletesAroundTheCaret() {

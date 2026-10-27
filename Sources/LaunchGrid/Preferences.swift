@@ -57,6 +57,9 @@ final class Preferences {
     var hotkeyKeyCode: UInt32 { didSet { d.set(Int(hotkeyKeyCode), forKey: "hotkeyKeyCode") } }
     var hotkeyModifiers: UInt32 { didSet { d.set(Int(hotkeyModifiers), forKey: "hotkeyModifiers") } }
     var hotkeyEnabled: Bool { didSet { d.set(hotkeyEnabled, forKey: "hotkeyEnabled") } }
+    /// The shortcut whose failure at launch was answered with Not Now ("keyCode:modifiers"):
+    /// not asked about again at each login. Settings still points it out.
+    var hotkeyWarningDismissed: String? { didSet { d.set(hotkeyWarningDismissed, forKey: "hotkeyWarningDismissed") } }
     var windowMode: WindowMode { didSet { d.set(windowMode.rawValue, forKey: "windowMode") } }
     var background: BackgroundStyle { didSet { d.set(background.rawValue, forKey: "background") } }
     var solidColorHex: String { didSet { d.set(solidColorHex, forKey: "solidColorHex") } }
@@ -109,6 +112,7 @@ final class Preferences {
         hotkeyKeyCode = UInt32(exactly: d.integer(forKey: "hotkeyKeyCode")) ?? UInt32(kVK_Space)
         hotkeyModifiers = UInt32(exactly: d.integer(forKey: "hotkeyModifiers")) ?? UInt32(optionKey)
         hotkeyEnabled = d.bool(forKey: "hotkeyEnabled")
+        hotkeyWarningDismissed = d.string(forKey: "hotkeyWarningDismissed")
         windowMode = WindowMode(rawValue: d.string(forKey: "windowMode") ?? "") ?? .fullScreen
         background = BackgroundStyle(rawValue: d.string(forKey: "background") ?? "") ?? .material
         solidColorHex = d.string(forKey: "solidColorHex") ?? "#1E2230"
@@ -129,6 +133,9 @@ final class Preferences {
         windowFrames = (d.dictionary(forKey: "windowFrames") as? [String: String]) ?? [:]
         if !showInDock && !showInMenuBar { showInMenuBar = true }
     }
+
+    /// The shortcut, as `hotkeyWarningDismissed` keeps it.
+    var hotkeyID: String { "\(hotkeyKeyCode):\(hotkeyModifiers)" }
 
     var scanRoots: [URL] {
         AppScanner.defaultRoots + extraFolders.map { URL(fileURLWithPath: $0, isDirectory: true) }

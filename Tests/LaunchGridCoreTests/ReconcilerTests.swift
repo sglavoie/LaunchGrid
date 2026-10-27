@@ -181,6 +181,7 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(report.moved.isEmpty && report.removed == ["Xcode"])
         #expect(g.allApps.isEmpty)
         #expect(Reconciler.missingApps(in: Grid(pages: [Page(items: [.app(xcode)])]), installed: [beta],
+                                       pathExists: { _ in false },
                                        wasInstalledBefore: { $0 == beta.path }) == [beta],
                 "nor does it stand for the beta in Add Missing Apps")
 
@@ -228,8 +229,35 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
         let moved = installed("Xcode", id: "com.apple.dt.Xcode", path: "/Applications/Dev/Xcode.app")
         let beta = installed("Xcode-beta", id: "com.apple.dt.Xcode")
-        #expect(Reconciler.missingApps(in: g, installed: [beta, moved]) == [beta],
+        #expect(Reconciler.missingApps(in: g, installed: [beta, moved], pathExists: { _ in false }) == [beta],
                 "the moved Xcode is the tile's; the beta is still missing")
+    }
+
+    @Test func anExcludedCopyIsStillOfferedByMissingApps() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let excluded = installed("Xcode", id: original.bundleID, path: "/Applications/Old/Xcode.app")
+        let moved = installed("Xcode", id: original.bundleID, path: "/Applications/Dev/Xcode.app")
+        let g = Grid(pages: [Page(items: [.app(original.makeRef())])], removedBundleIDs: [excluded.path])
+
+        #expect(Reconciler.missingApps(in: g, installed: [excluded, moved], pathExists: { _ in false }) == [excluded],
+                "the tile can follow the included copy; the excluded copy must remain available to add")
+        #expect(Reconciler.missingApps(in: g, installed: [excluded], pathExists: { _ in false }) == [excluded],
+                "a stale tile cannot claim a copy the reconciler refuses to follow")
+    }
+
+    @Test func anExistingUnscannedAppDoesNotHideAnotherCopyFromMissingApps() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let original = dir.appendingPathComponent("A.app")
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ref = installed("A", path: original.path).makeRef()
+        let grid = Grid(pages: [Page(items: [.app(ref)])])
+        let copy = installed("A")
+
+        #expect(Reconciler.missingApps(in: grid, installed: [copy]) == [copy])
+        try FileManager.default.removeItem(at: original)
+        #expect(Reconciler.missingApps(in: grid, installed: [copy]).isEmpty,
+                "once the original is gone, the tile can represent its moved copy")
     }
 
     @Test func aTileOnAnEjectedVolumeHidesNoInstalledCopy() {
@@ -237,7 +265,8 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         let g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(ext)])])
         let local = installed("Foo", id: "com.foo")
         #expect(Reconciler.missingApps(in: g, installed: [local], isReachable: { !$0.hasPrefix("/Volumes/Ext/") }) == [local])
-        #expect(Reconciler.missingApps(in: g, installed: [local]).isEmpty, "reachable and gone: it moved there")
+        #expect(Reconciler.missingApps(in: g, installed: [local], pathExists: { _ in false }).isEmpty,
+                "reachable and gone: it moved there")
     }
 
     @Test func aRestoredAppWhoseNeighboursAreAllGoneGoesToTheStart() {
@@ -689,6 +718,14 @@ func tempDir(_ prefix: String) -> URL {
         #expect(found.first { $0.bundleID == "t.two" }?.name == "Two")
     }
 
+    @Test func findsAppsWhoseExtensionIsInCapitals() throws {
+        let root = tempDir("scan")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeFakeApp("Shouting.APP", id: "t.shout", in: root)
+        try makeFakeApp("Plain.app", id: "t.plain", in: root)
+        #expect(Set(AppScanner.scan(roots: [root]).compactMap(\.bundleID)) == ["t.shout", "t.plain"])
+    }
+
     @Test func respectsTheDepthLimitButWalksNestedRootsFully() throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -783,6 +820,29 @@ func tempDir(_ prefix: String) -> URL {
         let again = AppScanner.read(appAt: url)
         #expect(again?.bundleID == "t.new")
         #expect(again?.category == "public.app-category.utilities")
+    }
+
+    @Test func findsHomebrewFormulaAppsThroughTheFormulasOwnLinks() throws {
+        let fm = FileManager.default
+        let prefix = tempDir("brew")
+        defer { try? fm.removeItem(at: prefix) }
+        try makeFakeApp("Cellar/python@3.15/3.15.0/IDLE 3.app", id: "org.python.IDLE", in: prefix)
+        try makeFakeApp("Cellar/python@3.14/3.14.8/IDLE 3.app", id: "org.python.IDLE", in: prefix)
+        try makeFakeApp("Cellar/qt/6.9/libexec/Designer.app", id: "org.qt.designer", in: prefix)
+        try fm.createDirectory(at: prefix.appendingPathComponent("Cellar/ripgrep/15.0/bin"), withIntermediateDirectories: true)
+        let opt = prefix.appendingPathComponent("opt")
+        try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+        for (name, keg) in [("python", "python@3.15/3.15.0"), ("python3", "python@3.15/3.15.0"),
+                            ("python@3.14", "python@3.14/3.14.8"), ("python@3.15", "python@3.15/3.15.0"),
+                            ("ripgrep", "ripgrep/15.0"), ("qt", "qt/6.9")] {
+            try fm.createSymbolicLink(atPath: opt.appendingPathComponent(name).path, withDestinationPath: "../Cellar/\(keg)")
+        }
+        // Listed through the formulas' own links, not the aliases nor the versioned kegs; only
+        // the top of a keg is looked at.
+        let paths = AppScanner.scan(roots: [opt]).map { $0.path.split(separator: "/").suffix(3).joined(separator: "/") }
+        #expect(paths == ["opt/python@3.14/IDLE 3.app", "opt/python@3.15/IDLE 3.app"])
+        #expect(AppScanner.isHomebrewOpt(opt))
+        #expect(!AppScanner.isHomebrewOpt(prefix.appendingPathComponent("Cellar")))
     }
 
     @Test func anAppReachedThroughSymlinksIsFoundOnce() throws {
@@ -892,6 +952,32 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.grid.allApps.map(\.path) == [link.path])
         let unknown = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7) { _ in real.path }
         #expect(unknown.grid.allApps.map(\.path) == [real.path], "an app the scan didn't find keeps its own path")
+    }
+
+    @Test func launchServicesCopiesInTheTrashOrOnOtherVolumesAreSkipped() throws {
+        let dir = tempDir("lasting")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Kept.app", id: "com.kept", in: dir)
+        let kept = dir.appendingPathComponent("Kept.app").path
+        #expect(LaunchpadImporter.isLastingCopy(kept))
+        #expect(!LaunchpadImporter.isLastingCopy(dir.appendingPathComponent("Gone.app").path), "deleted since")
+        #expect(!LaunchpadImporter.isLastingCopy(NSHomeDirectory() + "/.Trash/Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy("/Volumes/Backup/Applications/Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy("/Volumes/Old 1.0/.Trashes/501/Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy("/private/var/folders/x/T/AppTranslocation/ABC/d/Old.app"))
+
+        // Only for an app the scan didn't find: the database's own paths and the scan's copies stand.
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0), Row(id: 12, type: 4, parent: 10, ordering: 1)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "Kept", bundleID: "com.kept"),
+                    12: LaunchpadImporter.AppRow(title: "Old", bundleID: "com.old")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                        keeps: LaunchpadImporter.isLastingCopy) {
+            $0 == "com.kept" ? kept : "/Volumes/Old 1.0/Old.app"
+        }
+        #expect(r.grid.allApps.map(\.path) == [kept])
+        #expect(r.skipped == ["Old"])
     }
 
     @Test func copiesSharingABundleIDAreToldApartByTheirBookmarks() throws {

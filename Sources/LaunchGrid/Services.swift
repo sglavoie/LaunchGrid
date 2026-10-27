@@ -818,7 +818,7 @@ enum FileAccess {
     /// The app bundles among `bookmarked` that aren't in `inUse`. Folders and pictures are
     /// forgotten when their setting changes, not here.
     nonisolated static func unusedApps(among bookmarked: some Sequence<String>, inUse: Set<String>) -> [String] {
-        bookmarked.filter { ($0 as NSString).pathExtension == "app" && !inUse.contains($0) }.sorted()
+        bookmarked.filter { ($0 as NSString).pathExtension.lowercased() == "app" && !inUse.contains($0) }.sorted()
     }
 }
 

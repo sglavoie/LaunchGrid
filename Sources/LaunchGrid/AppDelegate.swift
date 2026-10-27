@@ -141,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
         state.onLaunchedBehind = { [weak self] in self?.overlay.launchedBehind = $0 }
         state.onError = { [weak self] title, detail in self?.showError(title, detail) }
+        state.onSaveFailure = { [weak self] title, detail in self?.showSaveFailure(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
 
@@ -281,6 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 // Said before replacing anything, as an unreadable saved layout is.
                 let leftOut = skipped > 0 ? String(localized: "\(skipped) entries in “\(name)” could not be read and will be left out.") : nil
                 if !state.grid.allApps.isEmpty {
+                    // A slow read may have let the grid open again meanwhile.
+                    overlay.hide(deactivate: false)
+                    NSApp.activate()
                     let alert = NSAlert()
                     alert.messageText = String(localized: "Replace your layout with “\(name)”?")
                     alert.informativeText = [leftOut, String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")]
@@ -319,6 +323,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationWillTerminate(_ notification: Notification) {
         state?.saveNow(reportingFailure: false)
+    }
+
+    /// Hide LaunchGrid in the menu bar (Window mode leaves it in view): the grid hides as it
+    /// does itself, so its search, open folder and edit mode don't come back with it.
+    func applicationWillHide(_ notification: Notification) {
+        overlay?.hide(deactivate: false)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -373,7 +383,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return ok
     }
 
-    private func warnHotkeyFailed() {
+    func warnHotkeyFailed() {
+        guard prefs.hotkeyWarningDismissed != prefs.hotkeyID else { return }
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = String(localized: "LaunchGrid's shortcut couldn't be registered")
@@ -386,7 +397,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         alert.addButton(withTitle: String(localized: "Choose Shortcut…"))
         alert.addButton(withTitle: String(localized: "Not Now"))
-        if alert.runModal() == .alertFirstButtonReturn { showSettings() }
+        // Not Now is remembered for this shortcut, so it isn't asked at every login while
+        // another app keeps it; Settings still shows the problem.
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = String(localized: "Don't ask again for this shortcut")
+        let answer = alert.runModal()
+        if alert.suppressionButton?.state == .on { prefs.hotkeyWarningDismissed = prefs.hotkeyID }
+        if answer == .alertFirstButtonReturn { showSettings() }
     }
 
     private func applyDockPolicy() {
@@ -485,7 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: String(localized: "Settings…"), action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: String(localized: "Add Missing Apps…"), action: #selector(showAddMissing), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Choose Apps…"), action: #selector(showChooseApps), keyEquivalent: "").target = self
-        menu.addItem(withTitle: String(localized: "Sort Everything"), action: #selector(sortEverything), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Sort Everything…"), action: #selector(sortEverything), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile as () -> Void), keyEquivalent: "").target = self
@@ -507,6 +524,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: String(localized: "Privacy Policy"), action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Quit LaunchGrid"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        return menu
+    }
+
+    /// The Dock icon's menu: the menu-bar icon's, as either can be the only one shown. The Dock
+    /// adds its own Quit.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = makeMenu()
+        while let last = menu.items.last, last.isSeparatorItem || last.action == #selector(NSApplication.terminate(_:)) {
+            menu.removeItem(last)
+        }
+        for item in menu.items { item.keyEquivalent = "" }
         return menu
     }
 
@@ -627,8 +655,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let window = notification.object as? NSWindow, let key = window.identifier?.rawValue else { return }
         windows[key] = nil
         if key == "firstRun" && !state.hasGridFile {
-            // Closed without choosing: start with the category layout.
-            state.build(style: .byCategory)
+            // Closed without choosing: start with the category layout, once the apps are found.
+            state.buildWhenScanned(style: .byCategory)
         }
         // Without a Dock icon, nothing of ours is left to type into: hand focus back to the
         // app before, as hiding the grid does. Next turn, once the window is gone.
@@ -677,15 +705,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         overlay.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = String(localized: "Sort everything alphabetically?")
-        alert.informativeText = String(localized: "Every page is re-flowed and page titles are cleared. Folders stay intact. ⌘Z in the grid undoes it.")
-        alert.addButton(withTitle: String(localized: "Sort"))
+        alert.messageText = String(localized: "Sort everything by name?")
+        alert.informativeText = state.sortEverythingDetail
+        alert.addButton(withTitle: String(localized: "Sort Everything"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         state.sortEverything()
     }
 
     @objc func confirmRebuild() {
+        guard state.hasScanned else {
+            return showError(String(localized: "LaunchGrid is still looking for your apps"),
+                             String(localized: "Rebuild once it has found them, in a moment."))
+        }
         overlay.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
@@ -761,7 +793,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Reading the database and asking Launch Services about every app can take a while.
             let outcome = await Disk.run {
                 Result {
-                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed) { id in
+                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed,
+                                                         keeps: LaunchpadImporter.isLastingCopy) { id in
                         NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
                     }
                 }
@@ -883,7 +916,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([file]) }
     }
 
+    /// A failed save, with what can be done about it while LaunchGrid runs: keep a copy of
+    /// the layout elsewhere, or look at the folder it couldn't be saved in.
+    private func showSaveFailure(_ title: String, _ detail: String) {
+        overlay?.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: String(localized: "OK"))
+        alert.addButton(withTitle: String(localized: "Save Layout Elsewhere…"))
+        alert.addButton(withTitle: String(localized: "Show Data Folder"))
+        switch alert.runModal() {
+        case .alertSecondButtonReturn: saveGridFileFromMenu()
+        case .alertThirdButtonReturn: state.showDataFolder()
+        default: break
+        }
+    }
+
     private func showError(_ title: String, _ detail: String) {
+        // After slow work the grid may be up again: the alert would open behind it.
+        overlay?.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = title

@@ -170,13 +170,17 @@ struct TopBar: View {
             HStack {
                 // A selection made with ⌘-click or ⇧-click outside edit mode gets the same actions.
                 // Search results hide the selection: its actions wait until they're cleared.
-                if state.selectionActionable && state.selection.count > 1 {
-                    Button("Group") { state.groupSelection() }
+                // With part of it on other pages, the count says what they act on.
+                let count = state.selection.count
+                let counted = state.selectionOutOfView > 0
+                if state.selectionActionable && count > 1 {
+                    Button(counted ? "Group \(count)" : "Group") { state.groupSelection() }
                         .buttonStyle(PillButtonStyle())
                 }
                 if state.selectionActionable {
-                    Button("Remove") { state.remove(state.orderedSelection) }
+                    Button(counted ? "Remove \(count)" : "Remove") { state.remove(state.orderedSelection) }
                         .buttonStyle(PillButtonStyle())
+                        .help(counted ? String(localized: "Some of the selected items are on other pages") : "")
                 }
                 if state.editing {
                     Button("Done") { state.editing = false }
@@ -478,6 +482,13 @@ struct PageView: View {
         .onChange(of: focus, initial: true) { _, i in
             if let i, entries.indices.contains(i) { voiceOverFocus = entries[i].id }
         }
+        // And the keyboard focus follows VoiceOver, so ⌫, Return or Space act on the item it
+        // reads out, not on one the focus ring was left on.
+        .onChange(of: voiceOverFocus) { _, id in
+            guard let id, page == state.currentPage, state.openFolder == nil, !state.drag.active,
+                  let i = entries.firstIndex(where: { $0.id == id }), i != state.focusIndex else { return }
+            state.focusIndex = i
+        }
     }
 }
 
@@ -533,7 +544,9 @@ struct ItemCell: View {
             state.extendSelection(to: item.id)
         } else if state.editing {
             // Edit mode never launches: a click selects, or opens a folder to arrange it.
-            if item.folder != nil && state.selection.isEmpty { state.activate(item) } else { state.toggleSelection(item.id) }
+            // With a selection out of view only (on other pages), a click opens it too.
+            let selectionShown = state.selection.count > state.selectionOutOfView
+            if item.folder != nil && !selectionShown { state.activate(item) } else { state.toggleSelection(item.id) }
         } else {
             state.activate(item)
         }
@@ -729,7 +742,9 @@ struct DragGhost: View {
     let count: Int
 
     var body: some View {
-        let size = state.pageLayout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
+        // The size of the icons it's among: a folder's stay at least 24 points in a small window,
+        // where a page's can be smaller. Once out of the folder, it's the page's.
+        let size = state.openFolder != nil ? state.folderIconSize : state.pageIconSize
         ZStack(alignment: .topTrailing) {
             Group {
                 switch item {
@@ -829,6 +844,10 @@ struct SearchResultsView: View {
             }
             .onChange(of: state.focusIndex) { _, i in
                 if let i, results.indices.contains(i) { voiceOverFocus = results[i].id }
+            }
+            .onChange(of: voiceOverFocus) { _, id in
+                guard let id, let i = results.firstIndex(where: { $0.id == id }), i != state.focusIndex else { return }
+                state.focusIndex = i
             }
             .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         }
@@ -970,6 +989,11 @@ struct FolderPageContent: View {
         // VoiceOver follows the keyboard focus, also into a folder opened with focus in it.
         .onChange(of: focus, initial: true) { _, i in
             if let i, entries.indices.contains(i), let app = entries[i].app { voiceOverFocus = app.id }
+        }
+        .onChange(of: voiceOverFocus) { _, id in
+            guard let id, state.openFolderID == folder.id, !state.drag.active,
+                  let i = entries.firstIndex(where: { $0.id == id }), i != state.focusIndex else { return }
+            state.focusIndex = i
         }
     }
 }

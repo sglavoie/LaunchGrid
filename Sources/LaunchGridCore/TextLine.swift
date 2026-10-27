@@ -96,7 +96,7 @@ public struct TextLine: Equatable, Sendable {
     }
 
     /// The words, as character ranges: runs of letters and digits. A run in a script written
-    /// without spaces (Chinese, Japanese) is split where the system's word breaking splits it,
+    /// without spaces (Chinese, Japanese, Thai) is split where the system's word breaking splits it,
     /// as macOS's own ⌥← and ⌥→ do, rather than crossed in one step.
     private func words() -> [Range<Int>] {
         let chars = Array(text)
@@ -120,10 +120,16 @@ public struct TextLine: Equatable, Sendable {
         }
     }
 
-    /// Han, hiragana and katakana: written without spaces between words.
+    /// Han, hiragana, katakana, Thai, Lao, Khmer and Myanmar: written without spaces between words.
     static func isUnspaced(_ c: Character) -> Bool {
         c.unicodeScalars.contains { s in
-            s.properties.isIdeographic || (0x3040...0x30FF).contains(s.value) || (0x31F0...0x31FF).contains(s.value)
+            s.properties.isIdeographic || unspacedRanges.contains { $0.contains(s.value) }
         }
     }
+
+    private static let unspacedRanges: [ClosedRange<UInt32>] = [
+        0x3040...0x30FF, 0x31F0...0x31FF, // kana
+        0x0E00...0x0E7F, 0x0E80...0x0EFF, // Thai, Lao
+        0x1000...0x109F, 0x1780...0x17FF, 0x19E0...0x19FF, // Myanmar, Khmer
+    ]
 }
