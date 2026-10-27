@@ -785,6 +785,29 @@ func tempDir(_ prefix: String) -> URL {
         #expect(again?.category == "public.app-category.utilities")
     }
 
+    @Test func findsHomebrewFormulaAppsThroughTheFormulasOwnLinks() throws {
+        let fm = FileManager.default
+        let prefix = tempDir("brew")
+        defer { try? fm.removeItem(at: prefix) }
+        try makeFakeApp("Cellar/python@3.15/3.15.0/IDLE 3.app", id: "org.python.IDLE", in: prefix)
+        try makeFakeApp("Cellar/python@3.14/3.14.8/IDLE 3.app", id: "org.python.IDLE", in: prefix)
+        try makeFakeApp("Cellar/qt/6.9/libexec/Designer.app", id: "org.qt.designer", in: prefix)
+        try fm.createDirectory(at: prefix.appendingPathComponent("Cellar/ripgrep/15.0/bin"), withIntermediateDirectories: true)
+        let opt = prefix.appendingPathComponent("opt")
+        try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+        for (name, keg) in [("python", "python@3.15/3.15.0"), ("python3", "python@3.15/3.15.0"),
+                            ("python@3.14", "python@3.14/3.14.8"), ("python@3.15", "python@3.15/3.15.0"),
+                            ("ripgrep", "ripgrep/15.0"), ("qt", "qt/6.9")] {
+            try fm.createSymbolicLink(atPath: opt.appendingPathComponent(name).path, withDestinationPath: "../Cellar/\(keg)")
+        }
+        // Listed through the formulas' own links, not the aliases nor the versioned kegs; only
+        // the top of a keg is looked at.
+        let paths = AppScanner.scan(roots: [opt]).map { $0.path.split(separator: "/").suffix(3).joined(separator: "/") }
+        #expect(paths == ["opt/python@3.14/IDLE 3.app", "opt/python@3.15/IDLE 3.app"])
+        #expect(AppScanner.isHomebrewOpt(opt))
+        #expect(!AppScanner.isHomebrewOpt(prefix.appendingPathComponent("Cellar")))
+    }
+
     @Test func anAppReachedThroughSymlinksIsFoundOnce() throws {
         let fm = FileManager.default
         let root = tempDir("scan")

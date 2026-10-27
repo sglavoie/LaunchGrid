@@ -6,11 +6,32 @@ public enum AppScanner {
     public static var defaultRoots: [URL] {
         // ~/Applications is readable in the sandbox through a temporary-exception entitlement.
         let home = Sandbox.realHome
-        return [
+        var paths = [
             "/Applications",
             "/System/Applications",
             home.appendingPathComponent("Applications").path,
-        ].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ]
+        // The sandbox can't read Homebrew's folders; /opt/homebrew can still be added under Extra folders.
+        if !Sandbox.isActive { paths += homebrewRoots }
+        return paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    /// Homebrew's `opt` folders (Apple silicon, then Intel), where a formula that installs an
+    /// app keeps it: `opt/python@3.14/IDLE 3.app`. Casks put theirs in /Applications.
+    public static let homebrewRoots = ["/opt/homebrew/opt", "/usr/local/opt"]
+
+    /// Whether `dir` is a Homebrew `opt` folder: named `opt`, next to the `Cellar` its links
+    /// lead into.
+    static func isHomebrewOpt(_ dir: URL) -> Bool {
+        dir.lastPathComponent == "opt"
+            && FileManager.default.fileExists(atPath: dir.deletingLastPathComponent().appendingPathComponent("Cellar").path)
+    }
+
+    /// In a Homebrew `opt` folder, a link named after another formula is an alias of it
+    /// (`python3` and `python@3` lead to `Cellar/python@3.15/…`). Its apps are found through
+    /// the formula's own link, whose path stays put when the alias moves to a newer version.
+    static func isHomebrewAlias(_ link: URL, target: URL) -> Bool {
+        target.deletingLastPathComponent().lastPathComponent != link.lastPathComponent
     }
 
     /// Scans the roots (recursing into plain folders up to `maxDepth`, never into bundles)
@@ -60,11 +81,16 @@ public enum AppScanner {
             if realPath != url.path { aliases[realPath] = url.path }
         }
 
-        func walk(_ dir: URL, depth: Int) {
+        /// `limit` is the depth walked to. In a Homebrew `opt` folder, aliases are skipped.
+        func walk(_ dir: URL, depth: Int, limit: Int, homebrewOpt: Bool = false) {
             let real = dir.resolvingSymlinksInPath().path
             if let seen = visited[real], seen <= depth { return } // symlink cycle or repeat
             visited[real] = depth
-            guard let children = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(scanKeys)) else {
+            // Listing doesn't follow a symlink to a folder (/opt/homebrew/opt/python@3.14): its
+            // target is listed, and what's in it keeps the path through the link.
+            let linked = real != dir.path
+            guard let children = try? fm.contentsOfDirectory(at: linked ? URL(fileURLWithPath: real, isDirectory: true) : dir,
+                                                             includingPropertiesForKeys: Array(scanKeys)) else {
                 unlisted.append(dir.path)
                 return
             }
@@ -75,16 +101,22 @@ public enum AppScanner {
                 guard let own = try? child.resourceValues(forKeys: scanKeys) else { continue }
                 let target = own.isSymbolicLink == true ? child.resolvingSymlinksInPath() : nil
                 guard let v = target.map({ try? $0.resourceValues(forKeys: scanKeys) }) ?? own else { continue }
+                if homebrewOpt, let target, isHomebrewAlias(child, target: target) { continue }
+                let path = linked ? dir.appendingPathComponent(child.lastPathComponent) : child
                 // Apps flagged hidden still count: /Applications/Safari.app is a hidden symlink.
                 if child.pathExtension == "app", v.contentType?.conforms(to: .applicationBundle) == true {
-                    consider(child, realPath: target?.path ?? (real as NSString).appendingPathComponent(child.lastPathComponent))
-                } else if depth < maxDepth, own.isHidden != true, v.isDirectory == true, v.isPackage != true {
-                    walk(child, depth: depth + 1)
+                    consider(path, realPath: target?.path ?? (real as NSString).appendingPathComponent(child.lastPathComponent))
+                } else if depth < limit, own.isHidden != true, v.isDirectory == true, v.isPackage != true {
+                    walk(path, depth: depth + 1, limit: limit)
                 }
             }
         }
 
-        for root in roots { walk(root, depth: 1) }
+        for root in roots {
+            // A formula installs its app at the top of its keg; its bin, lib and share hold none.
+            let homebrewOpt = isHomebrewOpt(root)
+            walk(root, depth: 1, limit: homebrewOpt ? min(maxDepth, 2) : maxDepth, homebrewOpt: homebrewOpt)
+        }
         return ScanResult(apps: results, unlisted: unlisted, aliases: aliases)
     }
 
