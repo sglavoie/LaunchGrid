@@ -1695,6 +1695,77 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct DragDeferralTests {
+    @Test func aDeferredRefreshDoesNotMakeAnExistingCopyLookNew() throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = false
+        let a = try #require(state.grid.allApps.first)
+        let copy = InstalledApp(bundleID: a.bundleID, path: "/Applications/Other A.app", name: "Other A")
+        state.catalogScanned([installed("A"), installed("B"), copy])
+
+        state.drag.active = true
+        state.reconcile() // e.g. a background read finishes before the next scan
+        state.catalogScanned([installed("B"), copy])
+        state.cancelDrag()
+
+        #expect(state.grid.allApps.map(\.name) == ["B"], "the missing app must not become its existing copy")
+    }
+
+    @Test(arguments: [false, true])
+    func repeatedScansDuringADragPreserveARenamedAppsTile(autoAdd: Bool) throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = autoAdd
+        state.catalogScanned([installed("A"), installed("B")])
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Custom") }
+        let renamed = InstalledApp(bundleID: a.bundleID, path: "/Applications/New A.app", name: "New A")
+
+        state.drag.active = true
+        state.catalogScanned([renamed, installed("B")])
+        state.catalogScanned([renamed, installed("B")])
+        #expect(state.grid.allApps.first?.path == a.path)
+        state.cancelDrag()
+
+        #expect(state.grid.allApps.map(\.path) == [renamed.path, installed("B").path])
+        #expect(state.grid.allApps.first?.id == a.id)
+        #expect(state.grid.allApps.first?.title == "Custom")
+        state.undo()
+        #expect(state.grid.allApps.first?.id == a.id)
+        #expect(state.grid.allApps.first?.path == renamed.path)
+    }
+
+    @Test func consecutiveMovesDuringADragReachTheFinalPath() throws {
+        let state = makeState(["A", "B"])
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Custom") }
+        state.drag.active = true
+        state.followMovedApps([a.path: "/Applications/Middle.app"])
+        state.followMovedApps(["/Applications/Middle.app": "/Applications/Final.app"])
+        #expect(state.grid.allApps.first?.path == a.path)
+        state.cancelDrag()
+
+        #expect(state.grid.allApps.first?.path == "/Applications/Final.app")
+        state.undo()
+        #expect(state.grid.allApps.first?.path == "/Applications/Final.app")
+        state.redo()
+        #expect(state.grid.allApps.first?.path == "/Applications/Final.app")
+    }
+
+    @Test func swappingPathsDuringADragUpdatesHistoryOnlyOnce() throws {
+        let state = makeState(["A", "B"])
+        let a = try #require(state.grid.allApps.first)
+        let b = try #require(state.grid.allApps.last)
+        state.apply { $0.rename(a.id, to: "Custom") }
+        state.drag.active = true
+        state.followMovedApps([a.path: b.path, b.path: a.path])
+        state.cancelDrag()
+
+        #expect(state.grid.allApps.map(\.path) == [b.path, a.path])
+        state.undo()
+        #expect(state.grid.allApps.map(\.path) == [b.path, a.path])
+        state.redo()
+        #expect(state.grid.allApps.map(\.path) == [b.path, a.path])
+    }
+
     @Test func aScanDuringADragWaitsForTheDrop() {
         let state = makeState(["A"])
         state.catalogScanned([installed("A")])

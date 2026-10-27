@@ -606,7 +606,10 @@ final class AppState {
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         installedFoldedPaths = Set(apps.map { $0.path.lowercased() })
         pathAliases = aliases
-        installedBefore = everInstalled
+        // Until a deferred scan reaches the grid, its new paths still count as possible
+        // moves. A second scan during the same drag must not turn them into older copies.
+        if drag.active, installedBeforeDrag == nil { installedBeforeDrag = everInstalled }
+        installedBefore = installedBeforeDrag ?? everInstalled
         everInstalled.formUnion(apps.map(\.path))
         let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { isOutside($0) })
         outsideApps = outside.apps
@@ -990,13 +993,13 @@ final class AppState {
     /// undo step: it mirrors the disk.
     func followMovedApps(_ moves: [String: String]) {
         guard !moves.isEmpty else { return }
-        followMovesInHistory(moves)
         // Not under a drag, which may be on the extra page past the last that a change would
         // take the view off: at the drop.
         if drag.active {
-            movesAfterDrag.merge(moves) { _, new in new }
+            movesAfterDrag.append(moves)
             return
         }
+        followMovesInHistory(moves)
         var g = grid
         g.followMoves(moves)
         guard g != grid else { return }
@@ -1358,15 +1361,20 @@ final class AppState {
 
     /// Set when a scan finished mid-drag; `dragFinished()` applies it.
     @ObservationIgnored private var reconcileAfterDrag = false
-    /// Apps found moved mid-drag, old path to new; `dragFinished()` follows them.
-    @ObservationIgnored private var movesAfterDrag: [String: String] = [:]
+    /// Paths known before the first scan deferred by this drag. Other refreshes can also
+    /// set `reconcileAfterDrag`, so that flag alone doesn't identify a deferred scan.
+    @ObservationIgnored private var installedBeforeDrag: Set<String>?
+    /// Batches of moves found mid-drag, in order: A → B followed by B → C must reach C.
+    /// History waits too, so swaps aren't applied to it both now and at the drop.
+    @ObservationIgnored private var movesAfterDrag: [[String: String]] = []
 
     /// After a drop or a cancelled drag: applies a scan, or moved apps, that came in meanwhile.
     func dragFinished() {
+        installedBeforeDrag = nil
         if !movesAfterDrag.isEmpty {
             let moves = movesAfterDrag
-            movesAfterDrag = [:]
-            followMovedApps(moves)
+            movesAfterDrag = []
+            for batch in moves { followMovedApps(batch) }
         }
         guard reconcileAfterDrag else { return }
         reconcileAfterDrag = false
