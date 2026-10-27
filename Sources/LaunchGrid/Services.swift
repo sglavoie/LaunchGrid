@@ -518,7 +518,7 @@ final class FolderWatcher: @unchecked Sendable {
             .max { $0.count < $1.count }
         // A root can itself be inside a bundle (Xcode.app/Contents/Applications): only a bundle
         // below it counts.
-        let bundle = parts[(root?.count ?? 0)...].firstIndex(where: { $0.hasSuffix(".app") })
+        let bundle = parts[(root?.count ?? 0)...].firstIndex(where: { $0.lowercased().hasSuffix(".app") })
         if let root {
             // The folders between the root and the change (or the bundle it is in).
             let below = parts[root.count..<(bundle ?? parts.count)]
@@ -680,28 +680,35 @@ enum FileAccess {
 
     /// Starts using the bookmarks `opened`, by the path each was saved under, as `restore` does.
     private static func use(_ opened: [String: Opened], prefs: Preferences) -> [String: String] {
-        var saved = saved
+        let original = saved
+        var saved = original
         var moves: [String: String] = [:]
-        for (path, opened) in opened {
-            let (url, stale) = (opened.url, opened.stale)
+        let usable = opened.filter { path, opened in
             // Taken into use meanwhile (resolved twice), or forgotten while it was resolved.
-            guard granted[path] == nil, let data = saved[path] else {
-                backend.close(url)
-                continue
+            guard granted[path] == nil, original[path] != nil else {
+                backend.close(opened.url)
+                return false
             }
-            let now = url.standardizedFileURL.path
+            let now = opened.url.standardizedFileURL.path
             // Not into the Trash: that's on its way out, and the setting is better left as it was.
             if now != URL(fileURLWithPath: path).standardizedFileURL.path, !Launcher.isInTrash(now) {
-                saved[path] = nil
+                moves[path] = now
+            }
+            return true
+        }
+        // Vacate every old path before assigning destinations. Otherwise A → B followed by
+        // B → C (or B → A) mistakes B's moving bookmark for an existing bookmark of A.
+        for path in moves.keys { saved[path] = nil }
+        for (path, opened) in usable {
+            let (url, stale) = (opened.url, opened.stale)
+            if let now = moves[path] {
                 if saved[now] == nil {
-                    saved[now] = backend.bookmark(url) ?? data
+                    saved[now] = backend.bookmark(url) ?? original[path]
                     granted[now] = url
                 } else {
                     // Picked again at its new place: that bookmark has its own access.
                     backend.close(url)
                 }
-                moves[path] = now
-                migrate(prefs, from: path, to: now)
                 NSLog("LaunchGrid: \(path) moved to \(now); following it")
                 continue
             }
@@ -709,6 +716,7 @@ enum FileAccess {
             if stale, let fresh = backend.bookmark(url) { saved[path] = fresh }
         }
         self.saved = saved
+        migrate(prefs, moves: moves)
         return moves
     }
 
@@ -776,13 +784,19 @@ enum FileAccess {
 
     /// Points the settings naming `old` (an extra scan folder, the background picture) at `new`.
     static func migrate(_ prefs: Preferences, from old: String, to new: String) {
-        if prefs.extraFolders.contains(old) {
-            var folders = prefs.extraFolders.map { $0 == old ? new : $0 }
+        migrate(prefs, moves: [old: new])
+    }
+
+    /// All paths refer to the same snapshot: a setting follows its own item once, even when
+    /// that item's destination is another item's old path.
+    private static func migrate(_ prefs: Preferences, moves: [String: String]) {
+        var folders = prefs.extraFolders.map { moves[$0] ?? $0 }
+        if folders != prefs.extraFolders {
             var seen = Set<String>()
             folders = folders.filter { seen.insert($0).inserted }
             prefs.extraFolders = folders
         }
-        if prefs.customImagePath == old { prefs.customImagePath = new }
+        if let old = prefs.customImagePath, let new = moves[old] { prefs.customImagePath = new }
     }
 
     /// Remembers an item just picked in a panel. False, after telling `onBookmarkFailure`,

@@ -845,6 +845,22 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct WatcherTests {
+    @Test(arguments: ["app", "APP", "App"])
+    func bundleFilteringMatchesTheScannersExtensionRules(ext: String) {
+        let app = "/Applications/Foo.\(ext)"
+        #expect(FolderWatcher.isRelevant(app, roots: ["/Applications"]))
+        #expect(FolderWatcher.isRelevant(app + "/Contents", roots: ["/Applications"]))
+        #expect(!FolderWatcher.isRelevant(app + "/Contents/Resources", roots: ["/Applications"]))
+        #expect(!FolderWatcher.isRelevant(app + "/Contents/Resources"))
+        // Nested bundles are still scanned; their Contents updates must not be rejected
+        // as plain folders beyond the depth limit.
+        let nested = "/Applications/Tools/Foo.\(ext)"
+        #expect(FolderWatcher.isRelevant(nested + "/Contents", roots: ["/Applications"]))
+        #expect(!FolderWatcher.isRelevant(nested + "/Contents/Resources", roots: ["/Applications"]))
+        // A scan root explicitly inside a bundle still gets its own changes.
+        #expect(FolderWatcher.isRelevant(app + "/Contents/Applications", roots: [app + "/Contents/Applications"]))
+    }
+
     @Test func ignoresChangesDeepInsideBundles() {
         #expect(FolderWatcher.isRelevant("/Applications/"))
         #expect(FolderWatcher.isRelevant("/Applications/Utilities/"))
@@ -1661,6 +1677,45 @@ func installed(_ name: String) -> InstalledApp {
         #expect(FileAccess.restore(prefs: prefs).isEmpty)
         #expect(prefs.customImagePath == "/Users/x/bg.jpg")
         #expect(sandbox.saved.keys.sorted() == ["/Users/x/bg.jpg"])
+    }
+
+    @Test(arguments: [false, true])
+    func bookmarksMovingIntoEachOthersOldPathsKeepTheirAccess(swapping: Bool) {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let a = "/Users/x/A.app", b = "/Users/x/B.app", c = "/Users/x/C.app"
+        for path in [a, b] { FileAccess.remember(URL(fileURLWithPath: path)) }
+        FileAccess.reset()
+        sandbox.install() // Both apps moved while LaunchGrid was closed.
+        let moves = [a: b, b: swapping ? a : c]
+        sandbox.moves = moves
+
+        #expect(FileAccess.restore(prefs: prefs) == moves)
+        #expect(Set(sandbox.saved.keys) == Set(moves.values))
+        for path in moves.values { #expect(FileAccess.isGranted(path)) }
+
+        // The refreshed bookmarks must also work on the next launch.
+        FileAccess.reset()
+        sandbox.moves = [:]
+        sandbox.install()
+        #expect(FileAccess.restore(prefs: prefs).isEmpty)
+        for path in moves.values { #expect(FileAccess.isGranted(path)) }
+    }
+
+    @Test func settingsFollowEachBookmarkMoveOnlyOnce() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let a = "/Users/x/Tools", b = "/Users/x/Utilities"
+        prefs.extraFolders = [a, b]
+        for path in [a, b] { FileAccess.remember(URL(fileURLWithPath: path)) }
+        FileAccess.reset()
+        sandbox.install()
+        sandbox.moves = [a: b, b: a]
+
+        #expect(FileAccess.restore(prefs: prefs) == sandbox.moves)
+        #expect(prefs.extraFolders == [b, a], "each folder follows its own bookmark once")
     }
 
     @Test func anItemPickedAgainAtItsNewPlaceKeepsOneBookmark() {
