@@ -79,6 +79,7 @@ public enum LaunchpadImporter {
         rows: Int,
         columns: Int,
         installed: [String] = [],
+        keeps: (String) -> Bool = { _ in true },
         resolve: (String) -> String?
     ) throws -> Result {
         // Copy first so a live database is never touched. Its write-ahead log comes along:
@@ -122,12 +123,26 @@ public enum LaunchpadImporter {
         }
 
         return build(items: items, apps: apps, groupTitles: groupTitles, rows: rows, columns: columns,
-                     installed: installed, resolve: resolve)
+                     installed: installed, keeps: keeps, resolve: resolve)
     }
 
+    /// Whether a copy Launch Services found outside the scan folders is one to put on the grid:
+    /// there on disk, and not in the Trash, run from a translocated quarantine copy, or on
+    /// another volume (a disk image, a backup disk), which would leave a tile behind once
+    /// ejected. The old Launchpad database still lists apps deleted long since.
+    public static func isLastingCopy(_ path: String) -> Bool {
+        let parts = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        if parts.contains(where: { $0 == ".Trash" || $0 == ".Trashes" || $0 == "AppTranslocation" }) { return false }
+        if parts.count > 2, parts[1] == "Volumes" { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// `keeps` says whether a copy Launch Services `resolve`s to, for an app the scan didn't
+    /// find, is one to import (`isLastingCopy` for a real database).
     static func build(
         items: [Row], apps: [Int: AppRow], groupTitles: [Int: String],
-        rows: Int, columns: Int, installed: [String] = [], resolve: (String) -> String?
+        rows: Int, columns: Int, installed: [String] = [],
+        keeps: (String) -> Bool = { _ in true }, resolve: (String) -> String?
     ) -> Result {
         let children = Dictionary(grouping: items, by: \.parent).mapValues { $0.sorted { $0.ordering < $1.ordering } }
         var skipped: [String] = [], duplicates: [String] = []
@@ -174,14 +189,22 @@ public enum LaunchpadImporter {
                 // Launch Services gives one copy per bundle ID. Of several (Xcode and Xcode-beta,
                 // in AppGrid's table, which has no bookmarks), the one named as the row is, else
                 // one not imported yet.
+                // Of one, that one: Launch Services may prefer a copy the scan doesn't see (on a
+                // disk image, in Downloads, a build in DerivedData). Its answer only stands for an
+                // app the scan didn't find, or picks among the scan's copies.
                 let others = copies(of: b)
-                if others.count > 1 {
+                if others.count == 1 {
+                    candidate = others[0]
+                } else if others.count > 1 {
                     let file = { (path: String) in URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased() }
+                    let scanned = Set(others.map(real))
                     candidate = others.first { file($0) == title.lowercased() }
-                        ?? resolve(b).flatMap { seen.contains(real($0)) ? nil : $0 }
+                        ?? resolve(b).flatMap { scanned.contains(real($0)) && !seen.contains(real($0)) ? $0 : nil }
                         ?? others.first { !seen.contains(real($0)) }
+                        ?? others[0] // every copy imported already: a duplicate
+                } else {
+                    candidate = resolve(b).flatMap { keeps($0) ? $0 : nil }
                 }
-                if candidate == nil { candidate = resolve(b) }
             }
             guard let found = candidate else {
                 skipped.append(title)

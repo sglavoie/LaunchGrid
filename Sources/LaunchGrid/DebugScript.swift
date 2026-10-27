@@ -13,6 +13,8 @@ enum DebugScript {
     private static var watchingMenus = false
     /// Where a held drag ("hold", "fhold", "panhold") is, for "release".
     private static var heldAt: (point: CGPoint, window: NSWindow)?
+    /// The pages `Pager` last drew, for "drawn".
+    static var drawnPages: ClosedRange<Int>?
     /// The menu "menuhold" built, for "menurun".
     private static var heldMenu: [MenuEntry] = []
 
@@ -74,6 +76,22 @@ enum DebugScript {
                     }
                     try? await Task.sleep(for: .milliseconds(ms))
                     snapshot(name: n[1], dir: dir)
+                case "foldersnap":
+                    // "foldersnap:ms,name": opens the first folder (or closes the one open) and snaps
+                    // ms later, within its transition.
+                    let n = arg.split(separator: ",", maxSplits: 1).map(String.init)
+                    guard n.count == 2, let ms = Int(n[0]) else { break }
+                    if state.openFolderID != nil {
+                        state.closeFolder()
+                    } else if let f = state.grid.pages.flatMap(\.items).compactMap(\.folder).first {
+                        state.openFolder(f.id)
+                    }
+                    try? await Task.sleep(for: .milliseconds(ms))
+                    snapshot(name: n[1], dir: dir)
+                case "drawn":
+                    // The pages the pager draws (the rest are blank stand-ins).
+                    print("drawn: \(drawnPages.map { "\($0.lowerBound)...\($0.upperBound)" } ?? "-") current=\(state.currentPage)")
+                    fflush(stdout)
                 case "settings": delegate.showSettings()
                 case "tab": state.settingsTab = arg
                 case "settingsheight": state.settingsHeight = Double(arg).map { CGFloat($0) }
@@ -370,8 +388,8 @@ enum DebugScript {
                     let folder = parts[0] == "fpress"
                     let c = (folder ? state.folderLayout : state.pageLayout).center(Int(arg) ?? 0)
                     let o = folder ? state.drag.folderGridFrame.origin : state.drag.pagerFrame.origin
-                    let h = window.contentView?.bounds.height ?? 0
-                    let p = NSPoint(x: o.x + c.x, y: h - (o.y + c.y))
+                    let (r, h) = (state.drag.rootOrigin, window.contentView?.bounds.height ?? 0)
+                    let p = NSPoint(x: r.x + o.x + c.x, y: h - (r.y + o.y + c.y))
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                         if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
@@ -393,8 +411,28 @@ enum DebugScript {
                     fflush(stdout)
                 case "statusmenu": print("statusmenu: \(delegate.makeMenu().items.map(\.title).filter { !$0.isEmpty })"); fflush(stdout)
                 case "rebuildaction": delegate.libraryActions.rebuild(arg == "alpha" ? .alphabetical : .byCategory)
+                case "warnhotkey":
+                    // The alert a shortcut refused at launch brings up; async, as it waits for an answer.
+                    DispatchQueue.main.async { delegate.warnHotkeyFailed() }
+                    print("warnhotkey: dismissed=\(state.prefs.hotkeyWarningDismissed ?? "-")")
+                    fflush(stdout)
+                case "autoadd":
+                    // "autoadd:on" or "off", as the switch in Settings › General does.
+                    state.prefs.autoAddApps = arg == "on"
+                case "sortmenu":
+                    // Sort Everything… in the menu-bar icon's menu; async, as its alert waits for an answer.
+                    DispatchQueue.main.async { delegate.sortEverything() }
+                case "confirmrebuild":
+                    // Rebuild from Scratch… in the menu-bar icon's menu; async, as its alert waits for an answer.
+                    DispatchQueue.main.async { delegate.confirmRebuild() }
+                case "dockmenu": print("dockmenu: \(delegate.applicationDockMenu(NSApp)?.items.map(\.title).filter { !$0.isEmpty } ?? [])"); fflush(stdout)
                 case "about": delegate.showAbout()
                 case "frames": print("frames: \(state.prefs.windowFrames.count) saved (\(Preferences.windowFrameWrites) writes), \(state.prefs.windowFrames)"); fflush(stdout)
+                case "rootframes":
+                    // Where root coordinates start in the overlay, and the frames menus and the
+                    // candidate window are placed from.
+                    print("rootframes: origin=\(state.drag.rootOrigin) menubutton=\(state.drag.menuButtonFrame) field=\(SearchComposition.shared.fieldFrame) window=\(overlay.window?.frame ?? .zero)")
+                    fflush(stdout)
                 case "framesfill":
                     // Saved frames for N displays that aren't connected, as years of docks and projectors leave.
                     for i in 0..<(Int(arg) ?? 0) { state.prefs.windowFrames["display-FAKE-\(i)"] = "{{0, 0}, {800, 600}}" }
@@ -416,12 +454,27 @@ enum DebugScript {
                     // Releases a held drag where it is.
                     guard let (p, window) = heldAt else { break }
                     heldAt = nil
-                    let h = window.contentView?.bounds.height ?? 0
-                    if let e = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: p.x, y: h - p.y), modifierFlags: [],
+                    let (r, h) = (state.drag.rootOrigin, window.contentView?.bounds.height ?? 0)
+                    if let e = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: r.x + p.x, y: h - (r.y + p.y)), modifierFlags: [],
                                                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                                   context: nil, eventNumber: 0, clickCount: 1, pressure: 0) {
                         NSApp.postEvent(e, atStart: false)
                     }
+                case "pickfolder":
+                    // Settings › Library's Add Folder…: the open panel, then the folder picked kept with its bookmark.
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    if panel.runModal() == .OK, let url = panel.url, !state.prefs.extraFolders.contains(url.path) {
+                        FileAccess.remember(url)
+                        state.prefs.extraFolders.append(url.path)
+                        delegate.libraryActions.foldersChanged()
+                    }
+                    print("folders: \(state.prefs.extraFolders)")
+                    fflush(stdout)
+                case "folders":
+                    print("folders: \(state.prefs.extraFolders)")
+                    fflush(stdout)
                 case "extrafolder":
                     // Adds a scan folder without the open panel, as Settings › Library does.
                     state.prefs.extraFolders.append(arg)
@@ -494,6 +547,10 @@ enum DebugScript {
                     // Add Missing Apps' list, names containing `arg`.
                     print("missingapps: \(state.missingApps.map(\.path).filter { arg.isEmpty || $0.localizedCaseInsensitiveContains(arg) })")
                     fflush(stdout)
+                case "setenv":
+                    // "setenv:NAME=value" ("NAME=" unsets it), e.g. LAUNCHGRID_DEBUG_LOGIN_STATUS mid-run.
+                    let kv = arg.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                    if kv.count == 2 { if kv[1].isEmpty { unsetenv(kv[0]) } else { setenv(kv[0], kv[1], 1) } }
                 case "followmove":
                     // "followmove:/old/A.app>/new/A.app", as when a bookmark finds a moved app.
                     let n = arg.components(separatedBy: ">")
@@ -530,14 +587,14 @@ enum DebugScript {
     static func simulateDrag(_ kind: String, from: Int, to: Int, grab: CGFloat = 0, state: AppState, window: NSWindow,
                              overlay: OverlayController, snapDir: String) async {
         let layout = state.pageLayout
-        let origin = state.drag.pagerFrame.origin
+        let origin = state.drag.pagerFrame.origin, root = state.drag.rootOrigin
         func rootPoint(_ index: Int, dx: CGFloat = 0) -> CGPoint {
             let c = layout.center(index)
             return CGPoint(x: origin.x + c.x + dx, y: origin.y + c.y)
         }
         func send(_ type: NSEvent.EventType, _ p: CGPoint) {
             let h = window.contentView?.bounds.height ?? 0
-            let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: p.x, y: h - p.y), modifierFlags: [],
+            let event = NSEvent.mouseEvent(with: type, location: NSPoint(x: root.x + p.x, y: h - (root.y + p.y)), modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                            context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
             if let event { NSApp.postEvent(event, atStart: false) }

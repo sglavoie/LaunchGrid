@@ -44,7 +44,9 @@ struct BackgroundView: View {
         .opacity(prefs.background == .solid ? Self.solidOpacity(prefs.backgroundOpacity, reduceTransparency: reduceTransparency) : 1)
         .ignoresSafeArea()
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)) { _ in
-            spaceChanges += 1
+            // Only while it's in view: hidden, the panel's view lives on, and each switch would
+            // read (and maybe blur) a picture no one sees. The next show looks it up anyway.
+            if state.isShown { spaceChanges += 1 }
         }
     }
 
@@ -248,6 +250,23 @@ final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
         "\(identity)|\(t.radius)|\(t.size.width)x\(t.size.height)@\(t.pixelScale)" as NSString
     }
 
+    /// Points on screen per source pixel, as the picture is scaled to fill.
+    nonisolated static func fill(source: CGSize, _ target: Target) -> CGFloat {
+        max(target.size.width / max(source.width, 1), target.size.height / max(source.height, 1))
+    }
+
+    /// The size the picture is worked at, as a fraction of its own. Blurred, a reduced one: the
+    /// longer side sets it, so a tall picture is shrunk as much as a wide one. Not so far that a
+    /// working pixel spans more than half the radius, though, or a light blur on a large display
+    /// comes out as strong as a heavier one. Unblurred (and never finer than), the screen's own
+    /// resolution, so it stays sharp.
+    nonisolated static func workingScale(source: CGSize, _ target: Target) -> CGFloat {
+        let fill = fill(source: source, target)
+        let sharp = min(1, fill * max(target.pixelScale, 1))
+        guard target.radius > 0 else { return sharp }
+        return min(sharp, max(1600 / max(source.width, source.height, 1), 2 * fill / target.radius))
+    }
+
     func cached(identity: String, _ target: Target) -> NSImage? {
         cache.object(forKey: key(identity: identity, target))
     }
@@ -258,13 +277,8 @@ final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
         // Upright, as the camera held it: a portrait photo is stored sideways with an EXIF orientation.
         guard var ci = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else { return nil }
         let source = ci.extent.size
-        // Points on screen per source pixel, as the picture is scaled to fill.
-        let fill = max(target.size.width / max(source.width, 1), target.size.height / max(source.height, 1))
-        // Blurred, work at a reduced size: the longer side sets it, so a tall picture is shrunk
-        // as much as a wide one. Unblurred, at the screen's own resolution, so it stays sharp.
-        let scale = target.radius > 0
-            ? min(1, 1600 / max(source.width, source.height, 1))
-            : min(1, fill * max(target.pixelScale, 1))
+        let fill = Self.fill(source: source, target)
+        let scale = Self.workingScale(source: source, target)
         ci = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let extent = ci.extent.integral
         if target.radius > 0 {

@@ -30,16 +30,26 @@ struct GridLayout {
     static let labelHeight: CGFloat = 22
 
     /// With `labels`, small enough to leave its name room in the cell, so a short cell (a
-    /// small window, many rows, large icons) doesn't put names over the icons below.
+    /// small window, many rows, large icons) doesn't put names over the icons below. At least
+    /// 24 points, unless even that would overflow the cell.
     func iconSize(scale: Double, labels: Bool = false) -> CGFloat {
         let fit = min(cell.width * 0.62, cell.height * 0.58)
         let room = labels ? cell.height - Self.labelHeight : .infinity
-        return max(24, min(fit * scale, min(cell.width, cell.height) * 0.9, 160, room))
+        let most = min(cell.width, cell.height) * 0.9
+        return max(min(24, most), min(fit * scale, most, 160, room))
     }
 
     /// Whether a name fits under an icon of `iconSize`; when not, names are left out.
     func labelsFit(iconSize: CGFloat) -> Bool {
         iconSize + Self.labelHeight <= cell.height
+    }
+
+    /// Where the icon of cell `index` is drawn: the icon and its name are centred together,
+    /// so with a name under it the icon sits above the cell's centre.
+    func iconCenter(_ index: Int, iconSize: CGFloat, labels: Bool) -> CGPoint {
+        var c = center(index)
+        if labels && labelsFit(iconSize: iconSize) { c.y -= Self.labelHeight / 2 }
+        return c
     }
 }
 
@@ -98,6 +108,8 @@ final class DragController {
     @ObservationIgnored var folderPanelFrame: CGRect = .zero
     @ObservationIgnored var folderGridFrame: CGRect = .zero
     @ObservationIgnored var menuButtonFrame: CGRect = .zero
+    /// Where root coordinates start in the hosting view: below the title bar in Window mode.
+    @ObservationIgnored var rootOrigin: CGPoint = .zero
 
     func isDragged(_ id: UUID) -> Bool { active && ids.contains(id) }
 
@@ -144,6 +156,22 @@ extension AppState {
 
     var pageLayout: GridLayout {
         GridLayout(size: drag.pagerFrame.size, rows: grid.rows, columns: grid.columns)
+    }
+
+    var pageIconSize: CGFloat { pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) }
+
+    var folderIconSize: CGFloat { folderIconSize(folderLayout) }
+
+    /// As on the page, at least 24 points (the page's can be smaller in a dense grid in a small
+    /// window, where the folder has more room), unless the folder's own cells are smaller still.
+    func folderIconSize(_ layout: GridLayout) -> CGFloat {
+        min(max(pageIconSize, 24), layout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels))
+    }
+
+    /// Centre of the icon in cell `index` of the page, or of the open folder's page shown.
+    func iconCenter(_ index: Int, inFolder: Bool) -> CGPoint {
+        inFolder ? folderLayout.iconCenter(index, iconSize: folderIconSize, labels: prefs.showLabels)
+            : pageLayout.iconCenter(index, iconSize: pageIconSize, labels: prefs.showLabels)
     }
 
     var folderLayout: GridLayout {
@@ -219,6 +247,10 @@ extension AppState {
             return
         }
         guard drag.active else { return }
+        // The release may be beyond the last movement event. Recheck both the insertion
+        // gap and any armed merge before committing to where the icon actually landed.
+        drag.location = location
+        updateTargets()
         drop()
     }
 
@@ -229,7 +261,7 @@ extension AppState {
         var hit: UUID?
         var source = DragController.Source.page
         // Only start on the icon itself; elsewhere a drag swipes pages (or does nothing in a folder).
-        let reach = pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) * 0.75
+        let reach = (openFolder == nil ? pageIconSize : folderIconSize) * 0.75
         func onIcon(_ local: CGPoint, _ center: CGPoint) -> Bool {
             abs(local.x - center.x) < reach && abs(local.y - center.y) < reach * 1.2
         }
@@ -239,7 +271,7 @@ extension AppState {
             let local = CGPoint(x: start.x - frame.minX, y: start.y - frame.minY)
             guard frame.contains(start), let cell = folderLayout.cellIndex(at: local) else { return false }
             let index = folderPage * FolderLayout.perPage(grid) + cell
-            let c = folderLayout.center(cell)
+            let c = iconCenter(cell, inFolder: true)
             guard folder.apps.indices.contains(index), onIcon(local, c) else { return false }
             hit = folder.apps[index].id
             source = .folder(folder.id)
@@ -249,7 +281,7 @@ extension AppState {
             let local = CGPoint(x: start.x - frame.minX, y: start.y - frame.minY)
             guard frame.contains(start), let cell = pageLayout.cellIndex(at: local),
                   currentItems.indices.contains(cell) else { return false }
-            let c = pageLayout.center(cell)
+            let c = iconCenter(cell, inFolder: false)
             guard onIcon(local, c) else { return false }
             hit = currentItems[cell].id
             center = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
@@ -347,8 +379,8 @@ extension AppState {
             let r = cell < gap ? cell : cell - 1
             if remaining.indices.contains(r) { shown = remaining[r] }
         }
-        let center = pageLayout.center(cell)
-        let radius = pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) * 0.42
+        let center = iconCenter(cell, inFolder: false)
+        let radius = pageIconSize * 0.42
         let nearCenter = hypot(local.x - center.x, local.y - center.y) < radius
         if let shown, nearCenter, mergeAllowed {
             drag.pendingGap = nil
@@ -429,6 +461,8 @@ extension AppState {
 
     private func drop() {
         let ids = drag.ids
+        let before = grid
+        let merged = drag.mergeTarget
         let page = currentPage
         // Emptying the source page removes it, which shifts later pages; follow the target by ID.
         let pageID = grid.pages.indices.contains(page) ? grid.pages[page].id : nil
@@ -450,7 +484,12 @@ extension AppState {
             let gap = drag.pendingGap ?? drag.gap ?? remainingItems(page: page).count
             apply { g in g.removingEmptiedPages { $0.move(ids, toPage: page, at: gap) } }
         }
-        selection.removeAll()
+        // The selection is done with once it was moved, or something was dropped on one of it.
+        // An unselected app dragged alone, or a ⌘-click that slipped into a drag and landed
+        // where it started, leaves it as it was.
+        if grid != before && (!selection.isDisjoint(with: ids) || merged.map(selection.contains) == true) {
+            selection.removeAll()
+        }
         // Stay on the page dropped onto. A drop on the extra empty page created a new one;
         // find it through the dropped item.
         if let pageID, let i = grid.pages.firstIndex(where: { $0.id == pageID }) {

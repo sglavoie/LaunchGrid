@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 import LaunchGridCore
@@ -25,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Set by the debug scripts to act as if VoiceOver were on.
     var attachesStatusMenu = false
     private var watcher: FolderWatcher?
+    /// The folders a watcher is being made for, while their real paths are read.
+    private var watcherPending: [String]?
     private var rescanDebounce: Task<Void, Never>?
     private var periodicRescan: Timer?
     private var windows: [String: NSWindow] = [:]
@@ -107,8 +110,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         state = AppState(prefs: prefs, store: GridStore(url: Self.storeURL))
-        // Before the first scan, so it sees the folders and apps the bookmarks reach.
-        state.followMovedApps(FileAccess.restore(prefs: prefs))
+        #if !APP_STORE
+        // For the debug scripts: the first scan hangs this many seconds, as on a stalled volume.
+        if let hang = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCAN_HANG"].flatMap(Double.init) {
+            let scanner = state.scanner
+            let first = OSAllocatedUnfairLock(initialState: true)
+            state.scanner = { roots in
+                if first.withLock({ let was = $0; $0 = false; return was }) { Thread.sleep(forTimeInterval: hang) }
+                return scanner(roots)
+            }
+        }
+        #endif
+        #if !APP_STORE
+        // For the debug scripts: how long a scan may hang before what waits for it goes ahead.
+        if let s = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCAN_TIMEOUT"].flatMap(Double.init) {
+            state.scanTimeout = .seconds(s)
+        }
+        #endif
+        // Before the first scan, so it sees the folders and apps the bookmarks reach. Resolved
+        // off the main thread: one to a volume that has stopped answering could hang the launch.
+        let restored = Task { await FileAccess.restoreInBackground(prefs: prefs) }
         // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
         if Sandbox.isActive { state.onAppPathsInUse = { FileAccess.forgetApps(notIn: $0) } }
         FileAccess.onBookmarkFailure = { [weak self] url in
@@ -120,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
         state.onLaunchedBehind = { [weak self] in self?.overlay.launchedBehind = $0 }
         state.onError = { [weak self] title, detail in self?.showError(title, detail) }
+        state.onSaveFailure = { [weak self] title, detail in self?.showSaveFailure(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
 
@@ -152,9 +174,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    if let self { self.state.followMovedApps(FileAccess.restore(prefs: self.prefs)) }
-                    self?.startWatching(onlyIfChanged: true)
-                    self?.state.rescan()
+                    _ = Task { [weak self] in
+                        guard let prefs = self?.prefs else { return }
+                        // Access to what was on a volume that went is let go, so it is taken up
+                        // again (and followed to a new name) when the volume returns.
+                        FileAccess.releaseUnmounted(mounted: await Disk.run { Volume.mountedNames() })
+                        let moves = await FileAccess.restoreInBackground(prefs: prefs)
+                        self?.state.followMovedApps(moves)
+                        self?.startWatching(onlyIfChanged: true)
+                        self?.state.rescan()
+                    }
                 }
             }
         }
@@ -170,33 +199,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         IconProvider.shared.prewarm(state.grid.allApps.map(\.path))
-        state.rescan { [weak self] in
-            guard let self else { return }
-            self.catalogReady = true
-            #if !APP_STORE
-            if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
-                // A script rebuilds and edits the layout: only against a scratch one.
-                if Preferences.isScratch {
-                    DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
-                    return
+        Task { [self] in
+            state.followMovedApps(await restored.value)
+            state.rescan { [weak self] in
+                guard let self else { return }
+                self.catalogReady = true
+                #if !APP_STORE
+                if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
+                    // A script rebuilds and edits the layout: only against a scratch one.
+                    if Preferences.isScratch {
+                        DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
+                        return
+                    }
+                    FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
                 }
-                FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
+                #endif
+                if let url = self.pendingOpen {
+                    // Loading needs the catalog, so a file that launched us waits for the first scan.
+                    self.pendingOpen = nil
+                    // The welcome window only if the file gave no layout (cancelled, unreadable),
+                    // not over it while it loads.
+                    self.openLayout(url, finished: { [weak self] in
+                        if let self, !self.state.hasGridFile { self.showFirstRun() }
+                    })
+                } else if !self.state.hasGridFile {
+                    self.showFirstRun()
+                }
+                if CommandLine.arguments.contains("--show") { self.overlay.show() }
             }
-            #endif
-            if let url = self.pendingOpen {
-                // Loading needs the catalog, so a file that launched us waits for the first scan.
-                self.pendingOpen = nil
-                // The welcome window only if the file gave no layout (cancelled, unreadable),
-                // not over it while it loads.
-                self.openLayout(url, finished: { [weak self] in
-                    if let self, !self.state.hasGridFile { self.showFirstRun() }
-                })
-            } else if !self.state.hasGridFile {
-                self.showFirstRun()
-            }
-            if CommandLine.arguments.contains("--show") { self.overlay.show() }
+            startWatching()
         }
-        startWatching()
         // Slow fallback in case FSEvents misses something (e.g. network volumes).
         periodicRescan = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -250,6 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 // Said before replacing anything, as an unreadable saved layout is.
                 let leftOut = skipped > 0 ? String(localized: "\(skipped) entries in “\(name)” could not be read and will be left out.") : nil
                 if !state.grid.allApps.isEmpty {
+                    // A slow read may have let the grid open again meanwhile.
+                    overlay.hide(deactivate: false)
+                    NSApp.activate()
                     let alert = NSAlert()
                     alert.messageText = String(localized: "Replace your layout with “\(name)”?")
                     alert.informativeText = [leftOut, String(localized: "Your current pages and folders will be replaced. ⌘Z in the grid undoes it.")]
@@ -288,6 +323,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationWillTerminate(_ notification: Notification) {
         state?.saveNow(reportingFailure: false)
+    }
+
+    /// Hide LaunchGrid in the menu bar (Window mode leaves it in view): the grid hides as it
+    /// does itself, so its search, open folder and edit mode don't come back with it.
+    func applicationWillHide(_ notification: Notification) {
+        overlay?.hide(deactivate: false)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -342,7 +383,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return ok
     }
 
-    private func warnHotkeyFailed() {
+    func warnHotkeyFailed() {
+        guard prefs.hotkeyWarningDismissed != prefs.hotkeyID else { return }
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = String(localized: "LaunchGrid's shortcut couldn't be registered")
@@ -355,7 +397,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         alert.addButton(withTitle: String(localized: "Choose Shortcut…"))
         alert.addButton(withTitle: String(localized: "Not Now"))
-        if alert.runModal() == .alertFirstButtonReturn { showSettings() }
+        // Not Now is remembered for this shortcut, so it isn't asked at every login while
+        // another app keeps it; Settings still shows the problem.
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = String(localized: "Don't ask again for this shortcut")
+        let answer = alert.runModal()
+        if alert.suppressionButton?.state == .on { prefs.hotkeyWarningDismissed = prefs.hotkeyID }
+        if answer == .alertFirstButtonReturn { showSettings() }
     }
 
     private func applyDockPolicy() {
@@ -454,7 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: String(localized: "Settings…"), action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: String(localized: "Add Missing Apps…"), action: #selector(showAddMissing), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Choose Apps…"), action: #selector(showChooseApps), keyEquivalent: "").target = self
-        menu.addItem(withTitle: String(localized: "Sort Everything"), action: #selector(sortEverything), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Sort Everything…"), action: #selector(sortEverything), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile as () -> Void), keyEquivalent: "").target = self
@@ -479,18 +527,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return menu
     }
 
+    /// The Dock icon's menu: the menu-bar icon's, as either can be the only one shown. The Dock
+    /// adds its own Quit.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = makeMenu()
+        while let last = menu.items.last, last.isSeparatorItem || last.action == #selector(NSApplication.terminate(_:)) {
+            menu.removeItem(last)
+        }
+        for item in menu.items { item.keyEquivalent = "" }
+        return menu
+    }
+
     /// Watches the scan folders, including any not created yet; `onlyIfChanged` keeps the
     /// current watcher when that set is the same.
     private func startWatching(onlyIfChanged: Bool = false) {
         let roots = prefs.scanRoots.map(\.path)
-        if onlyIfChanged, let watcher, watcher.paths == roots { return }
-        watcher = FolderWatcher(paths: roots) { [weak self] in
-            // An install produces bursts of events; scan once things settle.
-            self?.rescanDebounce?.cancel()
-            self?.rescanDebounce = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1.5))
-                guard !Task.isCancelled else { return }
-                self?.state.rescan()
+        if onlyIfChanged, (watcherPending ?? watcher?.paths) == roots { return }
+        watcherPending = roots
+        // Where the folders' symlinks lead is read off the main thread: on a volume that has
+        // stopped answering, that waits.
+        Task { [weak self] in
+            let real = await Disk.run { FolderWatcher.resolve(roots) }
+            // A later call (the folders changed again meanwhile) makes its own.
+            guard let self, self.watcherPending == roots else { return }
+            self.watcherPending = nil
+            self.watcher = FolderWatcher(paths: roots, realPaths: real) { [weak self] in
+                // An install produces bursts of events; scan once things settle.
+                self?.rescanDebounce?.cancel()
+                self?.rescanDebounce = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1.5))
+                    guard !Task.isCancelled else { return }
+                    self?.state.rescan()
+                }
             }
         }
     }
@@ -587,8 +655,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let window = notification.object as? NSWindow, let key = window.identifier?.rawValue else { return }
         windows[key] = nil
         if key == "firstRun" && !state.hasGridFile {
-            // Closed without choosing: start with the category layout.
-            state.build(style: .byCategory)
+            // Closed without choosing: start with the category layout, once the apps are found.
+            state.buildWhenScanned(style: .byCategory)
         }
         // Without a Dock icon, nothing of ours is left to type into: hand focus back to the
         // app before, as hiding the grid does. Next turn, once the window is gone.
@@ -618,6 +686,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func showAddMissing() {
+        // Before the first layout nothing is missing yet: apps are chosen in the welcome window.
+        guard state.hasGridFile else { return showFirstRun() }
         present("addMissing", title: String(localized: "Add Missing Apps"), resizable: true) { close in AddMissingAppsView(close: close) }
     }
 
@@ -635,15 +705,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         overlay.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
-        alert.messageText = String(localized: "Sort everything alphabetically?")
-        alert.informativeText = String(localized: "Every page is re-flowed and page titles are cleared. Folders stay intact. ⌘Z in the grid undoes it.")
-        alert.addButton(withTitle: String(localized: "Sort"))
+        alert.messageText = String(localized: "Sort everything by name?")
+        alert.informativeText = state.sortEverythingDetail
+        alert.addButton(withTitle: String(localized: "Sort Everything"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         state.sortEverything()
     }
 
     @objc func confirmRebuild() {
+        guard state.hasScanned else {
+            return showError(String(localized: "LaunchGrid is still looking for your apps"),
+                             String(localized: "Rebuild once it has found them, in a moment."))
+        }
         overlay.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
@@ -719,7 +793,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Reading the database and asking Launch Services about every app can take a while.
             let outcome = await Disk.run {
                 Result {
-                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed) { id in
+                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed,
+                                                         keeps: LaunchpadImporter.isLastingCopy) { id in
                         NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
                     }
                 }
@@ -769,7 +844,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.launchGridLayout]
-        panel.nameFieldStringValue = "LaunchGrid Layout.launchgrid"
+        panel.nameFieldStringValue = String(localized: "LaunchGrid Layout") + ".launchgrid"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let grid = state.grid
         Task {
@@ -841,7 +916,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([file]) }
     }
 
+    /// A failed save, with what can be done about it while LaunchGrid runs: keep a copy of
+    /// the layout elsewhere, or look at the folder it couldn't be saved in.
+    private func showSaveFailure(_ title: String, _ detail: String) {
+        overlay?.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: String(localized: "OK"))
+        alert.addButton(withTitle: String(localized: "Save Layout Elsewhere…"))
+        alert.addButton(withTitle: String(localized: "Show Data Folder"))
+        switch alert.runModal() {
+        case .alertSecondButtonReturn: saveGridFileFromMenu()
+        case .alertThirdButtonReturn: state.showDataFolder()
+        default: break
+        }
+    }
+
     private func showError(_ title: String, _ detail: String) {
+        // After slow work the grid may be up again: the alert would open behind it.
+        overlay?.hide(deactivate: false)
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = title

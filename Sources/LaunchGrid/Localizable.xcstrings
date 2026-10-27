@@ -637,6 +637,28 @@
         }
       }
     },
+    "Turning this on also adds the %lld installed apps that aren't on the grid, at its end.": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Turning this on also adds the installed app that isn't on the grid, at its end."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Turning this on also adds the %lld installed apps that aren't on the grid, at its end."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Your current pages and folders will be replaced by the %lld apps found in the %@ layout. ⌘Z in the grid undoes it.": {
       "localizations": {
         "en": {

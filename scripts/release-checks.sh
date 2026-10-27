@@ -45,31 +45,55 @@ released_commit() {
     fi
 }
 
-# CI builds, tests and bundles both variants; don't ship a commit it hasn't passed. Its latest
-# run for HEAD counts (a rerun replaces a failure). SKIP_CI_CHECK=1 ships without it.
+# CI builds, tests and bundles both variants; don't ship a commit it hasn't passed. The latest
+# run for a commit counts (a rerun replaces a failure). A push that only changed the website or
+# the documentation skips the tests, so its run passes without them: the commits before it are
+# looked at until one whose tests ran, as its code is the code shipped. Commits pushed together
+# with a later one have no run of their own and are passed over too. SKIP_CI_CHECK=1 ships
+# without the check.
 require_green_ci() {
     if [ "${SKIP_CI_CHECK:-0}" = 1 ]; then
         echo "Skipping the CI check (SKIP_CI_CHECK=1)." >&2
         return
     fi
     HEAD_SHA="$(git rev-parse HEAD)"
-    RUN="$(gh run list --commit "$HEAD_SHA" --workflow ci.yml --limit 1 \
-        --json status,conclusion,url --jq '.[] | "\(.status) \(.conclusion) \(.url)"')" || {
-        echo "Couldn't list the CI runs for $HEAD_SHA." >&2
-        exit 1
-    }
-    case "$RUN" in
-        "completed success "*) ;;
-        "")
-            echo "CI hasn't run for $HEAD_SHA; push it and wait for CI (or set SKIP_CI_CHECK=1)." >&2
-            exit 1 ;;
-        completed*)
-            echo "CI failed for $HEAD_SHA (${RUN##* }); fix it first (or set SKIP_CI_CHECK=1)." >&2
-            exit 1 ;;
-        *)
-            echo "CI is still running for $HEAD_SHA (${RUN##* }); wait for it (or set SKIP_CI_CHECK=1)." >&2
-            exit 1 ;;
-    esac
+    for SHA in $(git rev-list --first-parent --max-count 50 HEAD); do
+        RUN="$(gh run list --commit "$SHA" --workflow ci.yml --limit 1 \
+            --json databaseId,status,conclusion,url --jq '.[] | "\(.status) \(.conclusion) \(.databaseId) \(.url)"')" || {
+            echo "Couldn't list the CI runs for $SHA." >&2
+            exit 1
+        }
+        if [ -z "$RUN" ]; then
+            if [ "$SHA" = "$HEAD_SHA" ]; then
+                echo "CI hasn't run for $HEAD_SHA; push it and wait for CI (or set SKIP_CI_CHECK=1)." >&2
+                exit 1
+            fi
+            continue
+        fi
+        case "$RUN" in
+            "completed success "*) ;;
+            completed*)
+                echo "CI failed for $SHA (${RUN##* }); fix it first (or set SKIP_CI_CHECK=1)." >&2
+                exit 1 ;;
+            *)
+                echo "CI is still running for $SHA (${RUN##* }); wait for it (or set SKIP_CI_CHECK=1)." >&2
+                exit 1 ;;
+        esac
+        RUN_ID="$(echo "$RUN" | cut -d ' ' -f 3)"
+        TESTS="$(gh run view "$RUN_ID" --json jobs --jq '.jobs[] | select(.name == "test") | .conclusion')" || {
+            echo "Couldn't read the jobs of CI run $RUN_ID." >&2
+            exit 1
+        }
+        case "$TESTS" in
+            success) return ;;
+            skipped) ;;
+            *)
+                echo "CI's tests didn't pass for $SHA (${RUN##* }); fix them first (or set SKIP_CI_CHECK=1)." >&2
+                exit 1 ;;
+        esac
+    done
+    echo "No CI run in the last 50 commits ran the tests; push a change to code to run them (or set SKIP_CI_CHECK=1)." >&2
+    exit 1
 }
 
 # The commit the App Store build of vVERSION was uploaded from, or nothing when none was.

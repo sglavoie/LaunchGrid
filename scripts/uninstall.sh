@@ -18,5 +18,9 @@ if ! { grep -qaF -- --unregister-login-item "$BIN" && "$BIN" --unregister-login-
 fi
 scripts/quit-app.sh "$DEST"
 "$LSREGISTER" -u "$DEST" >/dev/null 2>&1 || true
-if [ -w "$INSTALL_DIR" ]; then rm -rf "$DEST"; else sudo rm -rf "$DEST"; fi
+# As the user first: a writable folder can still hold a bundle owned by root (a Mac App Store
+# copy), which only sudo can remove.
+if ! rm -rf "$DEST" 2>/dev/null; then
+    sudo rm -rf "$DEST"
+fi
 echo "Removed $DEST"

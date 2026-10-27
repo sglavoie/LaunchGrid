@@ -96,9 +96,75 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.installed.map(\.name) == ["A", "B"])
         #expect(!state.grid.allApps.map(\.name).contains("LaunchGrid"))
     }
+
+    @Test func aBuildAskedForBeforeTheFirstScanWaitsForIt() {
+        // As closing the welcome window before the apps are found does.
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        #expect(!state.hasScanned)
+        state.buildWhenScanned(style: .alphabetical)
+        #expect(!state.hasGridFile, "no empty layout")
+        state.catalogScanned(["B", "A"].map(installed))
+        #expect(state.hasScanned && state.hasGridFile)
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+        state.catalogScanned(["B", "A", "C"].map(installed))
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "C"], "built once, then reconciled as usual")
+    }
+
+    @Test func aWaitingBuildGivesWayToALayoutChosenMeanwhile() {
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        state.buildWhenScanned(style: .alphabetical)
+        let chosen = Grid(rows: 5, columns: 7, pages: [Page(items: [.app(AppRef(bundleID: "com.test.B", path: "/Applications/B.app", name: "B"))])])
+        state.replaceGrid(chosen) // an import or a grid file
+        state.catalogScanned(["B", "A"].map(installed))
+        #expect(state.grid.pages[0].items.first?.title == "B")
+    }
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
+    @Test(arguments: [false, true])
+    func releasingOverAnAppMergesOnlyAfterDwelling(dwelled: Bool) {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        let release = state.iconCenter(1, inFolder: false)
+        let target = state.grid.pages[0].items[1].id
+        state.dragChanged(start: start, location: release)
+        #expect(state.drag.candidate == target)
+        if dwelled { state.drag.mergeTarget = target }
+
+        state.dragEnded(start: start, location: release, predicted: release)
+        let folders = state.grid.pages[0].items.compactMap(\.folder)
+        #expect(folders.count == (dwelled ? 1 : 0))
+        #expect(Set(state.grid.allApps.map(\.name)) == ["A", "B", "C"])
+    }
+
+    @Test func aDropUsesTheReleasePosition() {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        state.dragChanged(start: start, location: start)
+        #expect(state.drag.active)
+
+        // The release can arrive beyond the last movement event, in the gap after C.
+        let release = CGPoint(x: 320, y: start.y)
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.grid.allApps.map(\.name) == ["B", "C", "A"])
+    }
+
+    @Test func releasingAwayFromAMergeTargetDoesNotMakeAFolder() {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        let target = state.grid.pages[0].items[1].id
+        state.dragChanged(start: start, location: state.iconCenter(1, inFolder: false))
+        // The dwell timer has armed the merge before the final motion/release.
+        state.drag.mergeTarget = target
+        let release = CGPoint(x: 320, y: start.y)
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.grid.pages[0].items.compactMap(\.folder).isEmpty)
+        #expect(state.grid.allApps.map(\.name) == ["B", "C", "A"])
+    }
+
     @Test func escapeEndsTheDragForTheRestOfTheGesture() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500) // 100 × 100 cells
@@ -150,6 +216,28 @@ func installed(_ name: String) -> InstalledApp {
         #expect(notice.message.hasPrefix("2 entries"))
         #expect(notice.file.lastPathComponent.hasPrefix("grid.partial-"))
         #expect(try String(contentsOf: notice.file, encoding: .utf8) == original, "the file as it was")
+    }
+
+    @Test func aPartlyReadableLayoutThatCantBeCopiedIsExplainedAtLaunchAndKept() throws {
+        let original = #"{"version": 1, "rows": 2, "columns": 2, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app", "name": "A"}}, {"type": "app", "app": {"name": "No path"}}, {"type": "app", "app": {"name": "Nor this"}}]}], "removedBundleIDs": []}"#
+        let dir = TempDir.url
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("grid.json")
+        try Data(original.utf8).write(to: url)
+        // No copy can be made beside it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        #expect(state.grid.allApps.map(\.title) == ["A"])
+        #expect(state.hasGridFile, "so the welcome window, which tells of load problems, stays shut")
+        let notice = try #require(state.recoveryNotice, "told at launch instead")
+        #expect(notice.message.hasPrefix("2 entries"))
+        #expect(notice.file == url)
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Renamed") }
+        #expect(!state.saveNow(reportingFailure: false))
+        #expect(state.lastSaveError?.localizedDescription == notice.message, "a save says why, not that the file couldn't be read")
+        #expect(try String(contentsOf: url, encoding: .utf8) == original)
     }
 
     @Test func aPartlyReadableLayoutIsWrittenBackSoTheNextLaunchDoesNotAskAgain() throws {
@@ -299,6 +387,37 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["A", "E", "F"])
     }
 
+    @Test func closingAFolderDropsTheAppsSelectedInsideIt() {
+        let state = makeState(["A", "B", "C", "D"])
+        let id = ids(state)
+        state.apply { _ = $0.group([id["A"]!, id["B"]!], name: "F") }
+        let folder = try! #require(state.grid.pages[0].items.first { $0.folder != nil })
+        state.toggleSelection(id["D"]!)
+        state.openFolder(folder.id)
+        state.toggleSelection(id["A"]!)
+        state.closeFolder(restoringFocus: true)
+        #expect(selected(state) == ["D"], "out of sight, ⌫ or Group would act on it unseen")
+    }
+
+    @Test func aSelectionOnOtherPagesIsCounted() {
+        let state = makeState(["A", "B", "C"])
+        state.apply { $0.pages = [Page(items: Array($0.pages[0].items.prefix(2))), Page(items: Array($0.pages[0].items.suffix(1)))] }
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["B"]!)
+        #expect(state.selectionOutOfView == 0)
+        state.goToPage(1)
+        #expect(state.selectionOutOfView == 2)
+        state.toggleSelection(id["C"]!)
+        #expect(state.selectionOutOfView == 2)
+    }
+
+    @Test func removingOneItemNamesIt() {
+        let state = makeState(["Safari", "Mail"])
+        state.remove([ids(state)["Mail"]!])
+        #expect(state.toast == "Removed Mail — ⌘Z to undo")
+    }
+
     @Test func clearingTheSelectionForgetsTheAnchor() {
         let state = makeState(["A", "B", "C", "D"])
         let id = ids(state)
@@ -388,6 +507,29 @@ func installed(_ name: String) -> InstalledApp {
         state.remove([folder])
         #expect(state.toast == "Removed 2 apps — ⌘Z to undo")
     }
+
+    @Test func emptyingThePageShownGoesBackAPageAsDeletingItDoes() {
+        let state = makeState()
+        let pages = [["A", "B"], ["C", "D"], ["E", "F"]].map { Page(items: $0.map { .app(installed($0).makeRef()) }) }
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: pages))
+        state.currentPage = 1
+        state.focusIndex = 1
+        state.remove(state.currentItems.map(\.id))
+        #expect(state.currentPage == 0)
+        #expect(state.currentItems.map(\.title) == ["A", "B"])
+        #expect(state.focusIndex == 1, "on the last item of the page shown now")
+    }
+
+    @Test func appsSelectedInsideASelectedFolderAreCountedOnce() {
+        let state = makeState(["A", "B", "C"])
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["B"]!)
+        state.groupSelection()
+        let folder = state.grid.pages[0].items.first { $0.folder != nil }!.id
+        state.remove([folder, id["A"]!, id["B"]!, id["C"]!])
+        #expect(state.toast == "Removed 3 apps — ⌘Z to undo")
+    }
 }
 
 @MainActor @Suite(.tempDir) struct PageActionTests {
@@ -409,6 +551,15 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.openFolderID != nil)
         state.newPage()
         #expect(state.openFolderID == nil && state.currentPage == 1)
+    }
+
+    @Test func sortingEverythingAlwaysSaysHowToUndo() {
+        let state = makeState(["C", "B", "A"])
+        state.sortEverything()
+        #expect(state.toast == "Sorted everything — ⌘Z to undo")
+        state.apply { $0.setPageTitle(0, "Work") }
+        state.sortEverything()
+        #expect(state.toast == "Sorted; page titles were cleared — ⌘Z to undo")
     }
 
     @Test func aCancelledDragLeavesFocusOnThePageShown() {
@@ -524,6 +675,35 @@ func installed(_ name: String) -> InstalledApp {
         state.build(style: .byCategory)
         #expect(state.grid.allApps.map(\.name) == ["A", "C"], "rebuilds keep the exclusions")
         #expect(state.grid.removedBundleIDs == ["com.test.B"])
+    }
+
+    @Test func resizingBeforeTheFirstLayoutIsNotUndoneAfterIt() {
+        let dir = TempDir.url
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        state.catalogScanned(["A", "B"].map(installed))
+        state.resize(rows: 4, columns: 6)
+        #expect(!state.canUndo)
+
+        state.build(style: .alphabetical)
+        #expect(state.grid.rows == 4 && state.grid.columns == 6)
+        #expect(!state.canUndo, "nothing to go back to before the first layout")
+        state.undo()
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+    }
+
+    @Test func addingAppsBeforeTheFirstLayoutOnlyIncludesThem() {
+        let dir = TempDir.url
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        state.catalogScanned(["A", "B", "C"].map(installed))
+        state.chooseApps(include: [], exclude: [installed("B"), installed("C")])
+
+        state.addApps([installed("B")])
+        #expect(state.grid.allApps.isEmpty, "one app alone isn't the layout")
+        #expect(!state.hasGridFile)
+        _ = state.saveNow()
+        #expect(!state.hasGridFile, "nor once saved")
+        state.build(style: .alphabetical)
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
     }
 
     @Test func theExcludedCountIsOfInstalledAppsOffTheGrid() {
@@ -705,6 +885,39 @@ func installed(_ name: String) -> InstalledApp {
         while log.entries.count < 3 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(log.entries == ["first saw 1", "second saw 2", "third saw 2"])
         #expect(scans.withLock { $0 } == 2, "requests during a scan share one more")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct HungScanTests {
+    @Test func whatWaitsForAScanThatHangsGoesAheadAndTheScanStillCounts() async throws {
+        let state = makeState()
+        state.scanTimeout = .milliseconds(200)
+        let scans = OSAllocatedUnfairLock(initialState: 0)
+        let release = DispatchSemaphore(value: 0)
+        state.scanner = { _ in
+            let n = scans.withLock { $0 += 1; return $0 }
+            // The first hangs, as a read of a volume that stopped answering does, until released.
+            if n == 1 { release.wait() }
+            return AppScanner.ScanResult(apps: n == 1 ? [installed("A")] : [installed("A"), installed("B")])
+        }
+        let log = RescanTests.Log()
+        state.rescan { log.entries.append("launch saw \(state.installed.count)") }
+        state.rescan { log.entries.append("queued saw \(state.installed.count)") }
+        state.rescan()
+        let deadline = Date().addingTimeInterval(5)
+        while log.entries.count < 2 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(log.entries == ["launch saw 0", "queued saw 0"], "they went ahead without it")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(scans.withLock { $0 } == 1, "no second scan stuck behind the same read")
+        state.rescan { log.entries.append("later saw \(state.installed.count)") }
+        #expect(log.entries.last == "later saw 0", "one asked for now doesn't wait either")
+
+        // It ends after all: taken in, its waiters not run twice, and the queued scan follows.
+        release.signal()
+        while state.installed.count < 2 && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(state.installed.map(\.name) == ["A", "B"])
+        #expect(scans.withLock { $0 } == 2)
+        #expect(log.entries.count == 3)
     }
 }
 
@@ -931,6 +1144,19 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct OutsideAppTests {
+    @Test func missingAppsUsesTheCachedExistenceOfAnOutsideCopy() {
+        let state = makeState()
+        state.prefs.autoAddApps = false
+        let original = InstalledApp(bundleID: "com.test.A", path: "/Elsewhere/A.app", name: "A")
+        let copy = installed("A")
+        state.replaceGrid(Grid(pages: [Page(items: [.app(original.makeRef())])]))
+        state.catalogScanned([copy], outside: AppState.OutsideRead(
+            apps: [original.path: original], checked: [original.path], existing: [original.path]))
+
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.missingApps == [copy], "an existing outside copy does not claim the scanned copy")
+    }
+
     /// A minimal app bundle in the test's folder, outside every scan folder.
     func makeBundle(_ name: String) throws -> String {
         let app = TempDir.url.appendingPathComponent("Elsewhere/\(name).app")
@@ -1082,6 +1308,25 @@ func installed(_ name: String) -> InstalledApp {
         #expect(sandbox.saved.keys.sorted() == ["/Users/x/Apps/A.app"])
     }
 
+    @Test func anAppMovedWhileInUseIsFollowedThroughABookmarkAScanResolved() throws {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Downloads/A.app"))
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Downloads/C.app"))
+        // As a scan resolves them off the main thread: A moved; C, resolved too, is still there.
+        let reopened = ["/Users/x/Downloads/A.app": FileAccess.Opened(url: URL(fileURLWithPath: "/Users/x/Apps/A.app"), stale: true),
+                        "/Users/x/Downloads/C.app": FileAccess.Opened(url: URL(fileURLWithPath: "/Users/x/Downloads/C.app"), stale: false)]
+        let opened = sandbox.opened.count
+        #expect(FileAccess.followVanished(["/Users/x/Downloads/A.app"], prefs: prefs, reopened: reopened)
+            == ["/Users/x/Downloads/A.app": "/Users/x/Apps/A.app"])
+        #expect(sandbox.opened.count == opened, "nothing resolved again on the main thread")
+        #expect(FileAccess.isGranted("/Users/x/Apps/A.app"))
+        #expect(FileAccess.isGranted("/Users/x/Downloads/C.app"), "its own access kept")
+        #expect(sandbox.closed.filter { $0 == "/Users/x/Downloads/C.app" }.count == 1, "the second access to it ended")
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Apps/A.app", "/Users/x/Downloads/C.app"])
+    }
+
     @Test func aStaleBookmarkIsRemadeAndAnUnreachableOneKept() {
         sandbox.install()
         defer { FileAccess.reset() }
@@ -1096,6 +1341,33 @@ func installed(_ name: String) -> InstalledApp {
         sandbox.gone = []
         FileAccess.restore(prefs: prefs)
         #expect(FileAccess.isGranted("/Volumes/Ext/Apps"))
+    }
+
+    @Test func aFolderOnADriveThatComesBackUnderAnotherNameIsFollowed() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        prefs.extraFolders = ["/Volumes/Ext/Apps"]
+        FileAccess.remember(URL(fileURLWithPath: "/Volumes/Ext/Apps"))
+        #expect(FileAccess.isGranted("/Volumes/Ext/Apps"))
+        // Unplugged: the access lapsed with the volume.
+        FileAccess.releaseUnmounted(mounted: ["Macintosh HD"])
+        #expect(!FileAccess.isGranted("/Volumes/Ext/Apps"))
+        #expect(sandbox.closed == ["/Volumes/Ext/Apps"])
+        // Plugged back in, mounted as "Ext 1" since a stale "Ext" was still there.
+        sandbox.moves["/Volumes/Ext/Apps"] = "/Volumes/Ext 1/Apps"
+        #expect(FileAccess.restore(prefs: prefs) == ["/Volumes/Ext/Apps": "/Volumes/Ext 1/Apps"])
+        #expect(FileAccess.isGranted("/Volumes/Ext 1/Apps"))
+        #expect(prefs.extraFolders == ["/Volumes/Ext 1/Apps"])
+    }
+
+    @Test func accessOnMountedVolumesIsKept() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        FileAccess.remember(URL(fileURLWithPath: "/Volumes/Ext/Apps"))
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Tools"))
+        FileAccess.releaseUnmounted(mounted: ["Ext"])
+        #expect(FileAccess.isGranted("/Volumes/Ext/Apps") && FileAccess.isGranted("/Users/x/Tools"))
     }
 
     @Test func appsNoLongerOnTheGridLoseTheirBookmarksAndAccess() {
@@ -1141,6 +1413,21 @@ func installed(_ name: String) -> InstalledApp {
         #expect(!state.canUndo)
     }
 
+    @Test func appsMovedDuringADragAreFollowedAtTheDrop() {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500) // 100 × 100 cells
+        let start = CGPoint(x: 50, y: 50)
+        state.dragChanged(start: start, location: CGPoint(x: 120, y: 60))
+        #expect(state.drag.active)
+        let before = state.grid
+        state.followMovedApps(["/Applications/B.app": "/Users/x/Apps/B.app"])
+        #expect(state.grid == before, "not under the drag")
+
+        state.cancelDrag(reopeningFolder: false)
+        #expect(state.grid.allApps.map(\.path).contains("/Users/x/Apps/B.app"))
+        #expect(!state.canUndo)
+    }
+
     @Test func undoAndRedoDoNotBringBackAPlaceAMovedAppLeft() throws {
         let state = makeState(["A", "B"])
         let b = try #require(state.grid.allApps.last)
@@ -1158,6 +1445,24 @@ func installed(_ name: String) -> InstalledApp {
         state.undo()
         #expect(state.grid.allApps.last?.path == "/Volumes/Ext/B.app")
         #expect(!state.appPathsInUse.contains("/Users/x/Apps/B.app"), "its old bookmark can go")
+    }
+
+    @Test func redoingRemovalAfterACopyMovesKeepsItExcluded() throws {
+        let state = makeState()
+        let original = installed("Xcode")
+        let beta = InstalledApp(bundleID: original.bundleID, path: "/Applications/Xcode-beta.app", name: "Xcode-beta")
+        state.catalogScanned([original, beta])
+        let tile = try #require(state.grid.allApps.first { $0.path == beta.path })
+        state.remove([tile.id])
+        state.undo()
+
+        let moved = InstalledApp(bundleID: beta.bundleID, path: "/Applications/Dev/Xcode-beta.app", name: beta.name)
+        state.followMovedApps([beta.path: moved.path])
+        state.catalogScanned([original, moved])
+        state.redo()
+
+        #expect(state.grid.allApps.map(\.path) == [original.path], "auto-add must not undo the removal")
+        #expect(state.grid.removedBundleIDs == [moved.path])
     }
 }
 
@@ -1261,6 +1566,29 @@ func installed(_ name: String) -> InstalledApp {
         #expect(BackgroundView.solidOpacity(0, reduceTransparency: false) == 1)
         #expect(abs(BackgroundView.solidOpacity(0.5, reduceTransparency: false) - 0.6) < 1e-9)
         #expect(BackgroundView.solidOpacity(0.9, reduceTransparency: false) >= 0.15)
+    }
+}
+
+@Suite struct BlurScaleTests {
+    /// Points per working pixel, for a picture blurred by `radius` on a display `points` wide.
+    func workingPixel(radius: Double, points: CGFloat, pixelScale: CGFloat, source: CGSize) -> CGFloat {
+        let target = ImageBlurCache.Target(radius: radius, size: CGSize(width: points, height: points * 9 / 16), pixelScale: pixelScale)
+        return ImageBlurCache.fill(source: source, target) / ImageBlurCache.workingScale(source: source, target)
+    }
+
+    @Test func aLightBlurOnALargeDisplayIsWorkedFineEnough() {
+        // A 6K wallpaper on a 5K display.
+        let six = CGSize(width: 6144, height: 3456)
+        #expect(workingPixel(radius: 1, points: 2560, pixelScale: 2, source: six) <= 0.5 + 1e-9)
+        #expect(workingPixel(radius: 3, points: 2560, pixelScale: 2, source: six) <= 1.5 + 1e-9)
+        // A heavy blur still works at the reduced size.
+        #expect(abs(ImageBlurCache.workingScale(source: six, .init(radius: 30, size: CGSize(width: 2560, height: 1440), pixelScale: 2)) - 1600.0 / 6144) < 1e-9)
+    }
+
+    @Test func noBlurIsNeverFinerThanTheScreen() {
+        let target = ImageBlurCache.Target(radius: 0, size: CGSize(width: 1512, height: 982), pixelScale: 2)
+        #expect(ImageBlurCache.workingScale(source: CGSize(width: 6144, height: 3456), target) <= 1)
+        #expect(abs(ImageBlurCache.workingScale(source: CGSize(width: 6144, height: 3456), target) - 982.0 / 3456 * 2) < 1e-9, "filled by its height")
     }
 }
 
@@ -1445,5 +1773,20 @@ func installed(_ name: String) -> InstalledApp {
         state.moveToPage([UUID()], pageID: nil)
         #expect(state.grid.pages.count == 1)
         #expect(state.canUndo == undoable)
+    }
+}
+
+@MainActor @Suite struct WindowFrameTests {
+    @Test func aSavedFrameFollowsItsDisplayWhenTheDisplaysAreRearranged() {
+        let right = NSRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let saved = OverlayController.savedFrame(NSRect(x: 1612, y: 100, width: 1000, height: 700), on: right)
+        // Now to the left of the main display.
+        let left = NSRect(x: -2560, y: 0, width: 2560, height: 1440)
+        #expect(OverlayController.frame(saved: saved, on: left) == NSRect(x: -2460, y: 100, width: 1000, height: 700))
+    }
+
+    @Test func aFrameSavedInGlobalCoordinatesStillLoads() {
+        let display = NSRect(x: 1512, y: 0, width: 2560, height: 1440)
+        #expect(OverlayController.frame(saved: "{{1612, 100}, {1000, 700}}", on: display) == NSRect(x: 1612, y: 100, width: 1000, height: 700))
     }
 }

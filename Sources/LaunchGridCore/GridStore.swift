@@ -47,11 +47,51 @@ public struct GridStore: Sendable {
         try GridStore.decode(Data(contentsOf: backupURL))
     }
 
+    /// How many daily copies of the backup are kept.
+    public static let dailyBackupsKept = 3
+
+    /// The backup as it was before the first refresh on `day` (`yyyy-MM-dd`): one regretted
+    /// change saved, quit and saved again after relaunching soon replaces the backup itself.
+    /// Named `.json`, so Load Grid File opens it.
+    public func dailyBackupURL(day: String) -> URL {
+        fileURL.deletingPathExtension().appendingPathExtension("backup-\(day).json")
+    }
+
+    /// The daily copies kept, oldest first.
+    public var dailyBackups: [URL] {
+        let folder = fileURL.deletingLastPathComponent()
+        let prefix = fileURL.deletingPathExtension().lastPathComponent + ".backup-"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        // The date in the name sorts them; no file dates are read.
+        return names.filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }.sorted()
+            .map { folder.appendingPathComponent($0) }
+    }
+
+    /// The day `date` falls on here, as daily backups are named.
+    public static func day(of date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    /// Copies the backup aside the first time it's refreshed on `day`, and lets the oldest
+    /// copies go. Best effort, as the backup is.
+    private func keepDailyCopy(day: String) {
+        let fm = FileManager.default
+        let daily = dailyBackupURL(day: day)
+        guard fm.fileExists(atPath: backupURL.path), !fm.fileExists(atPath: daily.path) else { return }
+        guard (try? fm.copyItem(at: backupURL, to: daily)) != nil else { return }
+        for old in dailyBackups.dropLast(Self.dailyBackupsKept) { try? fm.removeItem(at: old) }
+    }
+
     /// Saves `grid`. With `refreshingBackup`, the file it replaces becomes the backup first;
     /// without, the backup stays as it is, so it can be older than the save before this one.
-    /// Returns whether the backup was refreshed.
+    /// Returns whether the backup was refreshed. The first refresh on each day (`now`'s) keeps
+    /// a copy of the backup it replaces (`dailyBackups`).
     @discardableResult
-    public func save(_ grid: Grid, refreshingBackup: Bool = true) throws -> Bool {
+    public func save(_ grid: Grid, refreshingBackup: Bool = true, now: Date = Date()) throws -> Bool {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
         let target = fileURL
         let fm = FileManager.default
@@ -61,6 +101,7 @@ public struct GridStore: Sendable {
         if refreshingBackup && fm.fileExists(atPath: target.path) {
             // A clone on APFS, so it costs next to nothing, renamed over the old backup so there
             // is always one. Best effort: the save matters more.
+            keepDailyCopy(day: GridStore.day(of: now))
             let backup = backupURL
             let tmp = backup.deletingLastPathComponent()
                 .appendingPathComponent(".\(backup.lastPathComponent).\(UUID().uuidString).tmp")
