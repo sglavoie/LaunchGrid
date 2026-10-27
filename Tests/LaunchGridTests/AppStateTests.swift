@@ -473,6 +473,22 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["A", "E", "F"])
     }
 
+    @Test func shiftClickOnAnotherPageEstablishesANewAnchor() {
+        let state = makeState(["A", "B", "C", "D", "E", "F"])
+        let id = ids(state)
+        state.apply { g in
+            let items = g.pages[0].items
+            g.pages = [Page(items: Array(items.prefix(2))), Page(items: Array(items.dropFirst(2)))]
+        }
+        state.toggleSelection(id["A"]!)
+        state.goToPage(1)
+        state.extendSelection(to: id["C"]!)
+        state.extendSelection(to: id["E"]!)
+        #expect(selected(state) == ["A", "C", "D", "E"])
+        state.extendSelection(to: id["D"]!)
+        #expect(selected(state) == ["A", "C", "D"], "the range shrinks towards C, its new anchor")
+    }
+
     @Test func closingAFolderDropsTheAppsSelectedInsideIt() {
         let state = makeState(["A", "B", "C", "D"])
         let id = ids(state)
@@ -1074,6 +1090,24 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct FolderPageTests {
+    @Test func anOpenFolderFollowsItsPageWhenAnInsertionSpillsIt() throws {
+        let state = makeState()
+        let folder = Folder(name: "F", apps: [installed("A").makeRef()])
+        state.replaceGrid(Grid(rows: 1, columns: 2, pages: [
+            Page(items: [.app(installed("B").makeRef()), .folder(folder)]),
+            Page(items: [.app(installed("C").makeRef())]),
+        ]))
+        state.openFolder(folder.id)
+        // Restoring a temporarily missing app can insert ahead of the open folder.
+        state.apply { $0.insert([.app(installed("Returning").makeRef())], page: 0, at: 0) }
+        let location = try #require(state.grid.locate(folder.id))
+        #expect(location.page == 1)
+        #expect(state.currentPage == location.page, "the folder stays over the page containing its icon")
+        state.closeFolder(restoringFocus: true)
+        let focus = try #require(state.focusIndex)
+        #expect(state.currentItems[safe: focus]?.id == folder.id)
+    }
+
     @Test(arguments: [2, 5])
     func resizingKeepsTheFocusedFolderAppVisible(rows: Int) {
         let state = makeState()

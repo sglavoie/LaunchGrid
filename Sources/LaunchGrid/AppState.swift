@@ -369,7 +369,15 @@ final class AppState {
             }
         }
         currentPage = min(currentPage, grid.pages.count - 1)
-        if let id = openFolderID, grid.folder(id) == nil { openFolderID = nil }
+        if let id = openFolderID {
+            if grid.folder(id) != nil, let location = grid.locate(id) {
+                // An insertion or restoration can spill the open folder onto another page.
+                // Keep its background and the focus returned on closing with its icon.
+                currentPage = location.page
+            } else {
+                openFolderID = nil
+            }
+        }
         // A folder that lost its last page's apps shrinks; don't leave the view on a page it no longer has.
         if let f = openFolder {
             folderPage = max(0, min(folderPage, FolderLayout.pageCount(apps: f.apps.count, grid: grid) - 1))
@@ -1123,7 +1131,9 @@ final class AppState {
         guard let end = ids.firstIndex(of: id) else { return }
         let start = selectionAnchor.flatMap { selection.contains($0) ? ids.firstIndex(of: $0) : nil }
             ?? ids.lastIndex { selection.contains($0) } ?? end
-        if selectionAnchor == nil { selectionAnchor = ids[start] }
+        // An anchor on another page (or removed since the last click) is no longer usable.
+        // Remember the fallback too, so subsequent ranges can shrink towards it.
+        selectionAnchor = ids[start]
         var kept = selection.subtracting(shiftRange)
         let range = Set(ids[min(start, end)...max(start, end)])
         let added = range.subtracting(kept)
