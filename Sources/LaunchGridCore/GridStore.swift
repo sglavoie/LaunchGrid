@@ -61,10 +61,20 @@ public struct GridStore: Sendable {
     public var dailyBackups: [URL] {
         let folder = fileURL.deletingLastPathComponent()
         let prefix = fileURL.deletingPathExtension().lastPathComponent + ".backup-"
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey])) ?? []
+        // Only the dated files we create belong to the rotation. A manual backup or a
+        // directory with a similar name must never be deleted as an old daily copy.
         // The date in the name sorts them; no file dates are read.
-        return names.filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }.sorted()
-            .map { folder.appendingPathComponent($0) }
+        return files.filter { file in
+            let name = file.lastPathComponent
+            guard name.hasPrefix(prefix), name.hasSuffix(".json") else { return false }
+            let day = String(name.dropFirst(prefix.count).dropLast(5))
+            guard day.count == 10,
+                  day.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil,
+                  let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { return false }
+            return values.isRegularFile == true && values.isSymbolicLink != true
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     /// The day `date` falls on here, as daily backups are named.

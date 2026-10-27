@@ -59,7 +59,7 @@ public enum Reconciler {
             guard key.hasPrefix("/"), byPath[key] == nil else { return key }
             return aliases[key].flatMap { byPath[$0]?.path } ?? byFoldedPath[key.lowercased()]?.path ?? key
         })
-        let returning = grid.recentlyPruned.filter {
+        var returning = grid.recentlyPruned.filter {
             (0..<restoreWindow).contains(now.timeIntervalSince($0.prunedAt))
                 && !grid.isExcluded(key: $0.app.key, path: $0.app.path)
         }
@@ -202,6 +202,20 @@ public enum Reconciler {
                         .map(GridItem.app)
                 case .folder(var f):
                     let (apps, folderID, folderName) = (f.apps, f.id, f.name)
+                    // The user may have moved this folder since an earlier app vanished.
+                    // If this pass removes its last app, every waiting app must recreate
+                    // it here, regardless of which one returns first. Capture the live
+                    // slot before pruning, then settle it with the other removed slots.
+                    for k in returning.indices where returning[k].folderID == folderID {
+                        returning[k].pageID = pageID
+                        returning[k].index = i
+                        returning[k].before = before()
+                        returning[k].folderName = folderName
+                        returning[k].pageEmptied = false
+                        returning[k].pageIndex = nil
+                        returning[k].pageTitle = nil
+                        returning[k].pageBefore = nil
+                    }
                     f.apps = apps.enumerated().compactMap { fi, a in
                         let app = refresh(a) {
                             PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,

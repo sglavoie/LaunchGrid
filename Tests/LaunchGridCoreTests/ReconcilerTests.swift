@@ -9,6 +9,37 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test(arguments: [false, true], [false, true])
+    func aMovedFolderReturnsAtItsNewLocationAfterItsAppsUpdate(emptyDestination: Bool, returnLastFirst: Bool) {
+        let a = installed("A"), b = installed("B"), sentinel = installed("Other")
+        let folder = Folder(name: "Work", apps: [a.makeRef(), b.makeRef()])
+        let sentinelRef = sentinel.makeRef()
+        var g = Grid(pages: [Page(items: [.folder(folder), .app(sentinelRef)]),
+                            Page(title: "Destination")])
+        let destinationID = g.pages[1].id
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: [b, sentinel], autoAdd: false,
+                                pathExists: { $0 != a.path }, now: now)
+        g.move([folder.id], toPage: 1, at: 0)
+        if !emptyDestination { g.move([sentinelRef.id], toPage: 1, at: 0) }
+        let expected = g.pages
+
+        // The folder's last visible app disappears after the user moved it.
+        _ = Reconciler.reconcile(&g, installed: [sentinel], autoAdd: false,
+                                pathExists: { $0 == sentinel.path }, now: now + 5)
+        let first = returnLastFirst ? b : a
+        _ = Reconciler.reconcile(&g, installed: [first, sentinel], autoAdd: false,
+                                pathExists: { $0 == first.path || $0 == sentinel.path }, now: now + 10)
+        _ = Reconciler.reconcile(&g, installed: [a, b, sentinel], autoAdd: false, now: now + 15)
+
+        #expect(g.pages.map(\.id) == expected.map(\.id))
+        #expect(g.pages.map(\.title) == expected.map(\.title))
+        #expect(g.pages.first { $0.id == destinationID }?.items.map(\.id)
+                == expected.first { $0.id == destinationID }?.items.map(\.id))
+        #expect(g.folder(folder.id)?.apps.map(\.id) == folder.apps.map(\.id))
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
     @Test(arguments: [false, true])
     func ungroupingAPartlyRestoredFolderIsRespectedWhenTheRestReturn(returnLastFirst: Bool) {
         let a = installed("A"), b = installed("B"), sentinel = installed("Other")

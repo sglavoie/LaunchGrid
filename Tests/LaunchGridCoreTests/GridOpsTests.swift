@@ -582,6 +582,30 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try store.load().rows == 8)
     }
 
+    @Test func dailyBackupRotationLeavesOtherFilesAndDirectoriesAlone() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        try store.save(Grid(), now: start)
+        let manualNames = ["grid.backup-0000-manual.json", "grid.backup-latest.json", "grid.backup-.json"]
+        let contents = Data("Keep this manual backup".utf8)
+        for name in manualNames { try contents.write(to: dir.appendingPathComponent(name)) }
+        let folder = dir.appendingPathComponent("grid.backup-2000-01-01.json")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try contents.write(to: folder.appendingPathComponent("keep.txt"))
+
+        for day in 0...5 { try store.save(Grid(), now: start + Double(day) * 86400) }
+
+        #expect(store.dailyBackups.count == GridStore.dailyBackupsKept)
+        #expect(store.dailyBackups.map(\.lastPathComponent) == (3...5).map {
+            "grid.backup-\(GridStore.day(of: start + Double($0) * 86400)).json"
+        })
+        for name in manualNames { #expect(try Data(contentsOf: dir.appendingPathComponent(name)) == contents) }
+        #expect(try Data(contentsOf: folder.appendingPathComponent("keep.txt")) == contents)
+    }
+
     @Test func saveKeepsASymlinkedFileASymlink() throws {
         let fm = FileManager.default
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("store-\(UUID().uuidString)")
