@@ -68,7 +68,11 @@ final class AppState {
     @ObservationIgnored private var outsideChecked: Set<String> = []
     @ObservationIgnored private var outsideExisting: Set<String> = []
     /// Paths being read off the main thread for `reconcile()`, which runs again once they are.
-    @ObservationIgnored private var outsideReading: Set<String> = []
+    @ObservationIgnored private(set) var outsideReading: Set<String> = []
+    /// A completed scan replaces the outside-app snapshot and supersedes reads already in flight.
+    @ObservationIgnored private var outsideReadGeneration = 0
+    /// The outside-app read itself; tests can hold a read while a newer scan arrives.
+    @ObservationIgnored var outsideReader: @Sendable ([String]) -> OutsideRead = { AppState.readOutsideApps($0) }
     /// Folders the last scan couldn't list (denied, stalled, a lapsed bookmark): their apps
     /// went unseen, not away. Observed, so Settings can point them out.
     private(set) var unlistedFolders: [String] = []
@@ -615,6 +619,7 @@ final class AppState {
     func catalogScanned(_ apps: [InstalledApp], outside: OutsideRead? = nil,
                         unlisted: [String] = [], aliases: [String: String] = [:], disk: DiskState? = nil,
                         reopened: [String: FileAccess.Opened]? = nil) {
+        outsideReadGeneration &+= 1
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
@@ -781,12 +786,18 @@ final class AppState {
     private func readOutsideAppsInBackground(_ paths: Set<String>) {
         guard !paths.isEmpty else { return }
         outsideReading.formUnion(paths)
+        let reader = outsideReader
+        let generation = outsideReadGeneration
         Task {
-            let read = await Disk.run { Self.readOutsideApps(Array(paths)) }
+            let read = await Disk.run { reader(Array(paths)) }
             outsideReading.subtract(paths)
-            outsideApps.merge(read.apps) { _, new in new }
-            outsideChecked.formUnion(read.checked)
-            outsideExisting.formUnion(read.existing)
+            if generation == outsideReadGeneration {
+                outsideApps.merge(read.apps) { _, new in new }
+                outsideChecked.formUnion(read.checked)
+                outsideExisting.formUnion(read.existing)
+            }
+            // A newer scan may not cover apps added since it started. Reconcile even when
+            // discarding this read, so those paths are checked again instead of kept forever.
             if hasGridFile { reconcile() }
         }
     }

@@ -1494,6 +1494,39 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct OutsideAppTests {
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+    func olderOutsideReadsDoNotReplaceNewerScanResults(deleted: Bool, coveredByScan: Bool) async throws {
+        let state = makeState(["A"])
+        state.prefs.autoAddApps = false
+        state.catalogScanned([installed("A")])
+        let outside = InstalledApp(bundleID: "com.test.Outside", path: "/Elsewhere/Outside.app", name: "Outside")
+        let updated = InstalledApp(bundleID: outside.bundleID, path: outside.path, name: "Updated")
+        let latest = AppState.OutsideRead(apps: deleted ? [:] : [outside.path: updated], checked: [outside.path],
+                                        existing: deleted ? [] : [outside.path])
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        state.outsideReader = { paths in
+            let first = reads.withLock { $0 += 1; return $0 == 1 }
+            if !first { return latest }
+            release.wait()
+            return AppState.OutsideRead(apps: [outside.path: outside], checked: Set(paths), existing: [outside.path])
+        }
+        var grid = state.grid
+        grid.pages[0].items.append(.app(outside.makeRef()))
+        state.replaceGrid(grid)
+        while reads.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(10)) }
+
+        // A newer scan supersedes this read. It may have started before the tile was added,
+        // in which case it doesn't cover the outside app and a fresh read is needed.
+        state.catalogScanned([installed("A")], outside: coveredByScan ? latest : AppState.OutsideRead())
+        release.signal()
+        while !state.outsideReading.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(state.grid.allApps.map(\.name) == (deleted ? ["A"] : ["A", "Updated"]))
+        #expect(state.grid.recentlyPruned.map(\.app.path) == (deleted ? [outside.path] : []))
+        #expect(reads.withLock { $0 } == (coveredByScan ? 1 : 2))
+    }
+
     @Test func missingAppsUsesTheCachedExistenceOfAnOutsideCopy() {
         let state = makeState()
         state.prefs.autoAddApps = false
