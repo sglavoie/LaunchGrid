@@ -689,6 +689,14 @@ func tempDir(_ prefix: String) -> URL {
         #expect(found.first { $0.bundleID == "t.two" }?.name == "Two")
     }
 
+    @Test func findsAppsWhoseExtensionIsInCapitals() throws {
+        let root = tempDir("scan")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeFakeApp("Shouting.APP", id: "t.shout", in: root)
+        try makeFakeApp("Plain.app", id: "t.plain", in: root)
+        #expect(Set(AppScanner.scan(roots: [root]).compactMap(\.bundleID)) == ["t.shout", "t.plain"])
+    }
+
     @Test func respectsTheDepthLimitButWalksNestedRootsFully() throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -915,6 +923,32 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.grid.allApps.map(\.path) == [link.path])
         let unknown = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7) { _ in real.path }
         #expect(unknown.grid.allApps.map(\.path) == [real.path], "an app the scan didn't find keeps its own path")
+    }
+
+    @Test func launchServicesCopiesInTheTrashOrOnOtherVolumesAreSkipped() throws {
+        let dir = tempDir("lasting")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Kept.app", id: "com.kept", in: dir)
+        let kept = dir.appendingPathComponent("Kept.app").path
+        #expect(LaunchpadImporter.isLastingCopy(kept))
+        #expect(!LaunchpadImporter.isLastingCopy(dir.appendingPathComponent("Gone.app").path), "deleted since")
+        #expect(!LaunchpadImporter.isLastingCopy(NSHomeDirectory() + "/.Trash/Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy("/Volumes/Backup/Applications/Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy("/Volumes/Old 1.0/.Trashes/501/Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy("/private/var/folders/x/T/AppTranslocation/ABC/d/Old.app"))
+
+        // Only for an app the scan didn't find: the database's own paths and the scan's copies stand.
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0), Row(id: 12, type: 4, parent: 10, ordering: 1)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "Kept", bundleID: "com.kept"),
+                    12: LaunchpadImporter.AppRow(title: "Old", bundleID: "com.old")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                        keeps: LaunchpadImporter.isLastingCopy) {
+            $0 == "com.kept" ? kept : "/Volumes/Old 1.0/Old.app"
+        }
+        #expect(r.grid.allApps.map(\.path) == [kept])
+        #expect(r.skipped == ["Old"])
     }
 
     @Test func copiesSharingABundleIDAreToldApartByTheirBookmarks() throws {

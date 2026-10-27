@@ -79,6 +79,11 @@ final class AppState {
     /// LaunchGrid's own bundle ID: it never belongs on its own grid.
     @ObservationIgnored var ownBundleID = Bundle.main.bundleIdentifier
     private(set) var hasGridFile: Bool
+    /// Whether a scan has found the installed apps yet: building before then would lay out
+    /// none of them, or none with their category.
+    private(set) var hasScanned = false
+    /// A build asked for before the first scan finished, made once it has.
+    @ObservationIgnored private var buildAfterScan: BuildStyle?
     /// Set when the saved layout could not be loaded at launch and was moved aside.
     private(set) var loadProblem: (message: String, backup: URL)?
     /// Set when an unreadable layout was replaced by the previous save, or entries of it had to
@@ -152,6 +157,8 @@ final class AppState {
     /// An app opened behind the grid, which stayed up: it comes forward when the grid hides.
     @ObservationIgnored var onLaunchedBehind: (NSRunningApplication) -> Void = { _ in }
     @ObservationIgnored var onError: (_ title: String, _ detail: String) -> Void = { _, _ in }
+    /// A failed save, told with ways to keep the layout meanwhile; `onError` when not set.
+    @ObservationIgnored var onSaveFailure: ((_ title: String, _ detail: String) -> Void)?
     @ObservationIgnored var onOpenSettings: () -> Void = {}
     @ObservationIgnored var onAddMissing: () -> Void = {}
     /// After each save, with the paths of every app the grid, its undo history or its
@@ -173,8 +180,11 @@ final class AppState {
     @ObservationIgnored var scanTimeout: Duration = .seconds(60)
     /// The scan itself; tests swap in a fake.
     @ObservationIgnored var scanner: @Sendable ([URL]) -> AppScanner.ScanResult = { AppScanner.scanReporting(roots: $0) }
-    /// Set when an unreadable layout couldn't be moved aside: saving would replace it.
+    /// Set when an unreadable layout couldn't be moved aside (or a partly readable one copied
+    /// aside): saving would replace it.
     @ObservationIgnored private var savesBlocked = false
+    /// Why saves are blocked, for when one is tried.
+    @ObservationIgnored private var savesBlockedDetail: String?
 
     init(prefs: Preferences, store: GridStore) {
         self.prefs = prefs
@@ -228,7 +238,7 @@ final class AppState {
         if skipped > 0 { keepPartlyReadFile(skipped: skipped) }
         // The unreadable file is gone: write the restored layout back before anything else
         // can go wrong, or the next launch would find no layout at all.
-        if recoveryNotice != nil { scheduleSave() }
+        if recoveryNotice != nil && !savesBlocked { scheduleSave() }
     }
 
     /// Some entries of the saved layout couldn't be read and were left out: a copy of the
@@ -251,9 +261,11 @@ final class AppState {
             // Without a copy, saving would lose the entries for good.
             NSLog("LaunchGrid: \(skipped) entries of the grid could not be read nor the file copied (\(error)); not saving over it")
             savesBlocked = true
-            loadProblem = (
-                String(localized: "\(skipped) entries in your saved layout could not be read, and the file couldn't be copied aside, so LaunchGrid won't save over it. Move \(store.url.lastPathComponent) elsewhere and your changes will be saved."),
-                store.url)
+            let message = String(localized: "\(skipped) entries in your saved layout could not be read, and the file couldn't be copied aside, so LaunchGrid won't save over it. Move \(store.url.lastPathComponent) elsewhere and your changes will be saved.")
+            loadProblem = (message, store.url)
+            savesBlockedDetail = message
+            // The rest loaded, so the welcome window, which tells of `loadProblem`, won't open.
+            recoveryNotice = (String(localized: "Part of your layout could not be read"), message, store.url)
         }
     }
 
@@ -431,7 +443,7 @@ final class AppState {
         if savesBlocked {
             guard !store.exists else {
                 NSLog("LaunchGrid: not saving over the layout that couldn't be read")
-                let detail = String(localized: "LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. Move that file elsewhere and your changes will be saved.")
+                let detail = savesBlockedDetail ?? String(localized: "LaunchGrid won't replace \(store.url.lastPathComponent), the saved layout it couldn't read. Move that file elsewhere and your changes will be saved.")
                 // Not saved, so quitting asks first, as for any other failed save.
                 lastSaveError = CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: detail])
                 lastSaveFailureDetail = detail
@@ -439,6 +451,7 @@ final class AppState {
                 return nil
             }
             savesBlocked = false // moved out of the way since
+            savesBlockedDetail = nil
         }
         return gridGeneration
     }
@@ -503,7 +516,7 @@ final class AppState {
         if isShown { showToast(String(localized: "Could not save your layout")); return }
         guard !saveFailureReported else { return }
         saveFailureReported = true
-        onError(String(localized: "Could not save your layout"), detail)
+        (onSaveFailure ?? onError)(String(localized: "Could not save your layout"), detail)
     }
 
     // MARK: Catalog
@@ -596,7 +609,13 @@ final class AppState {
         let disk = disk ?? DiskState.read(roots: prefs.scanRoots.map(\.path), unlisted: unlisted)
         if self.disk != disk { self.disk = disk }
         if unlistedFolders != unlisted { unlistedFolders = unlisted }
-        if hasGridFile { reconcile() }
+        if !hasScanned { hasScanned = true }
+        if let style = buildAfterScan {
+            buildAfterScan = nil
+            if !hasGridFile { build(style: style) }
+        } else if hasGridFile {
+            reconcile()
+        }
         refreshUpdatedIcons()
     }
 
@@ -790,6 +809,11 @@ final class AppState {
         replaceGrid(new)
     }
 
+    /// Builds now, or once the first scan has found the installed apps.
+    func buildWhenScanned(style: BuildStyle) {
+        if hasScanned { build(style: style) } else { buildAfterScan = style }
+    }
+
     // MARK: Choosing apps
 
     /// The grid's apps from outside the scan folders, as last read from disk (with their
@@ -900,6 +924,9 @@ final class AppState {
             } catch {
                 // Cancelled by the person, e.g. at Gatekeeper's prompt: they know.
                 if Launcher.isUserCancel(error) { return }
+                // Gone: one outside the scan folders (added with Browse) has no watcher to tell,
+                // and would stay until the next periodic scan. Look again now.
+                if error is Launcher.NotFound { rescan() }
                 if isShown {
                     showToast(String(localized: "Could not open \(app.title): \(error.localizedDescription)"))
                 } else {
@@ -998,6 +1025,9 @@ final class AppState {
     /// - Parameter restoringFocus: put keyboard focus back on the folder's cell (Esc).
     func closeFolder(restoringFocus: Bool = false) {
         let cell = restoringFocus ? openFolderID.flatMap { id in currentItems.firstIndex { $0.id == id } } : nil
+        // Apps selected inside it would stay selected out of sight, for ⌫ or Group to act on
+        // unseen. Not while they're being dragged out of it.
+        if !drag.active, let folder = openFolder { selection.subtract(folder.apps.map(\.id)) }
         openFolderID = nil // animated by the folder layer, as opening is
         focusIndex = cell
     }
@@ -1077,6 +1107,12 @@ final class AppState {
     /// Whether the selection is in view to act on; search results hide it.
     var selectionActionable: Bool { query.isEmpty && !selection.isEmpty }
 
+    /// How many selected items aren't in view: on other pages (a selection can span them).
+    var selectionOutOfView: Int {
+        let shown = Set((openFolder?.apps.map(\.id) ?? []) + currentItems.map(\.id))
+        return selection.subtracting(shown).count
+    }
+
     var orderedSelection: [UUID] {
         // A folder's own apps follow it, so ones selected inside an open folder count too.
         grid.pages.flatMap { $0.items.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) } }.filter { selection.contains($0) }
@@ -1084,6 +1120,8 @@ final class AppState {
 
     func remove(_ ids: [UUID]) {
         let count = ids.count
+        // Named when it's one, so it's clear which went (VoiceOver reads it out too).
+        let name = count == 1 ? grid.item(ids[0])?.title : nil
         // A folder takes all its apps with it: say how many, as they leave the grid too.
         let folders = ids.compactMap { grid.item($0)?.folder }
         // Apps also selected inside a selected folder are among its apps already.
@@ -1096,7 +1134,8 @@ final class AppState {
         if !folders.isEmpty {
             showToast(String(localized: "Removed \(apps) apps — ⌘Z to undo"))
         } else {
-            showToast(count == 1 ? String(localized: "Removed — ⌘Z to undo") : String(localized: "Removed \(count) items — ⌘Z to undo"))
+            showToast(count > 1 ? String(localized: "Removed \(count) items — ⌘Z to undo")
+                      : name.map { String(localized: "Removed \($0) — ⌘Z to undo") } ?? String(localized: "Removed — ⌘Z to undo"))
         }
     }
 
@@ -1177,8 +1216,19 @@ final class AppState {
         let hadTitles = grid.pages.contains { $0.title != nil }
         apply { $0.sortEverything(folders: prefs.folderPlacement) }
         goToPage(0)
-        // Re-flowing makes page titles meaningless, so they go; say so.
-        if hadTitles { showToast(String(localized: "Sorted; page titles were cleared — ⌘Z to undo")) }
+        // Re-flowing makes page titles meaningless, so they go; say so. Every app may have moved:
+        // say how to get them back either way.
+        showToast(hadTitles ? String(localized: "Sorted; page titles were cleared — ⌘Z to undo")
+                  : String(localized: "Sorted everything — ⌘Z to undo"))
+    }
+
+    /// What Sort Everything does, for the questions asked before it where the grid is out of view.
+    var sortEverythingDetail: String {
+        switch prefs.folderPlacement {
+        case .first: String(localized: "Apps and folders are sorted by name, folders first, and fill each page before the next. Folders keep their apps; page titles are cleared. ⌘Z in the grid undoes it.")
+        case .last: String(localized: "Apps and folders are sorted by name, folders last, and fill each page before the next. Folders keep their apps; page titles are cleared. ⌘Z in the grid undoes it.")
+        case .mixed: String(localized: "Apps and folders are sorted by name together and fill each page before the next. Folders keep their apps; page titles are cleared. ⌘Z in the grid undoes it.")
+        }
     }
 
     func beginRename(_ id: UUID) {
@@ -1350,7 +1400,7 @@ final class LayoutWriter: @unchecked Sendable {
         #endif
         let refreshBackup = lastBackup.map { now().timeIntervalSince($0) >= Self.backupInterval } ?? true
         do {
-            if try store.save(grid, refreshingBackup: refreshBackup) { lastBackup = now() }
+            if try store.save(grid, refreshingBackup: refreshBackup, now: now()) { lastBackup = now() }
             return nil
         } catch {
             return error

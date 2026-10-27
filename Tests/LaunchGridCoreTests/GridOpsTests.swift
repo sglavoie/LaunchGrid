@@ -486,6 +486,29 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try store.loadBackup().rows == 3)
     }
 
+    @Test func theFirstBackupOfEachDayIsKeptForAFewDays() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let day: TimeInterval = 24 * 60 * 60
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        try store.save(Grid(rows: 1, columns: 1), now: start)
+        try store.save(Grid(rows: 2, columns: 2), now: start)
+        #expect(store.dailyBackups.isEmpty, "no backup to copy before this one")
+        // Later saves the same day leave the day's copy as it was.
+        try store.save(Grid(rows: 3, columns: 3), now: start)
+        try store.save(Grid(rows: 4, columns: 4), now: start)
+        #expect(store.dailyBackups.map(\.lastPathComponent) == ["grid.backup-\(GridStore.day(of: start)).json"])
+        #expect(try GridStore(url: store.dailyBackups[0]).load().rows == 1, "the backup as the day began")
+        #expect(try store.loadBackup().rows == 3)
+
+        for n in 1...4 { try store.save(Grid(rows: 4 + n, columns: 1), now: start + Double(n) * day) }
+        #expect(store.dailyBackups.count == GridStore.dailyBackupsKept)
+        #expect(store.dailyBackups.last?.lastPathComponent == "grid.backup-\(GridStore.day(of: start + 4 * day)).json")
+        #expect(!store.dailyBackups.contains { $0.lastPathComponent.contains(GridStore.day(of: start)) }, "the oldest go")
+        #expect(try store.load().rows == 8)
+    }
+
     @Test func saveKeepsASymlinkedFileASymlink() throws {
         let fm = FileManager.default
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("store-\(UUID().uuidString)")
@@ -578,6 +601,28 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("Wi-Fi Explorer", query: " - ") == nil)
         #expect(Search.score("Почта", query: "пт") == nil, "two Cyrillic letters aren't a subsequence either")
         #expect(Search.score("Почта", query: "пчт") != nil)
+    }
+
+    @Test func aConsonantTypedBeforeItsVowelSignStillMatches() {
+        // In Devanagari and Thai, a consonant and its vowel or tone mark are one character.
+        #expect(Search.score("किताब", query: "क") != nil)
+        #expect(Search.score("किताब", query: "कि") != nil)
+        #expect(Search.score("किताब", query: "कित") != nil)
+        #expect(Search.score("กินข้าว", query: "ก") != nil)
+        #expect(Search.score("กินข้าว", query: "ข") != nil, "inside the name, as a substring")
+        #expect(Search.score("กินข้าว", query: "กินข") != nil)
+        #expect(Search.score("Hindi किताब", query: "क")! > 650, "a word start")
+        #expect(Search.score("Mail", query: "mai") == 900 - 4, "Latin as before")
+    }
+
+    @Test func koreanNamesAreFoundByTheirFirstConsonants() {
+        #expect(Search.score("한글", query: "ㅎㄱ") == 600)
+        #expect(Search.score("카카오톡", query: "ㅋㅋ") == 600)
+        #expect(Search.score("카카오톡", query: "ㅋㅋㅇㅌ") == 600)
+        #expect(Search.score("네이버 지도", query: "ㅈㄷ") == 600, "a later word")
+        #expect(Search.score("한글", query: "ㅎ")! > 600, "a prefix of the letters as typed is better")
+        #expect(Search.score("카카오톡", query: "ㄱㄴ") == nil)
+        #expect(Search.score("Keynote", query: "ㅋ") == nil)
     }
 
     @Test func initialsSkipCapitalsInsideEarlierWordsAndApostrophes() {

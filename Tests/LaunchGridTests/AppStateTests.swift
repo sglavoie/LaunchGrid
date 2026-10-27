@@ -96,6 +96,28 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.installed.map(\.name) == ["A", "B"])
         #expect(!state.grid.allApps.map(\.name).contains("LaunchGrid"))
     }
+
+    @Test func aBuildAskedForBeforeTheFirstScanWaitsForIt() {
+        // As closing the welcome window before the apps are found does.
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        #expect(!state.hasScanned)
+        state.buildWhenScanned(style: .alphabetical)
+        #expect(!state.hasGridFile, "no empty layout")
+        state.catalogScanned(["B", "A"].map(installed))
+        #expect(state.hasScanned && state.hasGridFile)
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+        state.catalogScanned(["B", "A", "C"].map(installed))
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "C"], "built once, then reconciled as usual")
+    }
+
+    @Test func aWaitingBuildGivesWayToALayoutChosenMeanwhile() {
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        state.buildWhenScanned(style: .alphabetical)
+        let chosen = Grid(rows: 5, columns: 7, pages: [Page(items: [.app(AppRef(bundleID: "com.test.B", path: "/Applications/B.app", name: "B"))])])
+        state.replaceGrid(chosen) // an import or a grid file
+        state.catalogScanned(["B", "A"].map(installed))
+        #expect(state.grid.pages[0].items.first?.title == "B")
+    }
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
@@ -150,6 +172,28 @@ func installed(_ name: String) -> InstalledApp {
         #expect(notice.message.hasPrefix("2 entries"))
         #expect(notice.file.lastPathComponent.hasPrefix("grid.partial-"))
         #expect(try String(contentsOf: notice.file, encoding: .utf8) == original, "the file as it was")
+    }
+
+    @Test func aPartlyReadableLayoutThatCantBeCopiedIsExplainedAtLaunchAndKept() throws {
+        let original = #"{"version": 1, "rows": 2, "columns": 2, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app", "name": "A"}}, {"type": "app", "app": {"name": "No path"}}, {"type": "app", "app": {"name": "Nor this"}}]}], "removedBundleIDs": []}"#
+        let dir = TempDir.url
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("grid.json")
+        try Data(original.utf8).write(to: url)
+        // No copy can be made beside it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        #expect(state.grid.allApps.map(\.title) == ["A"])
+        #expect(state.hasGridFile, "so the welcome window, which tells of load problems, stays shut")
+        let notice = try #require(state.recoveryNotice, "told at launch instead")
+        #expect(notice.message.hasPrefix("2 entries"))
+        #expect(notice.file == url)
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Renamed") }
+        #expect(!state.saveNow(reportingFailure: false))
+        #expect(state.lastSaveError?.localizedDescription == notice.message, "a save says why, not that the file couldn't be read")
+        #expect(try String(contentsOf: url, encoding: .utf8) == original)
     }
 
     @Test func aPartlyReadableLayoutIsWrittenBackSoTheNextLaunchDoesNotAskAgain() throws {
@@ -299,6 +343,37 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["A", "E", "F"])
     }
 
+    @Test func closingAFolderDropsTheAppsSelectedInsideIt() {
+        let state = makeState(["A", "B", "C", "D"])
+        let id = ids(state)
+        state.apply { _ = $0.group([id["A"]!, id["B"]!], name: "F") }
+        let folder = try! #require(state.grid.pages[0].items.first { $0.folder != nil })
+        state.toggleSelection(id["D"]!)
+        state.openFolder(folder.id)
+        state.toggleSelection(id["A"]!)
+        state.closeFolder(restoringFocus: true)
+        #expect(selected(state) == ["D"], "out of sight, ⌫ or Group would act on it unseen")
+    }
+
+    @Test func aSelectionOnOtherPagesIsCounted() {
+        let state = makeState(["A", "B", "C"])
+        state.apply { $0.pages = [Page(items: Array($0.pages[0].items.prefix(2))), Page(items: Array($0.pages[0].items.suffix(1)))] }
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["B"]!)
+        #expect(state.selectionOutOfView == 0)
+        state.goToPage(1)
+        #expect(state.selectionOutOfView == 2)
+        state.toggleSelection(id["C"]!)
+        #expect(state.selectionOutOfView == 2)
+    }
+
+    @Test func removingOneItemNamesIt() {
+        let state = makeState(["Safari", "Mail"])
+        state.remove([ids(state)["Mail"]!])
+        #expect(state.toast == "Removed Mail — ⌘Z to undo")
+    }
+
     @Test func clearingTheSelectionForgetsTheAnchor() {
         let state = makeState(["A", "B", "C", "D"])
         let id = ids(state)
@@ -432,6 +507,15 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.openFolderID != nil)
         state.newPage()
         #expect(state.openFolderID == nil && state.currentPage == 1)
+    }
+
+    @Test func sortingEverythingAlwaysSaysHowToUndo() {
+        let state = makeState(["C", "B", "A"])
+        state.sortEverything()
+        #expect(state.toast == "Sorted everything — ⌘Z to undo")
+        state.apply { $0.setPageTitle(0, "Work") }
+        state.sortEverything()
+        #expect(state.toast == "Sorted; page titles were cleared — ⌘Z to undo")
     }
 
     @Test func aCancelledDragLeavesFocusOnThePageShown() {

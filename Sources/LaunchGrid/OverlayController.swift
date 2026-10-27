@@ -390,8 +390,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
             } else if mods == [.control, .shift] {
                 showPageMenu()
             } else if state.editing && state.query.isEmpty {
-                // Edit mode renames: the focused item, else the open folder.
-                if let id = focusedID ?? state.openFolderID { state.beginRename(id) }
+                // Edit mode opens a focused folder, as a click does, to arrange it; Return again
+                // renames it. Otherwise it renames the focused app, else the open folder.
+                if let id = focusedID, state.openFolder == nil, let item = state.grid.item(id), item.folder != nil {
+                    state.activate(item)
+                } else if let id = focusedID ?? state.openFolderID {
+                    state.beginRename(id)
+                }
             } else {
                 activateFocused()
             }
@@ -468,7 +473,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "g": state.groupSelection()
             case "n": state.newPage() // which clears the search and closes the folder first
             case ",": state.onOpenSettings()
-            case "w": hide()
+            // ⌘H would hide the app around the grid, leaving its search, folder and edit mode
+            // as they were; hide the grid itself. The panel can't be minimised: ⌘M would beep.
+            case "w", "h": hide()
+            case "m": break
             case "q": NSApp.terminate(nil)
             case "v":
                 if let s = NSPasteboard.general.string(forType: .string) {

@@ -104,7 +104,7 @@ public enum AppScanner {
                 if homebrewOpt, let target, isHomebrewAlias(child, target: target) { continue }
                 let path = linked ? dir.appendingPathComponent(child.lastPathComponent) : child
                 // Apps flagged hidden still count: /Applications/Safari.app is a hidden symlink.
-                if child.pathExtension == "app", v.contentType?.conforms(to: .applicationBundle) == true {
+                if child.pathExtension.lowercased() == "app", v.contentType?.conforms(to: .applicationBundle) == true {
                     consider(path, realPath: target?.path ?? (real as NSString).appendingPathComponent(child.lastPathComponent))
                 } else if depth < limit, own.isHidden != true, v.isDirectory == true, v.isPackage != true {
                     walk(path, depth: depth + 1, limit: limit)

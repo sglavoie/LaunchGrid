@@ -44,7 +44,9 @@ struct BackgroundView: View {
         .opacity(prefs.background == .solid ? Self.solidOpacity(prefs.backgroundOpacity, reduceTransparency: reduceTransparency) : 1)
         .ignoresSafeArea()
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)) { _ in
-            spaceChanges += 1
+            // Only while it's in view: hidden, the panel's view lives on, and each switch would
+            // read (and maybe blur) a picture no one sees. The next show looks it up anyway.
+            if state.isShown { spaceChanges += 1 }
         }
     }
 
