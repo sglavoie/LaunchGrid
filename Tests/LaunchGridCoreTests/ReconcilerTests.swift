@@ -10,6 +10,46 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 
 @Suite struct ReconcilerTests {
     @Test(arguments: [false, true])
+    func removingOneCopyKeepsATemporarilyMissingCopyIncluded(throughChooser: Bool) {
+        let a = installed("A"), copy = installed("A-copy", id: "com.test.a")
+        let missing = a.makeRef(), kept = copy.makeRef()
+        var g = Grid(pages: [Page(items: [.app(missing), .app(kept)])])
+        _ = Reconciler.reconcile(&g, installed: [copy], autoAdd: false,
+                                 pathExists: { $0 == copy.path })
+
+        if throughChooser {
+            Reconciler.choose(include: [], exclude: [copy], in: &g, installed: [copy])
+        } else {
+            g.remove([kept.id], installed: [copy])
+        }
+        _ = Reconciler.reconcile(&g, installed: [a, copy], autoAdd: false)
+
+        #expect(g.allApps.map(\.id) == [missing.id])
+        #expect(!g.isExcluded(a))
+        #expect(g.isExcluded(copy))
+    }
+
+    @Test(arguments: [false, true])
+    func removingAFolderAlsoExcludesItsTemporarilyMissingApps(autoAdd: Bool) {
+        let a = installed("A"), b = installed("B")
+        let copy = installed("A-copy", id: a.bundleID)
+        let folder = Folder(name: "Work", apps: [a.makeRef(), b.makeRef()])
+        var g = Grid(pages: [Page(items: [.folder(folder), .app(copy.makeRef())])])
+        _ = Reconciler.reconcile(&g, installed: [b, copy], autoAdd: autoAdd,
+                                 pathExists: { $0 != a.path })
+        #expect(g.recentlyPruned.map(\.app.path) == [a.path])
+
+        g.remove([folder.id], installed: [b, copy])
+        _ = Reconciler.reconcile(&g, installed: [a, b, copy], autoAdd: autoAdd)
+
+        #expect(g.allApps.map(\.path) == [copy.path])
+        #expect(g.isExcluded(a))
+        #expect(g.isExcluded(b))
+        #expect(!g.isExcluded(copy), "removing a missing copy must not exclude the one kept")
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
     func aGoneCopyCannotTakeATileWhosePathHasAnotherSpelling(throughAlias: Bool) {
         let gone = installed("Editor", path: "/Applications/Editor.app").makeRef()
         let kept = installed("Editor", path: "/Applications/Tools/Editor.app")

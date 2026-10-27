@@ -193,8 +193,19 @@ extension Grid {
     /// A copy sharing its bundle ID with another in `installed` or on the grid is remembered
     /// by path, so the other copy can stay.
     public mutating func remove(_ ids: [UUID], installed: [InstalledApp] = []) {
-        let removed = detach(ids).flatMap(\.apps).map(InstalledApp.init)
-        let copies = CopyIndex(installed + removed + allApps.map(InstalledApp.init))
+        let taken = detach(ids)
+        let folders = Set(taken.compactMap(\.folder).map(\.id))
+        let wanted = Set(ids)
+        // A folder's temporarily missing apps leave with it, or the next scan would restore
+        // them outside the removed folder. Keep the other records as known copies too:
+        // removing a visible copy must not exclude its sibling while that one is updating.
+        let forgotten = recentlyPruned.filter {
+            wanted.contains($0.app.id) || $0.folderID.map(folders.contains) == true
+        }
+        let removed = (taken.flatMap(\.apps) + forgotten.map(\.app)).map(InstalledApp.init)
+        let copies = CopyIndex(installed + removed + (allApps + recentlyPruned.map(\.app)).map(InstalledApp.init))
+        let forgottenIDs = Set(forgotten.map(\.app.id))
+        recentlyPruned.removeAll { forgottenIDs.contains($0.app.id) }
         for app in removed { setExcluded(app, true, copies: copies) }
         normalize()
     }

@@ -368,6 +368,8 @@ public enum Reconciler {
                               installed: [InstalledApp] = [], isStale: (String) -> Bool = { _ in false }) {
         let among = installed.filter { !isStale($0.path) } + include + exclude
             + grid.allApps.filter { !isStale($0.path) }.map(InstalledApp.init)
+            // A temporarily missing copy still has its own inclusion choice.
+            + grid.recentlyPruned.map { InstalledApp($0.app) }
         let copies = CopyIndex(among)
         let paths = Set(exclude.map(\.path))
         // Match by key too (a ref whose path is stale), unless other copies share that key.

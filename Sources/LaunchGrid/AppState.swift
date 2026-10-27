@@ -231,9 +231,9 @@ final class AppState {
                 }
             }
         }
-        // A file with no apps holds only exclusions chosen in the welcome window: the layout
-        // is still to be made.
-        hasGridFile = loaded.map { !$0.allApps.isEmpty } ?? false
+        // Restoration records also belong to an existing layout: an update can temporarily
+        // empty the whole grid. Only a file with neither apps nor records is a welcome choice.
+        hasGridFile = loaded.map { !$0.allApps.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
         grid = loaded ?? Grid()
         if skipped > 0 { keepPartlyReadFile(skipped: skipped) }
         // The unreadable file is gone: write the restored layout back before anything else

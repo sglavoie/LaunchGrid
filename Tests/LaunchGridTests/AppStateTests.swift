@@ -60,6 +60,26 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct UndoTests {
+    @Test func undoingFolderRemovalRestoresItsTemporarilyMissingApps() {
+        let state = makeState()
+        state.prefs.autoAddApps = false
+        let a = installed("A"), b = installed("B")
+        var ref = a.makeRef()
+        ref.displayName = "My App"
+        let folder = Folder(name: "Work", apps: [ref, b.makeRef()])
+        state.replaceGrid(Grid(pages: [Page(items: [.folder(folder)])]))
+        state.catalogScanned([b])
+        state.remove([folder.id])
+        #expect(state.grid.isExcluded(a))
+        #expect(state.grid.recentlyPruned.isEmpty)
+
+        state.undo()
+        state.catalogScanned([a, b])
+        #expect(state.grid.folder(folder.id)?.apps.map(\.title) == ["My App", "B"])
+        #expect(state.grid.folder(folder.id)?.apps.first?.id == ref.id)
+        #expect(!state.grid.isExcluded(a))
+    }
+
     @Test(arguments: [false, true])
     func pruneMemoryInHistoryKeepsItsBookmark(inRedo: Bool) {
         let state = makeState(["A"])
@@ -1077,6 +1097,25 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct ReplaceGridTests {
+    @Test func restartingWithOnlyPrunedAppsRestoresTheExistingLayout() throws {
+        let state = makeState(["A"])
+        state.prefs.autoAddApps = false
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "My App") }
+        let pageID = state.grid.pages[0].id
+        state.catalogScanned([installed("B")])
+        #expect(state.grid.allApps.isEmpty)
+        #expect(state.grid.recentlyPruned.count == 1)
+        #expect(state.saveNow())
+
+        let reopened = AppState(prefs: state.prefs, store: state.store)
+        #expect(reopened.hasGridFile, "a temporarily empty layout is not a first launch")
+        reopened.catalogScanned([installed("A"), installed("B")])
+        #expect(reopened.grid.allApps.map(\.id) == [a.id])
+        #expect(reopened.grid.allApps.map(\.title) == ["My App"])
+        #expect(reopened.grid.pages[0].id == pageID)
+    }
+
     @Test func replacingAnEmptyGridDropsItsRedoHistory() {
         let state = makeState()
         state.newPage()
