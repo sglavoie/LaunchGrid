@@ -46,6 +46,19 @@ function startsDistinctWords(queryWords, words) {
     return queryWords.every((_, i) => place(i, Array(words.length).fill(false)));
 }
 
+function startsWordsRunTogether(q, words) {
+    let rest = q;
+    for (let k = 0; k < words.length; k++) {
+        if (!rest) return k > 1;
+        if (rest.startsWith(words[k])) {
+            rest = rest.slice(words[k].length);
+            continue;
+        }
+        return k > 0 && rest.length >= 2 && words[k].startsWith(rest);
+    }
+    return !rest && words.length > 1;
+}
+
 function score(name, query) {
     const q = normalize(query);
     if (!q) return null;
@@ -55,6 +68,7 @@ function score(name, query) {
     if (n.startsWith(q)) return 900 - len;
     const separators = /[^\p{L}\p{N}]+/u;
     const words = n.split(separators).filter(Boolean);
+    if (!q.includes(" ") && startsWordsRunTogether(q, words)) return 800 - len;
     if (words.some((w) => w.startsWith(q))) return 700 - len;
     // Several words, each starting a word of the name, in any order: "capture video".
     const queryWords = q.split(separators).filter(Boolean);
