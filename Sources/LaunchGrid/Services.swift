@@ -51,9 +51,10 @@ enum Launcher {
         // An app on a volume that isn't mounted hasn't gone anywhere: say so, rather than open
         // another copy with its bundle ID (Xcode for Xcode-beta).
         if let volume = unmounted { throw VolumeNotMounted(volume: volume) }
-        // Retry elsewhere only if Launch Services knows another copy, and not one in the Trash.
+        // Retry elsewhere only if Launch Services knows a copy outside the Trash or
+        // AppTranslocation. A translocated copy must not replace the saved app's path.
         if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
-           url.path != app.path, !isInTrash(url.path) {
+           url.path != app.path, !isTemporaryFallback(url.path) {
             return (url.path, try await NSWorkspace.shared.openApplication(at: url, configuration: config))
         }
         throw NotFound()
@@ -76,6 +77,14 @@ enum Launcher {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         return [url.pathComponents, url.resolvingSymlinksInPath().pathComponents]
             .contains { $0.contains { $0 == ".Trash" || $0 == ".Trashes" } }
+    }
+
+    /// Launch Services can point at a quarantine copy under AppTranslocation. It is
+    /// removed after use and should not be opened or remembered as a moved app.
+    nonisolated static func isTemporaryFallback(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        return isInTrash(path) || [url.pathComponents, url.resolvingSymlinksInPath().pathComponents]
+            .contains { $0.contains("AppTranslocation") }
     }
 
     /// Whether the person cancelled the launch (e.g. in Gatekeeper's "downloaded from the

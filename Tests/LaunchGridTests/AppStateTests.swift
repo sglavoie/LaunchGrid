@@ -2372,6 +2372,20 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct LauncherTests {
+    @Test func translocatedCopiesAreNotFallbacks() throws {
+        let temporary = "/private/var/folders/x/T/AppTranslocation/ABC/d/Xcode.app"
+        #expect(Launcher.isTemporaryFallback(temporary))
+        #expect(!Launcher.isTemporaryFallback("/Applications/Xcode.app"))
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-translocation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let translocated = dir.appendingPathComponent("AppTranslocation/ABC/d/Xcode.app")
+        try FileManager.default.createDirectory(at: translocated, withIntermediateDirectories: true)
+        let alias = dir.appendingPathComponent("Xcode.app")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: translocated)
+        #expect(Launcher.isTemporaryFallback(alias.path), "a symlink must not hide a translocated copy")
+    }
+
     @Test func copiesInTheTrashAreNotFallbacks() throws {
         #expect(Launcher.isInTrash("/Users/x/.Trash/Xcode.app"))
         #expect(Launcher.isInTrash("/Volumes/Ext/.Trashes/501/Xcode.app"))
