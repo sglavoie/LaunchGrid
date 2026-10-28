@@ -52,12 +52,21 @@ public enum Reconciler {
         let byPath = Dictionary(installed.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         let byBundle = Dictionary(grouping: installed.filter { $0.bundleID != nil }, by: { $0.bundleID! })
         let byFoldedPath = Dictionary(installed.map { ($0.path.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        // A case-only rename either still resolves at the old spelling (on the usual
+        // case-insensitive disk), or introduces a new scanned path. A copy that was
+        // already installed at another spelling is not the missing app on a
+        // case-sensitive disk, even when it has no tile of its own.
+        func respelt(at path: String) -> InstalledApp? {
+            guard let app = byFoldedPath[path.lowercased()],
+                  !wasInstalledBefore(app.path) || pathExists(path) else { return nil }
+            return app
+        }
         // An excluded copy can be found under another spelling just like a visible tile:
         // a case-only rename or a symlink must not make it a new, unexcluded app. Keep
         // bundle-wide exclusions and paths the scan can't resolve as they were.
         grid.removedBundleIDs = Set(grid.removedBundleIDs.map { key in
             guard key.hasPrefix("/"), byPath[key] == nil else { return key }
-            return aliases[key].flatMap { byPath[$0]?.path } ?? byFoldedPath[key.lowercased()]?.path ?? key
+            return aliases[key].flatMap { byPath[$0]?.path } ?? respelt(at: key)?.path ?? key
         })
         var returning = grid.recentlyPruned.filter {
             (0..<restoreWindow).contains(now.timeIntervalSince($0.prunedAt))
@@ -76,7 +85,7 @@ public enum Reconciler {
         // folder placement; another missing copy must not consume it before restoration.
         let gridPaths = Set((grid.allApps + returning.map(\.app)).map { ref in
             byPath[ref.path]?.path ?? aliases[ref.path].flatMap { byPath[$0]?.path }
-                ?? byFoldedPath[ref.path.lowercased()]?.path ?? ref.path
+                ?? respelt(at: ref.path)?.path ?? ref.path
         })
         // Never prune when the scan came back empty: that's a failed scan, not an empty Mac.
         let prune = pruneMissing && !installed.isEmpty
@@ -102,8 +111,9 @@ public enum Reconciler {
             // The same app with its name now in other capitals (zoom.us.app updated into
             // Zoom.us.app): the case-insensitive disk still finds the old spelling, so the ref
             // would neither follow it nor be pruned, and the new spelling would be added again.
-            if atPath == nil, let respelt = byFoldedPath[ref.path.lowercased()],
+            if atPath == nil, let respelt = respelt(at: ref.path),
                (!ownedPaths.contains(respelt.path) || pathExists(ref.path)),
+               !removed.contains(respelt.key), !removed.contains(respelt.path),
                ref.bundleID == nil || respelt.bundleID == nil || respelt.bundleID == ref.bundleID {
                 return (respelt, false)
             }

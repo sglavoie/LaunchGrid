@@ -588,9 +588,10 @@ final class AppState {
             let started = Date()
             let (result, outside, disk, reopened) = await Disk.run(on: .global(qos: .utility)) {
                 let result = scanner(roots)
-                // Folded, as `isOutside` compares: the disk ignores case.
-                let scanned = Set(result.apps.map { $0.path.lowercased() })
-                let outside = Self.readOutsideApps(candidates.filter { !scanned.contains($0.lowercased()) && result.aliases[$0] == nil })
+                // Check alternate capitalization too: only the disk can tell a renamed
+                // app from a missing, separate copy on a case-sensitive volume.
+                let scanned = Set(result.apps.map(\.path))
+                let outside = Self.readOutsideApps(candidates.filter { !scanned.contains($0) && result.aliases[$0] == nil })
                 let gone = outside.checked.subtracting(outside.existing)
                 let reopened = inUse.map { inUse in inUse.bookmarks.filter { gone.contains($0.key) }.compactMapValues(inUse.open) }
                 return (result, outside, DiskState.read(roots: roots.map(\.path), unlisted: result.unlisted), reopened)
@@ -648,7 +649,7 @@ final class AppState {
         if drag.active, installedBeforeDrag == nil { installedBeforeDrag = everInstalled }
         installedBefore = installedBeforeDrag ?? everInstalled
         everInstalled.formUnion(apps.map(\.path))
-        let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { isOutside($0) })
+        let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { needsDiskCheck($0) })
         outsideApps = outside.apps
         outsideChecked = outside.checked
         outsideExisting = outside.existing
@@ -668,14 +669,14 @@ final class AppState {
         refreshUpdatedIcons()
     }
 
-    /// Paths of grid apps, and of recently pruned ones (which can still return to their slot),
-    /// that could be from outside the scan folders.
+    /// Paths of grid apps, recently pruned ones, and path-based exclusions. Exclusions
+    /// need disk checks too before following a change in capitalization.
     private func outsideCandidates() -> [String] {
         let recent = grid.recentlyPruned.filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
         var seen = Set<String>()
-        return (grid.allApps + recent.map(\.app))
-            .filter { !isSelf($0.bundleID) && seen.insert($0.path).inserted }
-            .map(\.path)
+        let paths = (grid.allApps + recent.map(\.app)).filter { !isSelf($0.bundleID) }.map(\.path)
+            + grid.removedBundleIDs.filter { $0.hasPrefix("/") }.sorted()
+        return paths.filter { seen.insert($0).inserted }
     }
 
     /// What was read of apps outside the scan folders.
@@ -768,12 +769,14 @@ final class AppState {
         // Apps added from outside the scanned folders stay as long as they exist on disk,
         // and recently pruned ones there can still return to their slot. The scan read them;
         // only ones that reached the grid since are read here.
-        let candidates = outsideCandidates().filter { isOutside($0) }
+        let candidates = outsideCandidates().filter { needsDiskCheck($0) }
         // Ones that reached the grid since (an undo, an app added with Browse) are read off the
         // main thread; until then they count as out of reach, so they keep their tiles.
         let unchecked = Set(candidates.filter { !outsideChecked.contains($0) })
         readOutsideAppsInBackground(unchecked.subtracting(outsideReading))
-        let extra = candidates.compactMap { outsideApps[$0] }
+        // Alternate capitalization is checked for existence, but must not introduce a
+        // second installed copy alongside the scan's spelling.
+        let extra = candidates.filter { isOutside($0) }.compactMap { outsideApps[$0] }
         let reachable = isReachable
         var g = grid
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
@@ -820,9 +823,14 @@ final class AppState {
         }
     }
 
-    /// Whether `path` is outside what the scan found, under its own path or its real one.
+    /// Whether the scan leaves this exact path's existence unanswered.
+    private func needsDiskCheck(_ path: String) -> Bool {
+        installedByPath[path] == nil && pathAliases[path] == nil
+    }
+
+    /// Whether `path` could add a copy beyond the scan's paths and alternate spellings.
     private func isOutside(_ path: String) -> Bool {
-        installedByPath[path] == nil && pathAliases[path] == nil && !installedFoldedPaths.contains(path.lowercased())
+        needsDiskCheck(path) && !installedFoldedPaths.contains(path.lowercased())
     }
 
     private func isSelf(_ bundleID: String?) -> Bool {

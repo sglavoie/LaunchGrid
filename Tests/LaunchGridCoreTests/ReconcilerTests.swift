@@ -9,6 +9,50 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test func aMissingExcludedCopyDoesNotExcludeAnExistingCaseVariant() {
+        let gone = installed("Editor", id: "com.test.editor")
+        let kept = installed("editor", id: gone.bundleID)
+        let keptRef = kept.makeRef()
+        var g = Grid(pages: [Page(items: [.app(keptRef)])], removedBundleIDs: [gone.path])
+
+        _ = Reconciler.reconcile(&g, installed: [kept], autoAdd: true,
+                                pathExists: { $0 == kept.path }, wasInstalledBefore: { _ in true })
+
+        #expect(g.allApps == [keptRef])
+        #expect(g.removedBundleIDs == [gone.path])
+        #expect(!g.isExcluded(kept))
+        _ = Reconciler.reconcile(&g, installed: [gone, kept], autoAdd: true)
+        #expect(g.allApps == [keptRef], "the excluded copy must stay out when its update finishes")
+    }
+
+    @Test(arguments: [false, true])
+    func aMissingTileDoesNotBecomeAnExcludedCaseVariant(hasPreviousScan: Bool) {
+        let gone = installed("Editor", id: "com.test.editor")
+        let excluded = installed("editor", id: gone.bundleID)
+        let ref = gone.makeRef()
+        var g = Grid(pages: [Page(items: [.app(ref)])], removedBundleIDs: [excluded.path])
+
+        _ = Reconciler.reconcile(&g, installed: [excluded], autoAdd: true,
+                                pathExists: { $0 == excluded.path }, wasInstalledBefore: { _ in hasPreviousScan })
+
+        #expect(g.allApps.isEmpty)
+        #expect(g.recentlyPruned.map(\.app) == [ref])
+        #expect(g.isExcluded(excluded))
+    }
+
+    @Test func aMissingTileDoesNotClaimAnExistingCaseVariantWithoutATile() {
+        let gone = installed("Editor", id: "com.test.editor")
+        let kept = installed("editor", id: gone.bundleID)
+        let ref = gone.makeRef()
+        var g = Grid(pages: [Page(items: [.app(ref)])])
+
+        _ = Reconciler.reconcile(&g, installed: [kept], autoAdd: false,
+                                pathExists: { $0 == kept.path }, wasInstalledBefore: { _ in true })
+
+        #expect(g.allApps.isEmpty)
+        #expect(g.recentlyPruned.map(\.app) == [ref])
+    }
+
     @Test(arguments: [false, true])
     func aDeletedCopyCannotClaimAnotherCopyThroughCaseFolding(goneFirst: Bool) {
         let gone = installed("Editor", id: "com.test.editor", path: "/Tools/Editor.app")
@@ -319,14 +363,17 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.last?.name == beta.name)
     }
 
-    @Test func pathExclusionsFollowCaseOnlyRenames() {
+    @Test(arguments: [false, true])
+    func pathExclusionsFollowCaseOnlyRenames(oldSpellingExists: Bool) {
         let original = installed("Xcode", id: "com.apple.dt.Xcode")
         let beta = installed("Xcode-beta", id: original.bundleID)
         var g = Grid(pages: [Page(items: [.app(original.makeRef()), .app(beta.makeRef())])])
         g.remove([g.allApps[1].id], installed: [original, beta])
         let renamed = installed("Xcode-Beta", id: original.bundleID)
 
-        let report = Reconciler.reconcile(&g, installed: [original, renamed], autoAdd: true)
+        let report = Reconciler.reconcile(&g, installed: [original, renamed], autoAdd: true,
+                                          pathExists: { _ in oldSpellingExists },
+                                          wasInstalledBefore: { _ in oldSpellingExists })
 
         #expect(g.allApps.map(\.path) == [original.path])
         #expect(g.removedBundleIDs == [renamed.path])

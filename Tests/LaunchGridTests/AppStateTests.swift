@@ -1585,6 +1585,45 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct OutsideAppTests {
+    @Test func loadingAnOlderSpellingOfAKnownAppKeepsItsTile() async throws {
+        let state = makeState()
+        state.prefs.autoAddApps = false
+        let scanned = installed("Zoom.us")
+        let old = "/Applications/zoom.us.app"
+        let ref = AppRef(bundleID: scanned.bundleID, path: old, name: "zoom.us", displayName: "Meetings")
+        // The app is already known before loading the older layout.
+        state.catalogScanned([scanned])
+        state.catalogScanned([scanned])
+        state.outsideReader = { paths in
+            AppState.OutsideRead(checked: Set(paths), existing: [old])
+        }
+        state.replaceGrid(Grid(pages: [Page(items: [.app(ref)])]))
+        while !state.outsideReading.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+
+        #expect(state.grid.allApps.map(\.id) == [ref.id])
+        #expect(state.grid.allApps.map(\.path) == [scanned.path])
+        #expect(state.grid.allApps.first?.displayName == "Meetings")
+        #expect(state.grid.recentlyPruned.isEmpty)
+    }
+
+    @Test func aScanChecksAnExcludedAppsOlderSpelling() throws {
+        let path = try makeBundle("Zoom.us")
+        let old = (path as NSString).deletingLastPathComponent + "/zoom.us.app"
+        // Use a real alternate path on either filesystem format.
+        if !FileManager.default.fileExists(atPath: old) {
+            try FileManager.default.createSymbolicLink(atPath: old, withDestinationPath: path)
+        }
+        let scanned = InstalledApp(bundleID: "com.test.Zoom.us", path: path, name: "Zoom.us")
+        let state = makeState()
+        state.prefs.autoAddApps = false
+        state.catalogScanned([scanned])
+        state.apply { $0.removedBundleIDs.insert(old) }
+        state.catalogScanned([scanned])
+
+        #expect(state.grid.removedBundleIDs == [path])
+        #expect(state.grid.allApps.isEmpty)
+    }
+
     @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
     func olderOutsideReadsDoNotReplaceNewerScanResults(deleted: Bool, coveredByScan: Bool) async throws {
         let state = makeState(["A"])
