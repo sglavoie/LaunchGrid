@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import os
 import SwiftUI
 import UniformTypeIdentifiers
@@ -92,22 +93,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// Held for as long as this copy runs; the system lets it go when the process ends,
     /// crashed or not.
-    nonisolated(unsafe) private static var instanceLock: Int32 = -1
+    enum InstanceLockResult: Equatable {
+        case acquired
+        case held
+        case unavailable(Int32)
+    }
+
+    nonisolated(unsafe) private static var instanceLocks: [Int32] = []
 
     /// Takes the lock beside the layout that only one copy can hold, so two started at the
     /// same moment (the login item and a click) can't both miss the other in `otherInstances`
-    /// and both answer the shortcut and save. False when another copy holds it.
-    static func acquireInstanceLock(in folder: URL = storeURL.deletingLastPathComponent()) -> Bool {
+    /// and both answer the shortcut and save. A per-user lock also covers a data folder that
+    /// cannot hold a lock file; every copy takes it, so a permission change cannot split them.
+    static func acquireInstanceLock(in folder: URL = storeURL.deletingLastPathComponent(),
+                                    fallbackDirectory: URL = FileManager.default.temporaryDirectory) -> InstanceLockResult {
+        let path = folder.standardizedFileURL.path
+        let digest = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+        let fallback = fallbackDirectory.appendingPathComponent("LaunchGrid-\(digest).lock")
+        let fallbackFD = open(fallback.path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        guard fallbackFD >= 0 else { return .unavailable(errno) }
+        guard flock(fallbackFD, LOCK_EX | LOCK_NB) == 0 else {
+            let code = errno
+            close(fallbackFD)
+            return code == EWOULDBLOCK ? .held : .unavailable(code)
+        }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let fd = open(folder.appendingPathComponent(".instance.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
-        // A folder that can't be written to says nothing about other copies.
-        guard fd >= 0 else { return true }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            close(fd)
-            return false
+        // A read-only data folder is still usable for loading and exporting its layout.
+        // The fallback lock keeps same-user copies from writing it concurrently.
+        guard fd >= 0 else {
+            NSLog("LaunchGrid: could not open the layout lock at \(folder.path): \(String(cString: strerror(errno))); using the per-user lock")
+            instanceLocks.append(fallbackFD)
+            return .acquired
         }
-        instanceLock = fd
-        return true
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            let code = errno
+            close(fd)
+            close(fallbackFD)
+            return code == EWOULDBLOCK ? .held : .unavailable(code)
+        }
+        instanceLocks.append(contentsOf: [fallbackFD, fd])
+        return .acquired
     }
 
     private static func isScratch(_ app: NSRunningApplication) -> Bool {
@@ -286,6 +312,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         layoutOpenQueue.enqueue(urls)
     }
 
+    /// A completed layout may have no apps but still contain pages, titles or grid size
+    /// choices worth keeping. Welcome-screen exclusions precede the first layout.
+    static func shouldConfirmReplacingLayout(_ state: AppState) -> Bool { state.hasGridFile }
+
     /// Loads a layout file, from Finder or the Load Grid File panel, asking before it replaces
     /// a grid that has apps on it. `done` gets what happened, for Settings to show.
     /// `finished` runs once it's over, whether the layout loaded or not.
@@ -311,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 let name = url.deletingPathExtension().lastPathComponent
                 // Said before replacing anything, as an unreadable saved layout is.
                 let leftOut = skipped > 0 ? String(localized: "\(skipped) entries in “\(name)” could not be read and will be left out.") : nil
-                if !state.grid.allApps.isEmpty {
+                if Self.shouldConfirmReplacingLayout(state) {
                     // A slow read may have let the grid open again meanwhile.
                     overlay.hide(deactivate: false)
                     NSApp.activate()
@@ -860,7 +890,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     showError(String(localized: "Nothing to import"), String(localized: "No apps in the \(source) layout could be found on this Mac."))
                     return
                 }
-                if !state.grid.allApps.isEmpty {
+                if Self.shouldConfirmReplacingLayout(state) {
                     overlay.hide(deactivate: false)
                     NSApp.activate()
                     let alert = NSAlert()

@@ -21,12 +21,22 @@ MainActor.assumeIsolated {
 
     // Single instance: hand over to the running copy and quit. A scratch run keeps its own
     // data, so it runs beside the installed copy, but not beside another using that data.
-    let locked = AppDelegate.acquireInstanceLock()
-    if Preferences.isScratch && !locked {
+    let lock = AppDelegate.acquireInstanceLock()
+    if case .unavailable(let code) = lock {
+        let detail = String(localized: "LaunchGrid could not secure its layout against another running copy. \(String(cString: strerror(code)))")
+        FileHandle.standardError.write(Data("LaunchGrid: \(detail)\n".utf8))
+        NSApplication.shared.activate()
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Could not start LaunchGrid")
+        alert.informativeText = detail
+        alert.runModal()
+        exit(1)
+    }
+    if Preferences.isScratch && lock == .held {
         print("LaunchGrid: another scratch run uses \(AppDelegate.storeURL.deletingLastPathComponent().path)")
         exit(0)
     }
-    if !Preferences.isScratch && (!locked || !AppDelegate.otherInstances.isEmpty) {
+    if !Preferences.isScratch && (lock == .held || !AppDelegate.otherInstances.isEmpty) {
         DistributedNotificationCenter.default().postNotificationName(
             AppDelegate.showNotification, object: nil, userInfo: nil, deliverImmediately: true)
         exit(0)

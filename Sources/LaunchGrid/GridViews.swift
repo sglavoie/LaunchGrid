@@ -656,6 +656,7 @@ struct AppIcon: View {
         .task(id: "\(path)|\(state.iconGeneration)") {
             // Returns at once from the cache.
             let image = await IconProvider.shared.icon(path)
+            guard !Task.isCancelled else { return }
             if image !== loaded { loaded = image }
         }
     }

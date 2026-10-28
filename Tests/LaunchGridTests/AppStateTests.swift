@@ -498,6 +498,27 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
+@MainActor @Suite(.tempDir) struct LayoutReplacementTests {
+    @Test func aCustomizedEmptyLayoutNeedsConfirmationBeforeImport() {
+        let state = makeState()
+        state.apply { $0.setPageTitle(0, "Work") }
+        state.newPage()
+
+        #expect(state.grid.allApps.isEmpty)
+        #expect(state.grid.pages.count == 2)
+        #expect(AppDelegate.shouldConfirmReplacingLayout(state))
+    }
+
+    @Test func welcomeChoicesDoNotPromptBeforeTheFirstLayout() {
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        state.catalogScanned([installed("A")])
+        state.chooseApps(include: [], exclude: [installed("A")])
+
+        #expect(state.grid.removedBundleIDs.contains("com.test.A"))
+        #expect(!AppDelegate.shouldConfirmReplacingLayout(state))
+    }
+}
+
 @MainActor @Suite(.tempDir) struct LoadProblemTests {
     func load(_ contents: String) throws -> AppState {
         let dir = TempDir.url
@@ -1133,6 +1154,34 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct IconTests {
+    @Test(.timeLimit(.minutes(1))) func anOlderRenderCannotReplaceARegeneratedIcon() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Foo.app")
+        let plist = app.appendingPathComponent("Contents/Info.plist")
+        try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<plist><dict><key>CFBundleVersion</key><string>1</string></dict></plist>".utf8).write(to: plist)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let draws = OSAllocatedUnfairLock(initialState: 0)
+        let finished = OSAllocatedUnfairLock(initialState: 0)
+        let releaseOld = DispatchSemaphore(value: 0)
+        defer { releaseOld.signal() }
+        let icons = IconProvider(beforeCaching: { _ in
+            let ordinal = draws.withLock { $0 += 1; return $0 }
+            if ordinal == 1 { releaseOld.wait() }
+        }, afterDrawing: { _ in finished.withLock { $0 += 1 } })
+        icons.prewarm([app.path])
+        while draws.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(10)) }
+
+        try Data("<plist><dict><key>CFBundleVersion</key><string>2</string></dict></plist>".utf8).write(to: plist)
+        await icons.regenerate([app.path])
+        #expect(icons.cached(app.path) != nil, "the new icon is ready before the old draw finishes")
+        releaseOld.signal()
+        while finished.withLock({ $0 }) < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(icons.dropStale([app.path]).isEmpty, "the old render did not replace the new version")
+        #expect(icons.cached(app.path) != nil)
+    }
+
     @Test func iconsOfAppsUpdatedInPlaceAreDropped() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
         let app = dir.appendingPathComponent("Foo.app")
@@ -1347,8 +1396,28 @@ func installed(_ name: String) -> InstalledApp {
     @MainActor @Test func onlyOneCopyHoldsTheInstanceLock() {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lg-lock-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
-        #expect(AppDelegate.acquireInstanceLock(in: folder))
-        #expect(!AppDelegate.acquireInstanceLock(in: folder), "a second copy starting meanwhile hands over")
+        #expect(AppDelegate.acquireInstanceLock(in: folder) == .acquired)
+        #expect(AppDelegate.acquireInstanceLock(in: folder) == .held, "a second copy starting meanwhile hands over")
+    }
+
+    @MainActor @Test func anUnwritableLayoutFolderStillHasASingleOwner() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-lock-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blockedFolder = dir.appendingPathComponent("not-a-folder")
+        try Data("file".utf8).write(to: blockedFolder)
+        #expect(AppDelegate.acquireInstanceLock(in: blockedFolder, fallbackDirectory: dir) == .acquired)
+        #expect(AppDelegate.acquireInstanceLock(in: blockedFolder, fallbackDirectory: dir) == .held)
+    }
+
+    @MainActor @Test func aFailedFallbackLockDoesNotClaimSuccess() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-lock-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blockedFallback = dir.appendingPathComponent("not-a-folder")
+        try Data("file".utf8).write(to: blockedFallback)
+        let result = AppDelegate.acquireInstanceLock(in: dir, fallbackDirectory: blockedFallback)
+        if case .unavailable = result {} else { Issue.record("lock failure was reported as \(result)") }
     }
 
     @Test func theMountedVolumesComeFromTheSystem() throws {

@@ -161,13 +161,24 @@ final class IconProvider: @unchecked Sendable {
 
     private let cache = NSCache<NSString, NSImage>()
     private let queue = DispatchQueue(label: "launchgrid.icons", qos: .userInitiated, attributes: .concurrent)
-    /// Each cached icon's app version, to spot apps updated in place.
-    private let versions = OSAllocatedUnfairLock(initialState: [String: String]())
+    /// Each cached icon's app version and render generation. A refresh invalidates older
+    /// renders before drawing, so one already in flight cannot put a stale icon back.
+    private struct CacheState {
+        var versions: [String: String] = [:]
+        var generations: [String: UInt64] = [:]
+    }
+    private let cacheState = OSAllocatedUnfairLock(initialState: CacheState())
+    /// A test can hold an older draw just before it would enter the cache.
+    private let beforeCaching: @Sendable (String) -> Void
+    private let afterDrawing: @Sendable (String) -> Void
     /// Renders under way, so a prewarm and an icon view asking for the same path share one:
     /// each holds who's waiting for it.
     private let inFlight = OSAllocatedUnfairLock(initialState: [String: [@Sendable (NSImage) -> Void]]())
 
-    init() {
+    init(beforeCaching: @escaping @Sendable (String) -> Void = { _ in },
+         afterDrawing: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.beforeCaching = beforeCaching
+        self.afterDrawing = afterDrawing
         cache.countLimit = 2000
         // Each icon is a 256 px RGBA bitmap (256 KB): about 1000 icons.
         cache.totalCostLimit = 256 << 20
@@ -221,14 +232,18 @@ final class IconProvider: @unchecked Sendable {
     func regenerate(_ paths: [String]) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             queue.async {
-                DispatchQueue.concurrentPerform(iterations: paths.count) { i in _ = self.draw(paths[i]) }
                 let keep = Set(paths)
-                let others = self.versions.withLock { v in
-                    let gone = v.keys.filter { !keep.contains($0) }
-                    for path in gone { v[path] = nil }
-                    return gone
+                let rendering = self.inFlight.withLock { Set($0.keys) }
+                self.cacheState.withLock { state in
+                    let invalidated = keep.union(rendering).union(state.versions.keys.filter { !keep.contains($0) })
+                    for path in invalidated {
+                        state.generations[path, default: 0] &+= 1
+                        state.versions[path] = nil
+                        self.cache.removeObject(forKey: path as NSString)
+                    }
                 }
-                for path in others { self.cache.removeObject(forKey: path as NSString) }
+                let unique = Array(keep)
+                DispatchQueue.concurrentPerform(iterations: unique.count) { i in _ = self.draw(unique[i]) }
                 cont.resume()
             }
         }
@@ -237,13 +252,20 @@ final class IconProvider: @unchecked Sendable {
     /// Removes cached icons whose app changed on disk since they were rendered; returns their paths.
     /// The generic icon of an app that was missing when rendered goes stale once the app appears.
     func dropStale(_ paths: [String]) -> [String] {
-        let known = versions.withLock { $0 }
-        let stale = paths.filter { path in
-            guard let rendered = known[path] else { return false }
-            return Self.version(path) != rendered
+        var stale: [String] = []
+        for path in Set(paths) {
+            guard let rendered = cacheState.withLock({ $0.versions[path] }), Self.version(path) != rendered else { continue }
+            // A concurrent draw may have replaced the version since the disk check. In
+            // that case its new icon must remain cached.
+            let removed = cacheState.withLock { state in
+                guard state.versions[path] == rendered else { return false }
+                state.generations[path, default: 0] &+= 1
+                state.versions[path] = nil
+                cache.removeObject(forKey: path as NSString)
+                return true
+            }
+            if removed { stale.append(path) }
         }
-        for path in stale { cache.removeObject(forKey: path as NSString) }
-        versions.withLock { v in for path in stale { v[path] = nil } }
         return stale
     }
 
@@ -293,6 +315,7 @@ final class IconProvider: @unchecked Sendable {
     }
 
     private func draw(_ path: String) -> NSImage {
+        let generation = cacheState.withLock { $0.generations[path, default: 0] }
         let version = Self.version(path)
         let source = NSWorkspace.shared.icon(forFile: path)
         let px = Self.pixelSize
@@ -309,8 +332,14 @@ final class IconProvider: @unchecked Sendable {
         NSGraphicsContext.restoreGraphicsState()
         let image = NSImage(size: size)
         image.addRepresentation(rep)
-        cache.setObject(image, forKey: path as NSString, cost: rep.bytesPerRow * rep.pixelsHigh)
-        versions.withLock { $0[path] = version }
+        beforeCaching(path)
+        let cost = rep.bytesPerRow * rep.pixelsHigh
+        cacheState.withLock { state in
+            guard state.generations[path, default: 0] == generation else { return }
+            cache.setObject(image, forKey: path as NSString, cost: cost)
+            state.versions[path] = version
+        }
+        afterDrawing(path)
         return image
     }
 }
