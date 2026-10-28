@@ -559,6 +559,24 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(leftovers.isEmpty, "the temporary file is renamed into place")
     }
 
+    @Test func repairingPartlyReadableFileKeepsTheLastGoodBackup() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let good = Grid(pages: [Page(items: [.app(app("A"))])])
+        try store.save(good)
+        try store.save(Grid(pages: [Page(items: [.app(app("B"))])]))
+
+        let damaged = #"{"version":1,"pages":[{"items":[{"type":"app","app":{"path":"/Applications/B.app"}},{"type":"app","app":{"name":"No path"}}]}]}"#
+        try Data(damaged.utf8).write(to: store.url)
+        let repaired = try store.loadCountingSkipped()
+        #expect(repaired.skipped == 1)
+        #expect(try !store.save(repaired.grid))
+        #expect(try store.load() == repaired.grid)
+        #expect(try store.loadBackup() == good)
+    }
+
     @Test func versionOneAsTextLoadsAndZeroIsRejected() throws {
         #expect(try GridStore.decode(Data(#"{"version": "1", "rows": 2, "columns": 2, "pages": []}"#.utf8)).rows == 2)
         #expect(throws: GridFileError.self) { try GridStore.decode(Data(#"{"version": 0, "pages": []}"#.utf8)) }

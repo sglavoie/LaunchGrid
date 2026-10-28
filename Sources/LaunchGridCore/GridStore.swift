@@ -108,7 +108,11 @@ public struct GridStore: Sendable {
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         GridStore.removeLeftoverTemporaryFiles(beside: target)
         var refreshed = false
-        if refreshingBackup && fm.fileExists(atPath: target.path) {
+        // A partly readable file can be repaired and saved, but it must not replace the
+        // last complete backup. AppState keeps the damaged original separately.
+        if refreshingBackup && fm.fileExists(atPath: target.path),
+           let current = try? GridStore.decodeCountingSkipped(Data(contentsOf: target)),
+           current.skipped == 0 {
             // A clone on APFS, so it costs next to nothing, renamed over the old backup so there
             // is always one. Best effort: the save matters more.
             keepDailyCopy(day: GridStore.day(of: now))
