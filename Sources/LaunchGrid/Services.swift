@@ -556,6 +556,18 @@ enum KeyCombo {
 /// FSEvents on the application folders, coalescing bursts into one callback.
 /// Callbacks arrive on the main queue only.
 final class FolderWatcher: @unchecked Sendable {
+    /// A dropped event or wrapped event ID means changes may have happened anywhere under
+    /// the watched roots. Its reported path can be deep inside a bundle, where ordinary
+    /// changes are ignored, so these flags must take precedence over path filtering.
+    static func shouldRescan(_ paths: [String], flags: [FSEventStreamEventFlags], roots: [String]) -> Bool {
+        let lostHistory = FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs
+            | kFSEventStreamEventFlagUserDropped
+            | kFSEventStreamEventFlagKernelDropped
+            | kFSEventStreamEventFlagEventIdsWrapped)
+        return paths.isEmpty || flags.contains { $0 & lostHistory != 0 }
+            || paths.contains { isRelevant($0, roots: roots) }
+    }
+
     /// Whether a change in directory `path` can matter to a scan. Apps and updaters write deep
     /// inside bundles (caches, frameworks); only a bundle's top level and its `Contents`
     /// (where an update rewrites Info.plist) are worth a rescan. Under one of `roots`, neither
@@ -607,12 +619,12 @@ final class FolderWatcher: @unchecked Sendable {
         guard !paths.isEmpty else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
             guard let info else { return }
             let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
-            // No paths means something unusual (e.g. a dropped history); rescan to be safe.
             let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
-            guard paths.isEmpty || paths.contains(where: { FolderWatcher.isRelevant($0, roots: watcher.realPaths) }) else { return }
+            let flags = Array(UnsafeBufferPointer(start: eventFlags, count: Int(count)))
+            guard FolderWatcher.shouldRescan(paths, flags: flags, roots: watcher.realPaths) else { return }
             MainActor.assumeIsolated { watcher.onChange() }
         }
         stream = FSEventStreamCreate(nil, callback, &context, paths as CFArray,

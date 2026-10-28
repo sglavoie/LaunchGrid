@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import CoreServices
 import Foundation
 import os
 import Testing
@@ -983,6 +984,18 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct WatcherTests {
+    @Test func missedEventsRescanEvenWhenReportedInsideABundle() {
+        let deep = "/Applications/Foo.app/Contents/Resources/cache"
+        let roots = ["/Applications"]
+        #expect(!FolderWatcher.shouldRescan([deep], flags: [0], roots: roots))
+        for flag in [kFSEventStreamEventFlagMustScanSubDirs,
+                     kFSEventStreamEventFlagUserDropped,
+                     kFSEventStreamEventFlagKernelDropped,
+                     kFSEventStreamEventFlagEventIdsWrapped] {
+            #expect(FolderWatcher.shouldRescan([deep], flags: [FSEventStreamEventFlags(flag)], roots: roots))
+        }
+    }
+
     @Test(arguments: ["app", "APP", "App"])
     func bundleFilteringMatchesTheScannersExtensionRules(ext: String) {
         let app = "/Applications/Foo.\(ext)"
