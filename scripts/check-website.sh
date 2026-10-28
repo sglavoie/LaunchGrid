@@ -56,10 +56,10 @@ while IFS= read -r page; do
     done <"$REFS"
 done <"$PAGES"
 
-# The stylesheets' url()s.
+# The stylesheets' url()s, whether quoted or not.
 find . -name '*.css' >"$PAGES"
 while IFS= read -r sheet; do
-    grep -oE 'url\("[^"]*"\)' "$sheet" | sed -E 's/^url\("//; s/"\)$//' >"$REFS" || true
+    grep -oE 'url\([^)]*\)' "$sheet" | sed -E "s/^url\\(//; s/\\)\$//; s/^[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*\$//" >"$REFS" || true
     while IFS= read -r ref; do
         case "$ref" in "" | //* | *:*) continue ;; esac
         if [ ! -f "$(file_for "$ref" "$sheet")" ]; then
