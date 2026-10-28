@@ -25,7 +25,9 @@ public enum Reconciler {
     /// - Parameters:
     ///   - autoAdd: append installed apps that are neither on the grid nor in `removedBundleIDs`.
     ///   - pruneMissing: drop apps that are no longer installed. Callers disable this when the
-    ///     scan looks unreliable (e.g. it found nothing at all).
+    ///     scan looks unreliable.
+    ///   - pruneOnEmpty: an empty scan had a readable root. Unlisted folders and unmounted
+    ///     volumes are still protected by `isReachable`.
     ///   - isReachable: whether the scan could have seen the app at this path. Apps on an
     ///     unmounted volume or under a missing scan folder are kept, not pruned.
     ///   - pathExists: whether something is on disk at a path. A ref follows its bundle ID to
@@ -42,6 +44,7 @@ public enum Reconciler {
         installed: [InstalledApp],
         autoAdd: Bool,
         pruneMissing: Bool = true,
+        pruneOnEmpty: Bool = false,
         isReachable: (String) -> Bool = { _ in true },
         pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
         aliases: [String: String] = [:],
@@ -87,8 +90,7 @@ public enum Reconciler {
             byPath[ref.path]?.path ?? aliases[ref.path].flatMap { byPath[$0]?.path }
                 ?? respelt(at: ref.path)?.path ?? ref.path
         })
-        // Never prune when the scan came back empty: that's a failed scan, not an empty Mac.
-        let prune = pruneMissing && !installed.isEmpty
+        let prune = pruneMissing && (!installed.isEmpty || pruneOnEmpty)
         // Dedup by path: two copies of one app (Xcode and Xcode-beta) share a bundle ID.
         var seen = Set<String>()
         var pruned: [PrunedApp] = []

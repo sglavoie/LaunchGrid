@@ -261,7 +261,7 @@ public struct GridStore: Sendable {
             throw GridFileError.invalid(error.localizedDescription)
         }
         // A few bad entries are dropped; with nothing left, the file is broken, not empty.
-        if skipped.layoutCount > 0 && grid.allApps.isEmpty {
+        if skipped.layoutCount > 0 && grid.allApps.isEmpty && grid.recentlyPruned.isEmpty {
             throw GridFileError.invalid("none of its \(skipped.layoutCount) entries could be read")
         }
         guard (1...50).contains(grid.rows), (1...50).contains(grid.columns) else {

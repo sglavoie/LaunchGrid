@@ -75,7 +75,7 @@ Two targets, each with a test target (`LaunchGridCoreTests`, `LaunchGridTests`):
 - **`LaunchGridCore`**: pure, unit-tested logic.
   - `Model`: value-type `Grid`, which makes undo a snapshot.
   - `GridOps`: insert with overflow spill, move, group, reflow, sort.
-  - `Reconciler`: add new apps, drop deleted ones, follow moved ones, keep the removed list. It never prunes on an empty scan, nor apps on an unmounted volume or under a scan folder that is missing or can't be listed.
+  - `Reconciler`: add new apps, drop deleted ones, follow moved ones, keep the removed list. An empty scan prunes missing apps only when at least one scan root was listed; apps on an unmounted volume or under a folder that is missing or can't be listed stay put.
   - `AppScanner`: depth-limited, symlink-cycle-safe, skips bundle contents.
   - `Search`, `GridStore`.
   - `LaunchpadImporter`: reads a copy of the database and its write-ahead log; it handles Apple's multi-root DB, AppGrid's `custom_path` and `manual_app_*` IDs, and nested folder pages.

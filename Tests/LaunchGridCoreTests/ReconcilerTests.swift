@@ -460,6 +460,17 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.count == 1)
     }
 
+    @Test func readableEmptyScanPrunesOnlyReachableMissingApps() {
+        let gone = app("Gone")
+        let offline = AppRef(bundleID: "com.test.offline", path: "/Volumes/Offline/Offline.app")
+        let present = app("Present")
+        var g = Grid(pages: [Page(items: [.app(gone), .app(offline), .app(present)])])
+        let report = Reconciler.reconcile(&g, installed: [], autoAdd: true, pruneOnEmpty: true,
+                                          isReachable: { $0 != offline.path }, pathExists: { $0 == present.path })
+        #expect(report.removed == ["Gone"])
+        #expect(g.allApps.map(\.path) == [offline.path, present.path])
+    }
+
     @Test func unreachableAppsAreKept() {
         let ext = AppRef(bundleID: "com.test.ext", path: "/Volumes/Drive/Ext.app")
         var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("A")), .app(ext), .app(app("Gone"))])])

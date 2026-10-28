@@ -239,8 +239,8 @@ extension Grid {
             columns: (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7,
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
             removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs, countingLayoutEntries: false) ?? []),
-            // Disposable: an unreadable list is dropped rather than failing the whole file.
-            recentlyPruned: (try? c.decodeIfPresent([PrunedApp].self, forKey: .recentlyPruned)) ?? []
+            // Keep readable restoration records even when another one is damaged.
+            recentlyPruned: try c.decodeLossily(PrunedApp.self, forKey: .recentlyPruned, allowNull: true) ?? []
         )
         // GridStore reads the version first, also when written as text, and rejects bad ones.
         version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? 1
@@ -304,13 +304,14 @@ extension Folder {
 extension KeyedDecodingContainer {
     /// The array's elements that decode; the others are skipped and logged, so one bad entry
     /// (an app without a path) doesn't make the whole layout unreadable.
-    func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key, countingLayoutEntries: Bool = true) throws -> [T]? {
+    func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key,
+                                    countingLayoutEntries: Bool = true, allowNull: Bool = false) throws -> [T]? {
         guard contains(key) else { return nil }
         if try decodeNil(forKey: key) {
             // A missing list can use an older format's default; an explicit null layout
             // list is damaged, not empty. Let its containing entry be counted as skipped
             // so loading preserves the original file or recovers the backup.
-            guard !countingLayoutEntries else {
+            guard allowNull || !countingLayoutEntries else {
                 throw DecodingError.valueNotFound([T].self, .init(
                     codingPath: codingPath + [key], debugDescription: "Null layout list"))
             }

@@ -134,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if Sandbox.isActive { state.onAppPathsInUse = { FileAccess.forgetApps(notIn: $0) } }
         FileAccess.onBookmarkFailure = { [weak self] url in
             self?.showError(String(localized: "LaunchGrid can't keep access to “\(url.lastPathComponent)”"),
-                            String(localized: "It can be used until LaunchGrid quits. After that, choose it again."))
+                            String(localized: "LaunchGrid couldn't confirm lasting access. If this item becomes unavailable, choose it again."))
         }
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }

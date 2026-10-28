@@ -109,7 +109,7 @@ struct SeededRandom: RandomNumberGenerator {
             let originalApps = g.allApps.map(\.id)
             var present = Set(installedApps.map(\.path))
             // A few rounds of apps going (an update, a volume) and coming back, in batches. Never
-            // all at once: an empty scan is taken as a failed one, and prunes nothing.
+            // all at once: the default empty scan is treated as unconfirmed and prunes nothing.
             for _ in 0..<4 {
                 let gone = Set(installedApps.map(\.path).shuffled(using: &rng).prefix(Int.random(in: 0...(installedApps.count - 1), using: &rng)))
                 present.subtract(gone)

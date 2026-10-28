@@ -439,7 +439,7 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
     }
 
     @Test func emptyAndOmittedListsStillLoadWithoutDamage() throws {
-        let json = #"{"pages": [{}, {"items": []}, {"items": [{"type": "folder", "folder": {}}, {"type": "folder", "folder": {"apps": []}}]}], "removedBundleIDs": null}"#
+        let json = #"{"pages": [{}, {"items": []}, {"items": [{"type": "folder", "folder": {}}, {"type": "folder", "folder": {"apps": []}}]}], "removedBundleIDs": null, "recentlyPruned": null}"#
         let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
         #expect(grid.allApps.isEmpty)
         #expect(skipped == 0)
@@ -451,6 +451,23 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(grid.allApps.isEmpty)
         #expect(grid.removedBundleIDs == ["com.test.a", "com.test.b"])
         #expect(skipped == 1)
+    }
+
+    @Test func oneDamagedRestorationRecordKeepsTheOtherRecords() throws {
+        let page = Page()
+        let records = ["A", "B"].enumerated().map { index, name in
+            PrunedApp(app: app(name), prunedAt: Date(timeIntervalSinceReferenceDate: 1000),
+                      pageID: page.id, index: index)
+        }
+        let encoded = try GridStore.encode(Grid(pages: [page], recentlyPruned: records))
+        var json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var recent = try #require(json["recentlyPruned"] as? [[String: Any]])
+        recent.insert(["app": ["name": "Missing path"]], at: 1)
+        json["recentlyPruned"] = recent
+
+        let (decoded, skipped) = try GridStore.decodeCountingSkipped(JSONSerialization.data(withJSONObject: json))
+        #expect(decoded.recentlyPruned.map(\.app.id) == records.map(\.app.id))
+        #expect(skipped == 1, "the damaged file must be copied before a save")
     }
 
     @Test func readableExclusionsDoNotHideAnEntirelyUnreadableLayout() {

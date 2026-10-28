@@ -818,7 +818,8 @@ enum FileAccess {
     }
 
     /// Remembers an item just picked in a panel. False, after telling `onBookmarkFailure`,
-    /// when it couldn't be bookmarked, so access to it won't outlast this run.
+    /// when a bookmark couldn't be made or opened. A made bookmark remains saved so a later
+    /// restore can retry a temporarily unavailable item.
     @discardableResult
     static func remember(_ url: URL) -> Bool {
         guard backend.isActive(), granted[url.path] == nil else { return true }
@@ -831,7 +832,12 @@ enum FileAccess {
         // Through the bookmark just made: the URL can be one built from a path (an app picked
         // with Browse), whose own access can't be started, and then a move while LaunchGrid
         // runs couldn't be followed.
-        if let (scoped, _) = backend.open(data) { granted[url.path] = scoped }
+        guard let (scoped, _) = backend.open(data) else {
+            NSLog("LaunchGrid: could not open the bookmark for \(url.path); will retry later")
+            onBookmarkFailure(url)
+            return false
+        }
+        granted[url.path] = scoped
         return true
     }
 

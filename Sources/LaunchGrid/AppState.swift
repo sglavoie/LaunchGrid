@@ -86,6 +86,8 @@ final class AppState {
     /// Whether a scan has found the installed apps yet: building before then would lay out
     /// none of them, or none with their category.
     private(set) var hasScanned = false
+    /// An empty scan can remove missing apps only after at least one root was listed.
+    @ObservationIgnored private var lastScanHadReadableRoot = false
     /// A build asked for before the first scan finished, made once it has.
     @ObservationIgnored private var buildAfterScan: BuildStyle?
     /// Set when the saved layout could not be loaded at launch and was moved aside.
@@ -614,7 +616,7 @@ final class AppState {
             }
             self.scanning = false
             self.catalogScanned(result.apps, outside: outside, unlisted: result.unlisted, aliases: result.aliases, disk: disk,
-                                reopened: reopened)
+                                reopened: reopened, hasReadableRoot: result.hasReadableRoot)
             if !served { completion?() }
             if self.rescanQueued {
                 self.rescanQueued = false
@@ -646,10 +648,11 @@ final class AppState {
     /// `reopened` the bookmarks of apps found gone, resolved again with them.
     func catalogScanned(_ apps: [InstalledApp], outside: OutsideRead? = nil,
                         unlisted: [String] = [], aliases: [String: String] = [:], disk: DiskState? = nil,
-                        reopened: [String: FileAccess.Opened]? = nil) {
+                        reopened: [String: FileAccess.Opened]? = nil, hasReadableRoot: Bool = false) {
         outsideReadGeneration &+= 1
         let apps = apps.filter { !isSelf($0.bundleID) }
         installed = apps
+        lastScanHadReadableRoot = hasReadableRoot
         installedByPath = Dictionary(apps.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         installedFoldedPaths = Set(apps.map { $0.path.lowercased() })
         pathAliases = aliases
@@ -768,7 +771,7 @@ final class AppState {
 
     /// Merges the catalog into the grid. Not an undo step: it mirrors the disk.
     func reconcile() {
-        guard !installed.isEmpty else { return }
+        guard !installed.isEmpty || lastScanHadReadableRoot else { return }
         // A drag's gap and targets are slots among the items on screen: changing them under
         // it would drop in the wrong place, or lose the item dragged. Wait for the drop.
         if drag.active {
@@ -789,6 +792,7 @@ final class AppState {
         let reachable = isReachable
         var g = grid
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
+                                          pruneOnEmpty: lastScanHadReadableRoot,
                                           isReachable: { !unchecked.contains($0) && reachable($0) },
                                           pathExists: knownToExist, aliases: pathAliases,
                                           wasInstalledBefore: installedBefore.contains)

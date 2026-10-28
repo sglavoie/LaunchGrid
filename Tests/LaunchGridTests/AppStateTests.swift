@@ -1686,6 +1686,33 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct UnlistedFolderTests {
+    @Test func aReadableEmptyScanRemovesGoneAppsButKeepsThoseUnderMissingRoots() throws {
+        let root = TempDir.url.appendingPathComponent("Apps")
+        let missing = TempDir.url.appendingPathComponent("Missing")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let gone = AppRef(bundleID: "com.test.gone", path: root.appendingPathComponent("Gone.app").path)
+        let unavailable = AppRef(bundleID: "com.test.unavailable", path: missing.appendingPathComponent("Unavailable.app").path)
+        let state = makeState()
+        state.replaceGrid(Grid(pages: [Page(items: [.app(gone), .app(unavailable)])]))
+
+        let result = AppScanner.scanReporting(roots: [root, missing])
+        #expect(result.apps.isEmpty && result.hasReadableRoot)
+        state.catalogScanned(result.apps,
+                             outside: AppState.OutsideRead(checked: [gone.path, unavailable.path]),
+                             unlisted: result.unlisted,
+                             disk: DiskState(missingRoots: [missing.path], mountedVolumes: []),
+                             hasReadableRoot: result.hasReadableRoot)
+        #expect(state.grid.allApps.map(\.id) == [unavailable.id])
+
+        let failed = AppScanner.scanReporting(roots: [missing])
+        #expect(!failed.hasReadableRoot)
+        state.catalogScanned(failed.apps, outside: AppState.OutsideRead(checked: [unavailable.path]),
+                             unlisted: failed.unlisted,
+                             disk: DiskState(missingRoots: [missing.path], mountedVolumes: []),
+                             hasReadableRoot: failed.hasReadableRoot)
+        #expect(state.grid.allApps.map(\.id) == [unavailable.id])
+    }
+
     @Test(arguments: [false, true], [false, true])
     func unreadableDirectoriesProtectTilesThroughEveryAlias(aliasFirst: Bool, nested: Bool) throws {
         let fm = FileManager.default
@@ -1972,6 +1999,25 @@ func installed(_ name: String) -> InstalledApp {
         #expect(FileAccess.isGranted("/Users/x/Downloads/A.app"))
         #expect(sandbox.opened == ["/Users/x/Downloads/A.app"], "access through the bookmark, not the plain URL")
         #expect(sandbox.saved.keys.sorted() == ["/Users/x/Downloads/A.app"])
+    }
+
+    @Test func aBookmarkThatCannotBeOpenedIsReportedAndRetried() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let path = "/Users/x/Downloads/A.app"
+        sandbox.gone.insert(path)
+        var warned: [String] = []
+        let previous = FileAccess.onBookmarkFailure
+        FileAccess.onBookmarkFailure = { warned.append($0.path) }
+        defer { FileAccess.onBookmarkFailure = previous }
+
+        #expect(!FileAccess.remember(URL(fileURLWithPath: path)))
+        #expect(warned == [path])
+        #expect(!FileAccess.isGranted(path))
+        #expect(sandbox.saved[path] != nil, "the bookmark can be retried")
+        sandbox.gone.remove(path)
+        #expect(FileAccess.restore(prefs: testPreferences()).isEmpty)
+        #expect(FileAccess.isGranted(path))
     }
 
     @Test func anItemMovedSinceItWasPickedIsFollowed() {

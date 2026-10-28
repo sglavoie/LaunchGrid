@@ -54,11 +54,16 @@ public enum AppScanner {
         /// app at: /System/Cryptexes/…/Safari.app to /Applications/Safari.app. An open panel
         /// or saved layout can use either, so this tells it is an app already found.
         public var aliases: [String: String]
+        /// At least one scan root was listed successfully. An empty result can then be
+        /// used to remove apps known to be gone, while unlisted paths stay protected.
+        public var hasReadableRoot: Bool
 
-        public init(apps: [InstalledApp], unlisted: [String] = [], aliases: [String: String] = [:]) {
+        public init(apps: [InstalledApp], unlisted: [String] = [], aliases: [String: String] = [:],
+                    hasReadableRoot: Bool = false) {
             self.apps = apps
             self.unlisted = unlisted
             self.aliases = aliases
+            self.hasReadableRoot = hasReadableRoot
         }
     }
 
@@ -76,6 +81,7 @@ public enum AppScanner {
         var directoryAliases: [String: String] = [:]
         var directoryBundles: [String: [String: String]] = [:]
         var directoryChildren: [String: [String: String]] = [:]
+        var hasReadableRoot = false
 
         /// `realPath` is the bundle's symlink-free path, its identity for de-duplication.
         func consider(_ url: URL, realPath: String) {
@@ -109,6 +115,7 @@ public enum AppScanner {
                 unlistedDirectories.insert(real)
                 return
             }
+            if depth == 1 { hasReadableRoot = true }
             for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 if child.lastPathComponent.hasPrefix(".") { continue }
                 // Answered from the values prefetched with the listing. Only a symlink is
@@ -174,7 +181,7 @@ public enum AppScanner {
         for (directory, real) in directoryAliases.sorted(by: { $0.key < $1.key }) {
             recordAliases(at: directory, real: real, ancestors: [])
         }
-        return ScanResult(apps: results, unlisted: unlisted, aliases: aliases)
+        return ScanResult(apps: results, unlisted: unlisted, aliases: aliases, hasReadableRoot: hasReadableRoot)
     }
 
     static let scanKeys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .contentTypeKey, .isPackageKey, .isHiddenKey]
