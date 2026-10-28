@@ -104,36 +104,44 @@ public struct GridStore: Sendable {
         for old in dailyBackups.dropLast(Self.dailyBackupsKept) { try? fm.removeItem(at: old) }
     }
 
-    /// Saves `grid`. With `refreshingBackup`, the file it replaces becomes the backup first;
+    /// Saves `grid`. With `refreshingBackup`, the file it replaces becomes the backup after
+    /// the new file is safely written;
     /// without, the backup stays as it is, so it can be older than the save before this one.
     /// Returns whether the backup was refreshed. The first refresh on each day (`now`'s) keeps
     /// a copy of the backup it replaces (`dailyBackups`).
     @discardableResult
     public func save(_ grid: Grid, refreshingBackup: Bool = true, now: Date = Date()) throws -> Bool {
+        try save(grid, refreshingBackup: refreshingBackup, now: now, write: GridStore.writeDurably)
+    }
+
+    @discardableResult
+    func save(_ grid: Grid, refreshingBackup: Bool, now: Date,
+              write: (Data, URL) throws -> Void) throws -> Bool {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
         let target = fileURL
         let fm = FileManager.default
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         GridStore.removeLeftoverTemporaryFiles(beside: target)
-        var refreshed = false
+        var stagedBackup: URL?
+        defer { if let stagedBackup { unlink(stagedBackup.path) } }
         // A partly readable file can be repaired and saved, but it must not replace the
         // last complete backup. AppState keeps the damaged original separately.
         if refreshingBackup && fm.fileExists(atPath: target.path),
            let current = try? GridStore.decodeCountingSkipped(Data(contentsOf: target)),
            current.skipped == 0 {
-            // A clone on APFS, so it costs next to nothing, renamed over the old backup so there
-            // is always one. Best effort: the save matters more.
-            keepDailyCopy(day: GridStore.day(of: now))
+            // Stage the old layout before writing, but leave the existing backup alone until
+            // the new layout is safely on disk. A failed save must not erase an older backup.
             let backup = backupURL
             let tmp = backup.deletingLastPathComponent()
                 .appendingPathComponent(".\(backup.lastPathComponent).\(UUID().uuidString).tmp")
             if (try? fm.copyItem(at: target, to: tmp)) != nil {
-                refreshed = rename(tmp.path, backup.path) == 0
-                if !refreshed { unlink(tmp.path) }
+                stagedBackup = tmp
             }
         }
-        try GridStore.writeDurably(GridStore.encode(grid), to: target)
-        return refreshed
+        try write(GridStore.encode(grid), target)
+        guard let stagedBackup else { return false }
+        keepDailyCopy(day: GridStore.day(of: now))
+        return rename(stagedBackup.path, backupURL.path) == 0
     }
 
     /// Deletes temporary files an earlier save left beside `url` when it was cut short (by a

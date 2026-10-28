@@ -280,7 +280,11 @@ public enum LaunchpadImporter {
 
         var grid = Grid(rows: rows, columns: columns, pages: [])
         if let root {
-            let pageRows = (children[root.id] ?? []).filter { $0.type == ItemType.page.rawValue }
+            let nestedPages = (children[root.id] ?? []).filter { $0.type == ItemType.page.rawValue }
+            // Some databases use the parentless page itself as their only page. Its apps
+            // sit directly beneath it, without another type-3 row in between.
+            let pageRows = nestedPages.isEmpty && root.type == ItemType.page.rawValue
+                ? [root] : nestedPages
             // A page fuller than this grid holds splits into several, so its overflow doesn't
             // spill onto the next imported page and shift every page after it.
             let capacity = grid.capacity

@@ -1440,6 +1440,24 @@ func tempDir(_ prefix: String) -> URL {
 }
 
 @Suite struct ImporterTests {
+    @Test func importsAppsDirectlyUnderAParentlessPage() {
+        typealias Row = LaunchpadImporter.Row
+        let items = [
+            Row(id: 1, type: 3, parent: 0, ordering: 0),
+            Row(id: 2, type: 4, parent: 1, ordering: 0),
+            Row(id: 3, type: 4, parent: 1, ordering: 1),
+        ]
+        let apps = [
+            2: LaunchpadImporter.AppRow(title: "Mail", bundleID: "com.apple.mail"),
+            3: LaunchpadImporter.AppRow(title: "Notes", bundleID: "com.apple.Notes"),
+        ]
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [1: "Work"],
+                                             rows: 1, columns: 1) { "/Applications/\($0).app" }
+        #expect(result.grid.pages.map(\.title) == ["Work", "Work"])
+        #expect(result.grid.allApps.map(\.name) == ["Mail", "Notes"])
+        #expect(result.imported == 2)
+    }
+
     /// Builds a Launchpad-style DB: root(1) → pages → apps and a folder (type 2) with its own page.
     func makeFixture() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("lp-\(UUID().uuidString).db")

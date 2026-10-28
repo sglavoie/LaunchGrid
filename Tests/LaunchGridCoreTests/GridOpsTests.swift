@@ -576,6 +576,28 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(leftovers.isEmpty, "the temporary file is renamed into place")
     }
 
+    @Test func aFailedSavePreservesTheEarlierBackup() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let first = Grid(pages: [Page(items: [.app(app("A"))])])
+        let second = Grid(pages: [Page(items: [.app(app("B"))])])
+        let third = Grid(pages: [Page(items: [.app(app("C"))])])
+        try store.save(first)
+        try store.save(second)
+
+        #expect(throws: CocoaError.self) {
+            try store.save(third, refreshingBackup: true, now: Date()) { _, _ in
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+        }
+        #expect(try store.load() == second)
+        #expect(try store.loadBackup() == first)
+        let leftovers = try fm.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".tmp") }
+        #expect(leftovers.isEmpty)
+    }
+
     @Test func repairingPartlyReadableFileKeepsTheLastGoodBackup() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
