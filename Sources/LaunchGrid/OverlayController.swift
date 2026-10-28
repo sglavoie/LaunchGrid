@@ -768,8 +768,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if ending, event.window === panel { settleSwipe() }
             return event
         }
-        guard state.query.isEmpty else {
-            if ending { settleSwipe() }
+        let searching = !state.query.isEmpty
+        // If a search began during a swipe of the grid, finish that gesture without
+        // carrying its accumulated movement into the search results.
+        if searching && (state.swipeOffset != 0 || state.folderSwipeOffset != 0) {
+            settleSwipe()
             return nil
         }
         let width = max(state.drag.pagerFrame.width, 1)
@@ -785,15 +788,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 scrollIsVertical = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
             }
             scrollAccumulator += scrollIsVertical == true ? event.scrollingDeltaY : event.scrollingDeltaX
-            let inFolder = state.openFolder != nil
+            let inFolder = !searching && state.openFolder != nil
             if inFolder {
                 state.folderSwipeOffset = state.swipeOffset(for: scrollAccumulator, width: max(state.drag.folderGridFrame.width, 1))
-            } else {
+            } else if !searching {
                 state.swipeOffset = state.swipeOffset(for: scrollAccumulator, width: width)
             }
             if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
                 let threshold = min(120, (inFolder ? max(state.drag.folderGridFrame.width, 1) : width) * 0.12)
-                let flip = scrollAccumulator < -threshold ? 1 : scrollAccumulator > threshold ? -1 : 0
+                let flip = event.phase.contains(.cancelled) ? 0
+                    : scrollAccumulator < -threshold ? 1 : scrollAccumulator > threshold ? -1 : 0
                 if inFolder && flip != 0 {
                     // The folder shows one page at a time: the new one comes in where it is.
                     state.folderSwipeOffset = 0
