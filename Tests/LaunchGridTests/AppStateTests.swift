@@ -1205,6 +1205,23 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct ReplaceGridTests {
+    @Test(arguments: [false, true])
+    func replacingALayoutClearsFocusFromTheFolderItCloses(unchanged: Bool) {
+        let state = makeState()
+        let folder = Folder(name: "Work", apps: ["A", "B", "C"].map { installed($0).makeRef() })
+        let layout = Grid(pages: [Page(items: [.folder(folder)])])
+        state.replaceGrid(layout)
+        state.openFolder(folder.id)
+        state.focusIndex = 2
+
+        var replacement = layout
+        if !unchanged { replacement.pages[0].title = "Imported" }
+        state.replaceGrid(replacement)
+
+        #expect(state.openFolderID == nil)
+        #expect(state.focusIndex == nil, "a closed folder's app index is not a top-level item index")
+    }
+
     @Test func restartingWithOnlyPrunedAppsRestoresTheExistingLayout() throws {
         let state = makeState(["A"])
         state.prefs.autoAddApps = false

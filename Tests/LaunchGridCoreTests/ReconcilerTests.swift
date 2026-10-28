@@ -9,6 +9,32 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test(arguments: [false, true])
+    func aDeletedCopyCannotClaimAnotherCopyThroughCaseFolding(goneFirst: Bool) {
+        let gone = installed("Editor", id: "com.test.editor", path: "/Tools/Editor.app")
+        let kept = installed("editor", id: "com.test.editor", path: "/Tools/editor.app")
+        let goneRef = gone.makeRef()
+        var keptRef = kept.makeRef()
+        keptRef.displayName = "Work Editor"
+        let folder = Folder(name: "Work", apps: [keptRef])
+        let items: [GridItem] = goneFirst ? [.app(goneRef), .folder(folder)] : [.folder(folder), .app(goneRef)]
+        var g = Grid(pages: [Page(items: items)])
+
+        let report = Reconciler.reconcile(&g, installed: [kept], autoAdd: true,
+                                         pathExists: { $0 == kept.path })
+
+        #expect(g.folder(folder.id)?.apps == [keptRef])
+        #expect(g.allApps.map(\.id) == [keptRef.id])
+        #expect(g.recentlyPruned.map(\.app.id) == [goneRef.id])
+        #expect(report.duplicatesDropped == 0)
+
+        // If this was an update, both copies return with their own identities and layout.
+        let restored = Reconciler.reconcile(&g, installed: [gone, kept], autoAdd: true)
+        #expect(g.pages[0].items == items)
+        #expect(restored.restored == [gone.name])
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
     @Test(arguments: [false, true], [false, true])
     func aMovedFolderReturnsAtItsNewLocationAfterItsAppsUpdate(emptyDestination: Bool, returnLastFirst: Bool) {
         let a = installed("A"), b = installed("B"), sentinel = installed("Other")

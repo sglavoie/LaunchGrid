@@ -304,6 +304,10 @@ final class AppState {
         hasGridFile = true
         currentPage = 0
         openFolderID = nil
+        folderPage = 0
+        // Replacing a layout leaves the old page or folder. Its focused index may not
+        // exist on the first page; search results keep their independently adjusted focus.
+        if query.isEmpty { focusIndex = nil }
         reconcile()
         IconProvider.shared.prewarm(grid.allApps.map(\.path))
     }

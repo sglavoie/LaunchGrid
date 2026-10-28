@@ -63,6 +63,12 @@ public enum Reconciler {
             (0..<restoreWindow).contains(now.timeIntervalSince($0.prunedAt))
                 && !grid.isExcluded(key: $0.app.key, path: $0.app.path)
         }
+        // Exact paths and explicit aliases identify owners without guessing about case.
+        // On a case-sensitive volume, a deleted Editor.app must not take editor.app's
+        // tile (or its pending restoration) just because their names fold alike.
+        let ownedPaths = Set((grid.allApps + returning.map(\.app)).compactMap { ref in
+            byPath[ref.path]?.path ?? aliases[ref.path].flatMap { byPath[$0]?.path }
+        })
         // Reserve the scan's spelling of every tile's path before following moves. A tile
         // later in visual order can already own a copy through an alias or a case-only
         // rename; an earlier missing tile must not claim that copy and erase its owner.
@@ -97,6 +103,7 @@ public enum Reconciler {
             // Zoom.us.app): the case-insensitive disk still finds the old spelling, so the ref
             // would neither follow it nor be pruned, and the new spelling would be added again.
             if atPath == nil, let respelt = byFoldedPath[ref.path.lowercased()],
+               (!ownedPaths.contains(respelt.path) || pathExists(ref.path)),
                ref.bundleID == nil || respelt.bundleID == nil || respelt.bundleID == ref.bundleID {
                 return (respelt, false)
             }
