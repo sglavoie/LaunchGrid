@@ -622,10 +622,12 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         try store.save(first)
         try store.save(second)
 
+        var warning: Error?
         let refreshed = try store.save(third, refreshingBackup: true, now: Date(), flushBackup: { _ in
             throw CocoaError(.fileWriteOutOfSpace)
-        }, write: GridStore.writeDurably)
+        }, onBackupFailure: { warning = $0 }, write: GridStore.writeDurably)
         #expect(!refreshed)
+        #expect((warning as? CocoaError)?.code == .fileWriteOutOfSpace)
         #expect(try store.load() == third, "the layout can still be saved")
         #expect(try store.loadBackup() == first, "an unflushed copy cannot replace it")
         #expect(try fm.contentsOfDirectory(atPath: dir.path).allSatisfy { !$0.hasSuffix(".tmp") })

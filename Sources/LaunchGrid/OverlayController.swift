@@ -108,7 +108,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if saving {
             state.saveInBackground(reportingFailure: false) { [weak self] saved in
                 progress.saved = saved
-                if !saved && progress.gone { self?.state.reportLastSaveFailure() }
+                // A quick re-show can cancel the fade completion. Report on that new view
+                // too, rather than leaving a finished save's warning unreported.
+                if progress.gone || self?.state.isShown == true {
+                    if saved { self?.state.reportLastBackupFailure() }
+                    else { self?.state.reportLastSaveFailure() }
+                }
             }
         }
         visibilityGeneration += 1
@@ -123,6 +128,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 self.state.didHide()
                 progress.gone = true
                 if progress.saved == false { self.state.reportLastSaveFailure() }
+                if progress.saved == true { self.state.reportLastBackupFailure() }
                 // Hand focus back to the previous app unless another of our windows is up, or
                 // to the last app opened behind the grid while it stayed up.
                 let others = NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }

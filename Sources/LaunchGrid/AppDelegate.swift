@@ -8,6 +8,47 @@ extension UTType {
     static let launchGridLayout = UTType(exportedAs: "com.sglavoie.launchgrid.layout", conformingTo: .json)
 }
 
+/// Finder can send several files in one open event, including before the first scan.
+/// Each load (and its confirmation or import) finishes before the next one starts.
+@MainActor
+final class LayoutOpenQueue {
+    private var pending: [URL] = []
+    private var ready = false
+    private var opening = false
+    private let open: (URL, @escaping @MainActor () -> Void) -> Void
+    private let onEmpty: () -> Void
+
+    init(open: @escaping (URL, @escaping @MainActor () -> Void) -> Void,
+         onEmpty: @escaping () -> Void) {
+        self.open = open
+        self.onEmpty = onEmpty
+    }
+
+    func enqueue(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        pending.append(contentsOf: urls)
+        advance()
+    }
+
+    func becomeReady() {
+        guard !ready else { return }
+        ready = true
+        advance()
+    }
+
+    private func advance() {
+        guard ready, !opening else { return }
+        guard !pending.isEmpty else { onEmpty(); return }
+        opening = true
+        let next = pending.removeFirst()
+        open(next) { [weak self] in
+            guard let self else { return }
+            self.opening = false
+            self.advance()
+        }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     static let showNotification = Notification.Name("com.sglavoie.launchgrid.show")
@@ -31,9 +72,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var rescanDebounce: Task<Void, Never>?
     private var periodicRescan: Timer?
     private var windows: [String: NSWindow] = [:]
-    /// Layout files opened before the first scan finished (e.g. the double-click that launched us).
-    private var pendingOpen: URL?
-    private var catalogReady = false
+    private lazy var layoutOpenQueue = LayoutOpenQueue(
+        open: { [weak self] url, finished in
+            guard let self else { finished(); return }
+            self.openLayout(url, finished: finished)
+        },
+        onEmpty: { [weak self] in
+            guard let self, !self.state.hasGridFile else { return }
+            self.showFirstRun()
+        }
+    )
 
     /// Other running copies of LaunchGrid (same bundle ID), leaving out scratch runs.
     static var otherInstances: [NSRunningApplication] {
@@ -203,7 +251,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             state.followMovedApps(await restored.value)
             state.rescan { [weak self] in
                 guard let self else { return }
-                self.catalogReady = true
                 #if !APP_STORE
                 if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
                     // A script rebuilds and edits the layout: only against a scratch one.
@@ -214,17 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     FileHandle.standardError.write(Data("LaunchGrid: ignoring LAUNCHGRID_DEBUG_SCRIPT, which needs LAUNCHGRID_DATA_DIR (a scratch layout)\n".utf8))
                 }
                 #endif
-                if let url = self.pendingOpen {
-                    // Loading needs the catalog, so a file that launched us waits for the first scan.
-                    self.pendingOpen = nil
-                    // The welcome window only if the file gave no layout (cancelled, unreadable),
-                    // not over it while it loads.
-                    self.openLayout(url, finished: { [weak self] in
-                        if let self, !self.state.hasGridFile { self.showFirstRun() }
-                    })
-                } else if !self.state.hasGridFile {
-                    self.showFirstRun()
-                }
+                self.layoutOpenQueue.becomeReady()
                 if CommandLine.arguments.contains("--show") { self.overlay.show() }
             }
             startWatching()
@@ -246,12 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// A layout file opened from Finder. Arrives before applicationDidFinishLaunching when the
     /// double-click is what launched us.
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard let url = urls.first else { return }
-        guard catalogReady else {
-            pendingOpen = url
-            return
-        }
-        openLayout(url)
+        layoutOpenQueue.enqueue(urls)
     }
 
     /// Loads a layout file, from Finder or the Load Grid File panel, asking before it replaces
@@ -306,7 +338,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // The last changes would be lost on the way out: say so, so they can be kept open.
-        guard let state, !state.saveNow(reportingFailure: false) else { return .terminateNow }
+        guard let state else { return .terminateNow }
+        if state.saveNow(reportingFailure: false) {
+            // A failed backup refresh is separate from saving the current layout. Make the
+            // warning visible even when this was the only save made before quitting.
+            state.reportLastBackupFailure(forceAlert: true)
+            return .terminateNow
+        }
         // Saving again on the way out would fail again, and tell it a second time.
         overlay.hide(deactivate: false, saving: false)
         NSApp.activate()

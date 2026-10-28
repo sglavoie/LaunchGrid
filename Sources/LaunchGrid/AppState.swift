@@ -458,10 +458,15 @@ final class AppState {
     @ObservationIgnored private(set) var lastSaveError: Error?
     /// What to tell the person about the last failed save, for `reportLastSaveFailure()`.
     @ObservationIgnored private var lastSaveFailureDetail: String?
+    /// A failed backup refresh does not mean the current layout failed to save.
+    @ObservationIgnored private var lastBackupFailureDetail: String?
+    @ObservationIgnored private var backupFailureReported = false
     /// Writes the saves in order, off the main thread unless one has to be done now.
     @ObservationIgnored private(set) lazy var writer = LayoutWriter(store: store)
     /// Counts the writes handed to `writer`, so a write knows whether a later one is queued.
     @ObservationIgnored private var lastWriteSerial = 0
+    /// Completion tasks can reach the main actor out of order even though disk writes are serial.
+    @ObservationIgnored private var lastFinishedWriteSerial = 0
 
     /// Saves the grid now, unless it is unchanged since the last save; false when that failed.
     /// Waits for the disk, so it is for quitting; `saveInBackground` doesn't hold up the screen.
@@ -471,7 +476,7 @@ final class AppState {
         let grid = grid
         lastWriteSerial &+= 1
         let serial = lastWriteSerial
-        return finishSave(generation, serial: serial, grid: grid, error: writer.save(grid), reportingFailure: reportingFailure)
+        return finishSave(generation, serial: serial, grid: grid, result: writer.save(grid), reportingFailure: reportingFailure)
     }
 
     /// `saveNow` with the writing done off the main thread; `done` gets whether it worked.
@@ -483,11 +488,11 @@ final class AppState {
         let grid = grid
         lastWriteSerial &+= 1
         let serial = lastWriteSerial
-        writer.saveInBackground(grid) { [weak self] error in
+        writer.saveInBackground(grid) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
                 // Not inside `done?(…)`: with no `done`, that would skip recording the save.
-                let saved = self.finishSave(generation, serial: serial, grid: grid, error: error, reportingFailure: reportingFailure)
+                let saved = self.finishSave(generation, serial: serial, grid: grid, result: result, reportingFailure: reportingFailure)
                 done?(saved)
             }
         }
@@ -523,10 +528,15 @@ final class AppState {
 
     /// Records how the save of `generation`, the writer's `serial`th write, went; true when it
     /// worked or no longer matters.
-    private func finishSave(_ generation: Int, serial: Int, grid saved: Grid, error: Error?, reportingFailure: Bool) -> Bool {
+    private func finishSave(_ generation: Int, serial: Int, grid saved: Grid,
+                            result: LayoutWriter.WriteResult, reportingFailure: Bool) -> Bool {
+        // An older completion cannot restore an obsolete backup warning or clear a newer
+        // save failure after the writer has already reported a later write.
+        guard serial >= lastFinishedWriteSerial else { return true }
+        lastFinishedWriteSerial = serial
         // A later save, made at once when quitting, already wrote a newer grid.
         if generation &- savedGeneration < 0 { return true }
-        if let error {
+        if let error = result.error {
             // A write of this grid or a newer one is queued after it (hiding while a save was
             // under way queues the same grid twice): that one tells how saving went. Or an
             // earlier write already saved this very grid, so the file is up to date.
@@ -544,6 +554,14 @@ final class AppState {
         savedGeneration = generation
         if !saved.allApps.isEmpty { hasGridFile = true }
         saveFailureReported = false
+        if result.backupRefreshed {
+            lastBackupFailureDetail = nil
+            backupFailureReported = false
+        } else if let error = result.backupError {
+            NSLog("LaunchGrid: layout saved but backup refresh failed: \(error)")
+            lastBackupFailureDetail = String(localized: "Your layout was saved, but its previous-save backup could not be updated. Check the data folder and available disk space.\n\n\(error.localizedDescription)")
+            if reportingFailure { reportLastBackupFailure() }
+        }
         // Before the first layout nothing is on the grid yet, so nothing is unused either.
         if hasGridFile { onAppPathsInUse(appPathsInUse) }
         return true
@@ -565,6 +583,17 @@ final class AppState {
     /// `reportingFailure: false` while the overlay was still on screen.
     func reportLastSaveFailure() {
         if let detail = lastSaveFailureDetail { reportSaveFailure(detail) }
+    }
+
+    /// Called after a hidden save's fade, or before quitting, when a backup warning waited.
+    func reportLastBackupFailure(forceAlert: Bool = false) {
+        guard let detail = lastBackupFailureDetail, !backupFailureReported else { return }
+        backupFailureReported = true
+        if isShown && !forceAlert {
+            showToast(String(localized: "Layout saved, but its backup could not be updated"))
+        } else {
+            onError(String(localized: "Layout backup could not be updated"), detail)
+        }
     }
 
     /// Paths of the apps on the grid, in its undo and redo history, and recently pruned (which
@@ -1498,6 +1527,11 @@ final class AppState {
 /// Writes the layout on one serial queue, so saves land in the order they were made: one
 /// made at once (when quitting) waits for those under way instead of racing them.
 final class LayoutWriter: @unchecked Sendable {
+    struct WriteResult: Sendable {
+        var error: Error?
+        var backupError: Error?
+        var backupRefreshed = false
+    }
     /// The backup is refreshed at the first save of a run and then at most this often, so a
     /// change to regret (an import, a sort) doesn't reach it with the very next edit.
     static let backupInterval: TimeInterval = 10 * 60
@@ -1515,12 +1549,12 @@ final class LayoutWriter: @unchecked Sendable {
         self.now = now
     }
 
-    /// Saves now, after any save still under way; the error, if it failed.
-    func save(_ grid: Grid) -> Error? {
+    /// Saves now, after any save still under way; reports layout and backup results separately.
+    func save(_ grid: Grid) -> WriteResult {
         queue.sync { write(grid) }
     }
 
-    func saveInBackground(_ grid: Grid, done: @escaping @Sendable (Error?) -> Void) {
+    func saveInBackground(_ grid: Grid, done: @escaping @Sendable (WriteResult) -> Void) {
         queue.async { done(self.write(grid)) }
     }
 
@@ -1529,16 +1563,18 @@ final class LayoutWriter: @unchecked Sendable {
     private let debugDelay = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SAVE_DELAY"].flatMap(Double.init)
     #endif
 
-    private func write(_ grid: Grid) -> Error? {
+    private func write(_ grid: Grid) -> WriteResult {
         #if !APP_STORE
         if let debugDelay { Thread.sleep(forTimeInterval: debugDelay) }
         #endif
         let refreshBackup = lastBackup.map { now().timeIntervalSince($0) >= Self.backupInterval } ?? true
         do {
-            if try store.save(grid, refreshingBackup: refreshBackup, now: now()) { lastBackup = now() }
-            return nil
+            var backupError: Error?
+            let refreshed = try store.save(grid, refreshingBackup: refreshBackup, now: now()) { backupError = $0 }
+            if refreshed { lastBackup = now() }
+            return WriteResult(error: nil, backupError: backupError, backupRefreshed: refreshed)
         } catch {
-            return error
+            return WriteResult(error: error)
         }
     }
 }

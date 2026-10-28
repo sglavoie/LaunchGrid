@@ -99,7 +99,11 @@ public struct GridStore: Sendable {
     private func keepDailyCopy(day: String) {
         let fm = FileManager.default
         let daily = dailyBackupURL(day: day)
-        guard fm.fileExists(atPath: backupURL.path), !fm.fileExists(atPath: daily.path) else { return }
+        // A damaged or manually replaced backup path might be a directory or a link.
+        // Never copy its contents into the daily-backup rotation.
+        guard let values = try? backupURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true,
+              !fm.fileExists(atPath: daily.path) else { return }
         guard (try? fm.copyItem(at: backupURL, to: daily)) != nil else { return }
         for old in dailyBackups.dropLast(Self.dailyBackupsKept) { try? fm.removeItem(at: old) }
     }
@@ -110,13 +114,16 @@ public struct GridStore: Sendable {
     /// Returns whether the backup was refreshed. The first refresh on each day (`now`'s) keeps
     /// a copy of the backup it replaces (`dailyBackups`).
     @discardableResult
-    public func save(_ grid: Grid, refreshingBackup: Bool = true, now: Date = Date()) throws -> Bool {
-        try save(grid, refreshingBackup: refreshingBackup, now: now, write: GridStore.writeDurably)
+    public func save(_ grid: Grid, refreshingBackup: Bool = true, now: Date = Date(),
+                     onBackupFailure: ((Error) -> Void)? = nil) throws -> Bool {
+        try save(grid, refreshingBackup: refreshingBackup, now: now,
+                 onBackupFailure: onBackupFailure, write: GridStore.writeDurably)
     }
 
     @discardableResult
     func save(_ grid: Grid, refreshingBackup: Bool, now: Date,
               flushBackup: (URL) throws -> Void = GridStore.flushFile,
+              onBackupFailure: ((Error) -> Void)? = nil,
               write: (Data, URL) throws -> Void) throws -> Bool {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
         let target = fileURL
@@ -137,14 +144,22 @@ public struct GridStore: Sendable {
                 .appendingPathComponent(".\(backup.lastPathComponent).\(UUID().uuidString).tmp")
             // The main writer flushes its temporary file before renaming it. Do the
             // same here: a copied backup can otherwise reappear empty after a power cut.
-            if (try? fm.copyItem(at: target, to: tmp)) != nil,
-               (try? flushBackup(tmp)) != nil { stagedBackup = tmp }
-            else { unlink(tmp.path) }
+            do {
+                try fm.copyItem(at: target, to: tmp)
+                try flushBackup(tmp)
+                stagedBackup = tmp
+            } catch {
+                unlink(tmp.path)
+                onBackupFailure?(error)
+            }
         }
         try write(GridStore.encode(grid), target)
         guard let stagedBackup else { return false }
         keepDailyCopy(day: GridStore.day(of: now))
-        guard rename(stagedBackup.path, backupURL.path) == 0 else { return false }
+        guard rename(stagedBackup.path, backupURL.path) == 0 else {
+            onBackupFailure?(GridStore.posixError())
+            return false
+        }
         // The new backup's contents are flushed above. Some filesystems refuse directory
         // syncing; the backup was still replaced, so count this refresh only once.
         _ = GridStore.flushDirectory(at: target.deletingLastPathComponent())

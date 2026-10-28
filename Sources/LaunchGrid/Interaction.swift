@@ -233,10 +233,13 @@ extension AppState {
 
     func dragEnded(start: CGPoint, location: CGPoint, predicted: CGPoint) {
         if debugDrag { NSLog("drag ended loc=\(location) active=\(drag.active) gap=\(String(describing: drag.gap)) merge=\(String(describing: drag.mergeTarget))") }
-        if drag.abandonedStart != nil {
+        if drag.abandonedStart == start {
             drag.abandonedStart = nil
             return
         }
+        // A previous gesture can end after a new one has started. Its release must not
+        // drop (or reset) the new drag at the old gesture's pointer position.
+        guard drag.decided, drag.gestureStart == start else { return }
         defer {
             drag.reset()
             dragFinished()

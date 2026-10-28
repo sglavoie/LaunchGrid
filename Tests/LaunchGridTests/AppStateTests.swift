@@ -253,6 +253,25 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
+    @Test func aLateEndFromThePreviousGestureDoesNotDropTheNewDrag() {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let first = state.iconCenter(0, inFolder: false)
+        let second = state.iconCenter(2, inFolder: false)
+        state.dragChanged(start: first, location: first)
+        state.dragChanged(start: second, location: second)
+        #expect(state.drag.active && state.drag.primary?.title == "C")
+
+        state.dragEnded(start: first, location: first, predicted: first)
+        #expect(state.drag.active && state.drag.primary?.title == "C")
+        #expect(state.grid.allApps.map(\.name) == ["A", "B", "C"])
+
+        let release = CGPoint(x: 0, y: second.y)
+        state.dragEnded(start: second, location: release, predicted: release)
+        #expect(!state.drag.active)
+        #expect(state.grid.allApps.map(\.name) == ["C", "A", "B"])
+    }
+
     @Test func aNewGestureAfterAMissingEndLeavesTheTemporaryPage() {
         let state = makeState(["A", "B"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
@@ -451,6 +470,34 @@ func installed(_ name: String) -> InstalledApp {
     }
 }
 
+@MainActor @Suite struct LayoutOpenQueueTests {
+    @Test func everyFileWaitsForThePreviousLoadIncludingFilesOpenedBeforeTheScan() {
+        let urls = ["A", "B", "C"].map { URL(fileURLWithPath: "/tmp/\($0).launchgrid") }
+        var opened: [URL] = []
+        var completions: [@MainActor () -> Void] = []
+        var emptyCalls = 0
+        let queue = LayoutOpenQueue(open: { url, finished in
+            opened.append(url)
+            completions.append(finished)
+        }, onEmpty: { emptyCalls += 1 })
+
+        queue.enqueue(Array(urls.prefix(2)))
+        #expect(opened.isEmpty)
+        queue.becomeReady()
+        #expect(opened == [urls[0]])
+        queue.enqueue([urls[2]])
+        #expect(opened == [urls[0]], "a second Finder event waits for the active load")
+        completions[0]()
+        #expect(opened == Array(urls.prefix(2)))
+        #expect(emptyCalls == 0)
+        completions[1]()
+        #expect(opened == urls)
+        #expect(emptyCalls == 0)
+        completions[2]()
+        #expect(emptyCalls == 1, "the welcome window is considered after all files finish")
+    }
+}
+
 @MainActor @Suite(.tempDir) struct LoadProblemTests {
     func load(_ contents: String) throws -> AppState {
         let dir = TempDir.url
@@ -627,7 +674,7 @@ func installed(_ name: String) -> InstalledApp {
             clock.withLock { $0 }
         }
         func save(_ name: String) throws {
-            if let error = writer.save(Grid(pages: [Page(items: [.app(AppRef(bundleID: nil, path: "/Applications/\(name).app", name: name))])])) {
+            if let error = writer.save(Grid(pages: [Page(items: [.app(AppRef(bundleID: nil, path: "/Applications/\(name).app", name: name))])])).error {
                 throw error
             }
         }
@@ -1613,6 +1660,59 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct SaveTests {
+    @Test(arguments: [false, true])
+    func aFailedBackupRefreshIsReportedWithoutCallingTheLayoutSaveFailed(reportImmediately: Bool) throws {
+        let state = makeState(["A"])
+        #expect(state.saveNow())
+        let backup = state.store.backupURL
+        // A directory at the backup path makes the final backup rename fail, while the
+        // current layout can still be written beside it.
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: false)
+        let a = try #require(state.grid.allApps.first)
+        var warnings: [(String, String)] = []
+        state.onError = { warnings.append(($0, $1)) }
+        state.apply { $0.rename(a.id, to: "B") }
+
+        #expect(state.saveNow(reportingFailure: reportImmediately))
+        #expect(state.lastSaveError == nil)
+        #expect(try state.store.load().allApps.first?.title == "B")
+        #expect(!FileManager.default.fileExists(atPath: state.store.dailyBackupURL(day: GridStore.day(of: Date())).path),
+                "a directory in place of the backup must not enter daily rotation")
+        #expect(warnings.count == (reportImmediately ? 1 : 0))
+        state.reportLastBackupFailure() // after a hidden save, or a duplicate notification
+        #expect(warnings.count == 1)
+        #expect(warnings[0].0.contains("backup"))
+        #expect(warnings[0].1.contains("saved"))
+
+        try FileManager.default.removeItem(at: backup)
+        state.apply { $0.rename(a.id, to: "C") }
+        #expect(state.saveNow())
+        #expect(try state.store.loadBackup().allApps.first?.title == "B")
+        state.reportLastBackupFailure()
+        #expect(warnings.count == 1, "a successful refresh clears the old warning")
+    }
+
+    @Test func anOlderBackupWarningCannotArriveAfterANewerSuccessfulSave() async throws {
+        let state = makeState(["A"])
+        #expect(state.saveNow())
+        let backup = state.store.backupURL
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: false)
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "B") }
+        var warnings = 0
+        state.onError = { _, _ in warnings += 1 }
+        var olderDone = false
+        state.saveInBackground(reportingFailure: false) { _ in olderDone = true }
+        state.writer.queue.async { try? FileManager.default.removeItem(at: backup) }
+        // This blocks the main actor until both writes finish. The older write's completion
+        // reaches it afterward, even though its backup failed before the newer one succeeded.
+        #expect(state.saveNow(reportingFailure: false))
+        while !olderDone { try await Task.sleep(for: .milliseconds(10)) }
+        state.reportLastBackupFailure()
+        #expect(warnings == 0)
+        #expect(try state.store.loadBackup().allApps.first?.title == "B")
+    }
+
     func savedTitles(_ state: AppState) throws -> [String] {
         try GridStore.decode(Data(contentsOf: state.store.url)).allApps.map(\.title)
     }
