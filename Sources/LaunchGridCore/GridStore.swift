@@ -262,12 +262,12 @@ public struct GridStore: Sendable {
     }
 
     /// Gives a fresh ID to each page and item (app or folder, inside folders too) whose ID an
-    /// earlier one already has, so a hand-edited or merged file can't make `locate` and `detach`
-    /// disagree about which item an ID means.
+    /// earlier one already has, including apps waiting for restoration, so a hand-edited or
+    /// merged file can't make `locate` and `detach` disagree about which item an ID means.
     static func freshenRepeatedIDs(in grid: inout Grid) {
         var seen = Set<UUID>()
         func fresh(_ id: inout UUID) {
-            if !seen.insert(id).inserted { id = UUID() }
+            while !seen.insert(id).inserted { id = UUID() }
         }
         for p in grid.pages.indices {
             fresh(&grid.pages[p].id)
@@ -283,5 +283,12 @@ public struct GridStore: Sendable {
                 }
             }
         }
+        // Restored apps become ordinary tiles without another decode. Reserve their
+        // containers too: an emptied page or folder may be recreated by the same scan.
+        for entry in grid.recentlyPruned {
+            seen.insert(entry.pageID)
+            if let id = entry.folderID { seen.insert(id) }
+        }
+        for i in grid.recentlyPruned.indices { fresh(&grid.recentlyPruned[i].app.id) }
     }
 }

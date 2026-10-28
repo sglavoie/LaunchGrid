@@ -680,6 +680,48 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(decoded.pages[1].id != id)
     }
 
+    @Test(arguments: [false, true])
+    func restoredAppsCannotReuseAnotherTilesID(collidesWithVisibleApp: Bool) throws {
+        let a = app("A")
+        var b = app("B"), c = app("C")
+        b.id = collidesWithVisibleApp ? a.id : b.id
+        c.id = b.id
+        let page = Page(items: [.app(a)])
+        let now = Date()
+        let g = Grid(pages: [page], recentlyPruned: [
+            PrunedApp(app: b, prunedAt: now, pageID: page.id, index: 1),
+            PrunedApp(app: c, prunedAt: now, pageID: page.id, index: 2),
+        ])
+        var decoded = try GridStore.decode(GridStore.encode(g))
+        _ = Reconciler.reconcile(&decoded, installed: [a, b, c].map(InstalledApp.init),
+                                autoAdd: false, now: now + 1)
+
+        #expect(decoded.allApps.map(\.name) == ["A", "B", "C"])
+        #expect(Set(decoded.allApps.map(\.id)).count == 3)
+        let restored = try #require(decoded.allApps.first { $0.name == "B" })
+        decoded.remove([restored.id])
+        #expect(decoded.allApps.map(\.name) == ["A", "C"], "removing one restored tile must not remove another")
+    }
+
+    @Test func restoredAppsCannotReuseTheirRecreatedFoldersID() throws {
+        var b = app("B")
+        let c = app("C"), folderID = UUID(), page = Page()
+        b.id = folderID
+        let now = Date()
+        let g = Grid(pages: [page], recentlyPruned: [b, c].enumerated().map { index, ref in
+            PrunedApp(app: ref, prunedAt: now, pageID: page.id, index: 0,
+                      folderID: folderID, folderName: "Work", folderIndex: index, folderEmptied: true)
+        })
+        var decoded = try GridStore.decode(GridStore.encode(g))
+        _ = Reconciler.reconcile(&decoded, installed: [b, c].map(InstalledApp.init),
+                                autoAdd: false, now: now + 1)
+
+        let restored = try #require(decoded.folder(folderID)?.apps.first)
+        #expect(restored.id != folderID)
+        decoded.remove([restored.id])
+        #expect(decoded.folder(folderID)?.apps == [c], "removing a restored app must leave its folder and siblings")
+    }
+
     @Test func anUnreadableEntrySkipsOnlyItself() throws {
         let json = #"""
         {"rows": 2, "columns": 2, "pages": [
