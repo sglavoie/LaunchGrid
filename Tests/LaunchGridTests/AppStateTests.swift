@@ -1001,6 +1001,40 @@ func installed(_ name: String) -> InstalledApp {
         #expect(icons.dropStale([app.path]) == [app.path])
         #expect(icons.cached(app.path) == nil)
     }
+
+    @Test func iconResourceChangesWithoutAVersionBumpAreDropped() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Foo.app")
+        let plist = app.appendingPathComponent("Contents/Info.plist")
+        let icon = app.appendingPathComponent("Contents/Resources/Foo.icns")
+        try FileManager.default.createDirectory(at: icon.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<plist><dict><key>CFBundleIconFile</key><string>Foo</string></dict></plist>".utf8).write(to: plist)
+        try Data("icon-one".utf8).write(to: icon)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let icons = IconProvider()
+        _ = await icons.icon(app.path)
+        #expect(icons.dropStale([app.path]).isEmpty)
+        try Data("icon-two".utf8).write(to: icon) // same length, same Info.plist
+        #expect(icons.dropStale([app.path]) == [app.path])
+    }
+
+    @Test func assetCatalogChangesWithoutAVersionBumpAreDropped() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Foo.app")
+        let plist = app.appendingPathComponent("Contents/Info.plist")
+        let assets = app.appendingPathComponent("Contents/Resources/Assets.car")
+        try FileManager.default.createDirectory(at: assets.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<plist><dict><key>CFBundleIconName</key><string>AppIcon</string></dict></plist>".utf8).write(to: plist)
+        try Data("asset-one".utf8).write(to: assets)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let icons = IconProvider()
+        _ = await icons.icon(app.path)
+        #expect(icons.dropStale([app.path]).isEmpty)
+        try Data("asset-two".utf8).write(to: assets)
+        #expect(icons.dropStale([app.path]) == [app.path])
+    }
 }
 
 @MainActor @Suite(.tempDir) struct ChooseAppsTests {

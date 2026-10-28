@@ -154,6 +154,18 @@ public enum LaunchpadImporter {
         var seen = Set<String>()
         func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
         let spelling = Dictionary(installed.map { (real($0), $0) }, uniquingKeysWith: { a, _ in a })
+        // Paths saved by AppGrid or a Launchpad bookmark can outlive the app they named,
+        // or point into a disk image or the Trash. A scanned copy is already a known app.
+        func savedAppPath(_ path: String) -> Bool {
+            let url = URL(fileURLWithPath: path)
+            var isDirectory: ObjCBool = false
+            guard url.pathExtension.lowercased() == "app",
+                  FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { return false }
+            let resolved = real(path)
+            return AppScanner.read(appAt: url) != nil
+                && (spelling[resolved] != nil || keeps(path))
+        }
         /// Installed copies by bundle ID, read the first time a row has only its bundle ID to go on.
         var copiesByID: [String: [String]]?
         func copies(of id: String) -> [String] {
@@ -186,9 +198,9 @@ public enum LaunchpadImporter {
             // AppGrid invents `manual_app_<hash>` IDs for apps it added by path.
             let bundleID = row.bundleID.flatMap { $0.hasPrefix("manual_app_") || $0.isEmpty ? nil : $0 }
             var candidate: String?
-            if let p = row.customPath, FileManager.default.fileExists(atPath: p) { candidate = p }
+            if let p = row.customPath, savedAppPath(p) { candidate = p }
             if candidate == nil, let data = row.bookmark, let p = path(ofBookmark: data),
-               FileManager.default.fileExists(atPath: p) { candidate = p }
+               savedAppPath(p) { candidate = p }
             if candidate == nil, let b = bundleID {
                 // Launch Services gives one copy per bundle ID. Of several (Xcode and Xcode-beta,
                 // in AppGrid's table, which has no bookmarks), the one named as the row is, else
@@ -274,6 +286,7 @@ public enum LaunchpadImporter {
             let capacity = grid.capacity
             grid.pages = pageRows.flatMap { row in
                 let items = pageItems(row.id)
+                if items.isEmpty { return [Page(title: groupTitles[row.id])] }
                 return stride(from: 0, to: items.count, by: capacity).map {
                     Page(title: groupTitles[row.id], items: Array(items[$0..<min($0 + capacity, items.count)]))
                 }

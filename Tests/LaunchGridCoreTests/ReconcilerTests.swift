@@ -1504,6 +1504,45 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.grid.pages.map(\.title) == ["Work", "Work", "Games", "Games"])
     }
 
+    @Test func emptyImportedPagesKeepTheirPositionAndTitle() {
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0),
+                     Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 20, type: 3, parent: 1, ordering: 1),
+                     Row(id: 30, type: 3, parent: 1, ordering: 2),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0),
+                     Row(id: 31, type: 4, parent: 30, ordering: 0)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "First", bundleID: "com.first"),
+                    31: LaunchpadImporter.AppRow(title: "Last", bundleID: "com.last")]
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [20: "Reserved"],
+                                             rows: 1, columns: 2) { "/Applications/\($0).app" }
+        #expect(result.grid.pages.map(titles) == [["First"], [], ["Last"]])
+        #expect(result.grid.pages[1].title == "Reserved")
+    }
+
+    @Test func savedPathsMustBeLastingApps() throws {
+        let dir = tempDir("import-saved-paths")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Good.app", id: "com.good", in: dir)
+        try makeFakeApp(".Trash/Temporary.app", id: "com.temporary", in: dir)
+        let plain = dir.appendingPathComponent("NotAnApp")
+        let plainPlist = plain.appendingPathComponent("Contents/Info.plist")
+        try FileManager.default.createDirectory(at: plainPlist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<plist><dict><key>CFBundleIdentifier</key><string>com.invalid</string></dict></plist>".utf8).write(to: plainPlist)
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0)]
+            + (0..<4).map { Row(id: 11 + $0, type: 4, parent: 10, ordering: $0) }
+        let apps = [11: LaunchpadImporter.AppRow(title: "Good", bundleID: "com.good", customPath: dir.appendingPathComponent("Good.app").path),
+                    12: LaunchpadImporter.AppRow(title: "Temporary", bundleID: "com.temporary", customPath: dir.appendingPathComponent(".Trash/Temporary.app").path),
+                    13: LaunchpadImporter.AppRow(title: "Invalid", bundleID: "com.invalid", customPath: plain.path),
+                    14: LaunchpadImporter.AppRow(title: "Bookmarked temporary", bundleID: "com.temporary",
+                                                 bookmark: try dir.appendingPathComponent(".Trash/Temporary.app").bookmarkData())]
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                             keeps: LaunchpadImporter.isLastingCopy) { _ in nil }
+        #expect(result.grid.allApps.map(\.name) == ["Good"])
+        #expect(result.skipped == ["Temporary", "Invalid", "Bookmarked temporary"])
+    }
+
     @Test func importedAppsTakeTheScansSpellingOfTheirPath() throws {
         // Launch Services gives Safari's cryptex path; the scan finds it through the
         // /Applications symlink. The grid must use the scan's, or the app shows up twice.

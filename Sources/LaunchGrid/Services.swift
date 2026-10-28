@@ -215,14 +215,30 @@ final class IconProvider: @unchecked Sendable {
         return stale
     }
 
-    /// What an update changes in the bundle's Info.plist: its versions, and the icon's name.
-    /// A missing app gets a version of its own, so its icon is still tracked. (Not the file's
-    /// modification date: Apple's privacy manifest rules allow no reason for reading other apps'.)
+    /// Bundle versions and the icon resource's contents. Apps can replace their icon without
+    /// changing Info.plist, especially during development. A missing resource gets its own
+    /// fingerprint so adding it later also invalidates the generic icon.
     private static func version(_ path: String) -> String {
         guard FileManager.default.fileExists(atPath: path) else { return "missing" }
         let info = NSDictionary(contentsOfFile: path + "/Contents/Info.plist")
-        return ["CFBundleShortVersionString", "CFBundleVersion", "CFBundleIconFile", "CFBundleIconName"]
-            .map { info?[$0] as? String ?? "" }.joined(separator: "|")
+        var parts = ["CFBundleShortVersionString", "CFBundleVersion", "CFBundleIconFile", "CFBundleIconName"]
+            .map { info?[$0] as? String ?? "" }
+        let resources = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("Contents/Resources")
+        if let name = info?["CFBundleIconFile"] as? String, !name.isEmpty {
+            let file = (name as NSString).lastPathComponent
+            let icon = resources.appendingPathComponent((file as NSString).pathExtension.isEmpty ? file + ".icns" : file)
+            parts.append("icon:\(fingerprint(icon))")
+        }
+        if let name = info?["CFBundleIconName"] as? String, !name.isEmpty {
+            parts.append("assets:\(fingerprint(resources.appendingPathComponent("Assets.car")))")
+        }
+        return parts.joined(separator: "|")
+    }
+
+    private static func fingerprint(_ url: URL) -> Int? {
+        // Mapping avoids copying an asset catalog into memory. Hashing the bytes catches an
+        // in-place replacement of the same size without using file timestamps.
+        (try? Data(contentsOf: url, options: .mappedIfSafe))?.hashValue
     }
 
     /// Calls `done` with the icon: at once from the cache, else when it's drawn, by this call or
