@@ -116,8 +116,8 @@ final class Preferences {
         windowMode = WindowMode(rawValue: d.string(forKey: "windowMode") ?? "") ?? .fullScreen
         background = BackgroundStyle(rawValue: d.string(forKey: "background") ?? "") ?? .material
         solidColorHex = d.string(forKey: "solidColorHex") ?? "#1E2230"
-        backgroundOpacity = d.double(forKey: "backgroundOpacity")
-        blurRadius = d.double(forKey: "blurRadius")
+        backgroundOpacity = Self.appearanceValue(d.double(forKey: "backgroundOpacity"), in: 0...0.9, fallback: 0.25)
+        blurRadius = Self.appearanceValue(d.double(forKey: "blurRadius"), in: 0...60, fallback: 30)
         customImagePath = d.string(forKey: "customImagePath")
         showInDock = d.bool(forKey: "showInDock")
         showInMenuBar = d.bool(forKey: "showInMenuBar")
@@ -126,12 +126,17 @@ final class Preferences {
         hideAfterLaunch = d.bool(forKey: "hideAfterLaunch")
         hideOnEmptyClick = d.bool(forKey: "hideOnEmptyClick")
         hideOnSpaceChange = d.bool(forKey: "hideOnSpaceChange")
-        iconScale = d.double(forKey: "iconScale")
+        iconScale = Self.appearanceValue(d.double(forKey: "iconScale"), in: 0.6...1.4, fallback: 1)
         showLabels = d.bool(forKey: "showLabels")
         folderPlacement = FolderPlacement(rawValue: d.string(forKey: "folderPlacement") ?? "") ?? .first
         extraFolders = d.stringArray(forKey: "extraFolders") ?? []
         windowFrames = (d.dictionary(forKey: "windowFrames") as? [String: String]) ?? [:]
         if !showInDock && !showInMenuBar { showInMenuBar = true }
+    }
+
+    private static func appearanceValue(_ value: Double, in range: ClosedRange<Double>, fallback: Double) -> Double {
+        guard value.isFinite else { return fallback }
+        return min(max(value, range.lowerBound), range.upperBound)
     }
 
     /// The shortcut, as `hotkeyWarningDismissed` keeps it.

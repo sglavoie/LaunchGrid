@@ -29,6 +29,23 @@ function isSubsequence(q, s) {
     return true;
 }
 
+function startsDistinctWords(queryWords, words) {
+    if (queryWords.length > words.length) return false;
+    const owner = Array(words.length).fill(-1);
+    function place(i, seen) {
+        for (let k = 0; k < words.length; k++) {
+            if (seen[k] || !words[k].startsWith(queryWords[i])) continue;
+            seen[k] = true;
+            if (owner[k] < 0 || place(owner[k], seen)) {
+                owner[k] = i;
+                return true;
+            }
+        }
+        return false;
+    }
+    return queryWords.every((_, i) => place(i, Array(words.length).fill(false)));
+}
+
 function score(name, query) {
     const q = normalize(query);
     if (!q) return null;
@@ -41,7 +58,7 @@ function score(name, query) {
     if (words.some((w) => w.startsWith(q))) return 700 - len;
     // Several words, each starting a word of the name, in any order: "capture video".
     const queryWords = q.split(separators).filter(Boolean);
-    if (queryWords.length > 1 && queryWords.every((qw) => words.some((w) => w.startsWith(qw)))) return 700 - len;
+    if (queryWords.length > 1 && startsDistinctWords(queryWords, words)) return 700 - len;
     if (acronym(name).startsWith(q)) return 600;
     if (n.includes(q)) return 500 - len;
     if (q.length >= 3 && isSubsequence(q, n)) return 200 - len;

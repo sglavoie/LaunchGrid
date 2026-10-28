@@ -74,6 +74,8 @@ jobs:
       - name: Test the Mac App Store variant
         # Its own build folder (inside the cache), so the flag doesn't rebuild everything twice.
         run: swift test --scratch-path .build/app-store -Xswiftc -DAPP_STORE
+      - name: Test atomic installation
+        run: scripts/test-install-swap.sh
       - name: Bundle
         # Universal, as the downloadable release is.
         run: |

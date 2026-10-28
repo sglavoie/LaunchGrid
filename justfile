@@ -58,6 +58,7 @@ publish *notes:
 
 # Run CI's checks: build, test and bundle both variants, verify the bundles, shellcheck (leaves the App Store one in build/)
 ci: build test test-app-store
+    scripts/test-install-swap.sh
     env -u APP_STORE -u SANDBOX -u ENTITLEMENTS UNIVERSAL=1 scripts/bundle.sh release
     plutil -lint {{app}}/Contents/Info.plist scripts/PrivacyInfo.xcprivacy scripts/LaunchGrid.entitlements
     codesign --verify --strict --verbose=2 {{app}}

@@ -29,12 +29,15 @@ $SUDO mkdir -p "$DEST_DIR"
 # Quit the installed copy so its bundle can be replaced (a scratch run keeps going).
 scripts/quit-app.sh "$DEST"
 
-# Stage beside the destination, then swap, so a failed copy never leaves a half-installed app.
+# Stage beside the destination. The helper atomically swaps the two bundles when an
+# older copy exists, so an interrupted install always leaves one at the normal path.
 STAGE="$DEST_DIR/.LaunchGrid.app.installing"
 $SUDO rm -rf "$STAGE"
 $SUDO ditto build/LaunchGrid.app "$STAGE"
-$SUDO rm -rf "$DEST"
-$SUDO mv "$STAGE" "$DEST"
+$SUDO swift scripts/install-swap.swift "$STAGE" "$DEST"
+# After a swap, the previous copy is at STAGE. If cleanup fails, the new app is
+# already installed; the next install removes this leftover before staging.
+$SUDO rm -rf "$STAGE"
 
 # Point Finder's .launchgrid handler at the installed copy rather than the build folder.
 "$LSREGISTER" -u build/LaunchGrid.app >/dev/null 2>&1 || true

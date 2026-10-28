@@ -59,6 +59,33 @@ func installed(_ name: String) -> InstalledApp {
     InstalledApp(bundleID: "com.test.\(name)", path: "/Applications/\(name).app", name: name)
 }
 
+@MainActor @Suite(.tempDir) struct PreferencesTests {
+    @Test func invalidAppearanceDefaultsAreSafeToDisplay() {
+        let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
+        defaults.set(Double.nan, forKey: "blurRadius")
+        defaults.set(Double.infinity, forKey: "backgroundOpacity")
+        defaults.set(-5.0, forKey: "iconScale")
+
+        let prefs = Preferences(defaults: defaults)
+        #expect(prefs.blurRadius == 30)
+        #expect(prefs.backgroundOpacity == 0.25)
+        #expect(prefs.iconScale == 0.6)
+        #expect(Int(prefs.blurRadius) == 30)
+    }
+
+    @Test func outOfRangeAppearanceDefaultsAreClamped() {
+        let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
+        defaults.set(100.0, forKey: "blurRadius")
+        defaults.set(-1.0, forKey: "backgroundOpacity")
+        defaults.set(2.0, forKey: "iconScale")
+
+        let prefs = Preferences(defaults: defaults)
+        #expect(prefs.blurRadius == 60)
+        #expect(prefs.backgroundOpacity == 0)
+        #expect(prefs.iconScale == 1.4)
+    }
+}
+
 @MainActor @Suite(.tempDir) struct UndoTests {
     @Test func undoingFolderRemovalRestoresItsTemporarilyMissingApps() {
         let state = makeState()
