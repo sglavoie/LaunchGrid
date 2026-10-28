@@ -341,11 +341,21 @@ extension Grid {
 
     /// Points each app at its new place, `moves` mapping old paths to new; recently pruned ones
     /// and path-based exclusions too, so restoring a snapshot preserves those choices.
+    /// A bookmarked scan folder can move as a whole. Its descendants follow it, unless a
+    /// more specific move names their destination. Every path follows the original map once.
     public mutating func followMoves(_ moves: [String: String]) {
         guard !moves.isEmpty else { return }
+        let folders = moves.filter { $0.key.hasPrefix("/") }.map { old, new in
+            (prefix: old.hasSuffix("/") ? old : old + "/", destination: new.hasSuffix("/") ? new : new + "/")
+        }.sorted { $0.prefix.count > $1.prefix.count }
+        func movedPath(_ path: String) -> String {
+            if let exact = moves[path] { return exact }
+            guard let folder = folders.first(where: { path.hasPrefix($0.prefix) }) else { return path }
+            return folder.destination + path.dropFirst(folder.prefix.count)
+        }
         func moved(_ a: AppRef) -> AppRef {
             var a = a
-            if let path = moves[a.path] { a.path = path }
+            a.path = movedPath(a.path)
             return a
         }
         for p in pages.indices {
@@ -360,7 +370,7 @@ extension Grid {
             }
         }
         for i in recentlyPruned.indices { recentlyPruned[i].app = moved(recentlyPruned[i].app) }
-        removedBundleIDs = Set(removedBundleIDs.map { moves[$0] ?? $0 })
+        removedBundleIDs = Set(removedBundleIDs.map(movedPath))
     }
 
     // MARK: Pages

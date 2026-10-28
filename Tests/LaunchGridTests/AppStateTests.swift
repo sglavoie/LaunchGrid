@@ -2121,6 +2121,28 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.map(\.path) == [original.path], "auto-add must not undo the removal")
         #expect(state.grid.removedBundleIDs == [moved.path])
     }
+
+    @Test func movingAScanFolderKeepsRemovedCopiesExcludedThroughUndoAndRedo() throws {
+        let state = makeState()
+        let original = installed("Xcode")
+        let root = "/Users/x/Tools", destination = "/Users/x/Utilities"
+        let beta = InstalledApp(bundleID: original.bundleID, path: root + "/Xcode-beta.app", name: "Xcode-beta")
+        state.catalogScanned([original, beta])
+        let tile = try #require(state.grid.allApps.first { $0.path == beta.path })
+        state.remove([tile.id])
+
+        state.followMovedApps([root: destination])
+        let moved = InstalledApp(bundleID: beta.bundleID, path: destination + "/Xcode-beta.app", name: beta.name)
+        state.catalogScanned([original, moved])
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.grid.removedBundleIDs == [moved.path])
+
+        state.undo()
+        #expect(state.grid.item(tile.id)?.app?.path == moved.path)
+        state.redo()
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.grid.removedBundleIDs == [moved.path])
+    }
 }
 
 @Suite struct LauncherTests {

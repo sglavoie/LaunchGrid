@@ -379,6 +379,33 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 }
 
 @Suite struct FollowMovesTests {
+    @Test func movingAScanFolderUpdatesItsAppsAndExclusions() {
+        let root = "/Users/x/Tools", destination = "/Users/x/Utilities"
+        let a = AppRef(bundleID: "com.test.a", path: root + "/A.app")
+        let b = AppRef(bundleID: "com.test.b", path: root + "/Nested/B.app")
+        let c = AppRef(bundleID: "com.test.c", path: root + "/C.app")
+        let neighbour = AppRef(bundleID: "com.test.other", path: root + "-Other/D.app")
+        var g = Grid(pages: [Page(items: [.app(a), .folder(Folder(name: "F", apps: [b])), .app(neighbour)])],
+                     removedBundleIDs: [root + "/Excluded.app", "com.test.excluded"])
+        g.recentlyPruned = [PrunedApp(app: c, prunedAt: Date(), pageID: g.pages[0].id, index: 2)]
+
+        g.followMoves([root: destination])
+
+        #expect(g.allApps.map(\.path) == [destination + "/A.app", destination + "/Nested/B.app", neighbour.path])
+        #expect(g.allApps.map(\.id) == [a.id, b.id, neighbour.id])
+        #expect(g.recentlyPruned.first?.app.path == destination + "/C.app")
+        #expect(g.removedBundleIDs == [destination + "/Excluded.app", "com.test.excluded"])
+    }
+
+    @Test func folderMovesUseTheMostSpecificOriginalPathOnce() {
+        let root = "/Users/x/Tools"
+        let paths = [root + "/A.app", root + "/Nested/B.app", root + "/Nested/C.app"]
+        var g = Grid(pages: [Page(items: paths.map { .app(AppRef(bundleID: nil, path: $0)) })])
+        g.followMoves([root: "/Users/x/New", root + "/Nested": "/Users/x/Separate",
+                       paths[2]: "/Users/x/Chosen.app", "/Users/x/New": "/Users/x/Elsewhere"])
+        #expect(g.allApps.map(\.path) == ["/Users/x/New/A.app", "/Users/x/Separate/B.app", "/Users/x/Chosen.app"])
+    }
+
     @Test func exclusionsFollowMovesWithoutChangingBundleIDs() {
         let a = "/Applications/A.app", b = "/Applications/B.app"
         var g = Grid(removedBundleIDs: [a, b, "com.test.excluded"])
