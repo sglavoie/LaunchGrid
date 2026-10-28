@@ -210,31 +210,31 @@ final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
         }
     }
 
-    /// The path, the file it names now, and its size and a hash of its first and last bytes: a
-    /// picture replaced at the same path (a new file saved over it) is a new picture, and so is
-    /// one copied over it in place, which keeps the file. Not by modification date, which would
-    /// need a reason in the privacy manifest. Reads the disk, so not on the main thread.
+    /// The path, the file it names now, and a hash of its contents. An in-place edit anywhere
+    /// in a picture must invalidate the cached image. Reads off the main thread, without using
+    /// modification dates (which would need a reason in the privacy manifest).
     static func identity(of url: URL) -> String {
         let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey, .fileSizeKey])
         let file = values?.fileResourceIdentifier.map { String(describing: $0) } ?? ""
-        return "\(url.path)|\(file)|\(values?.fileSize ?? -1)|\(contentHash(of: url))"
+        let hash = contentHash(of: url).map(String.init) ?? "unreadable"
+        return "\(url.path)|\(file)|\(values?.fileSize ?? -1)|\(hash)"
     }
 
-    /// A hash of the first and last 64 KB, enough to tell two pictures of the same size apart
-    /// (a camera's pictures start alike) without reading a large one whole.
-    private static func contentHash(of url: URL) -> Int {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return 0 }
+    /// Stream the picture so a same-size edit in its middle also changes its identity.
+    private static func contentHash(of url: URL) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         let chunk = 64 * 1024
         var hasher = Hasher()
-        // By its bytes: `Data`'s own hash takes only the first 80 on some Foundation versions.
-        func combine(_ data: Data?) { data.map { $0.withUnsafeBytes { hasher.combine(bytes: $0) } } }
-        combine(try? handle.read(upToCount: chunk))
-        if let end = try? handle.seekToEnd(), end > UInt64(chunk) {
-            try? handle.seek(toOffset: max(end - UInt64(chunk), UInt64(chunk)))
-            combine(try? handle.read(upToCount: chunk))
+        do {
+            while let data = try handle.read(upToCount: chunk), !data.isEmpty {
+                // By its bytes: `Data`'s own hash takes only the first 80 on some Foundation versions.
+                data.withUnsafeBytes { hasher.combine(bytes: $0) }
+            }
+            return hasher.finalize()
+        } catch {
+            return nil
         }
-        return hasher.finalize()
     }
 
     /// What a picture is rendered for: the blur radius in points, and the size (in points,

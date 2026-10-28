@@ -32,7 +32,8 @@ public enum LaunchpadImporter {
         case root = 1, folder = 2, page = 3, app = 4, downloading = 5, widget = 6
     }
 
-    /// The legacy Dock Launchpad database (pre-macOS 26), if it still exists.
+    /// The legacy Dock Launchpad database (pre-macOS 26). In the sandbox this is only
+    /// a candidate path until the person grants access to its folder.
     public static var launchpadDatabaseURL: URL? {
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard confstr(_CS_DARWIN_USER_DIR, &buf, buf.count) > 0 else { return nil }
@@ -40,17 +41,20 @@ public enum LaunchpadImporter {
         // Inside the sandbox the folder is the app's own subfolder of the real one.
         if let id = Sandbox.containerID, dir.hasSuffix("/\(id)/") { dir.removeLast(id.utf8.count + 1) }
         let url = URL(fileURLWithPath: "/private" + dir + "com.apple.dock.launchpad/db/db")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        // The sandbox cannot tell a missing database from one it has not been allowed to
+        // inspect yet. Keep the import action available so it can ask for folder access.
+        return Sandbox.isActive || FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// AppGrid's database inside its sandbox container, if present.
+    /// AppGrid's database inside its sandbox container. In the sandbox this is only
+    /// a candidate path until the person grants access to its folder.
     public static var appGridDatabaseURL: URL? {
         #if !APP_STORE
         // For the debug scripts, on a Mac without AppGrid.
         if let path = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_APPGRID_DB"] { return URL(fileURLWithPath: path) }
         #endif
         let url = Sandbox.realHome.appendingPathComponent("Library/Containers/com.zekalogic.appgrid.app/Data/Library/Application Support/db")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return Sandbox.isActive || FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     struct Row {
@@ -310,23 +314,44 @@ public enum LaunchpadImporter {
     /// fails its checksum), but one reset by a checkpoint between the two copies no longer
     /// matches the database copied before it. A reset changes the log header's checkpoint
     /// sequence and salts, so the copy is retried until the header held still throughout.
+    /// The folder must be listable: an inaccessible log can look absent to `fileExists` in
+    /// the sandbox, which would otherwise make an incomplete copy appear consistent.
     /// `betweenCopies` runs after the database is copied and before its log is, for tests.
     static func copyDatabase(at url: URL, to tmp: URL, attempts: Int = 5, betweenCopies: () -> Void = {}) throws {
         let fm = FileManager.default
         let wal = url.path + "-wal"
         let tmpWAL = tmp.path + "-wal"
+        let folder = url.deletingLastPathComponent().path
+        let walName = url.lastPathComponent + "-wal"
+        func walIsListed() throws -> Bool {
+            do { return try fm.contentsOfDirectory(atPath: folder).contains(walName) }
+            catch { throw ImportError.readFailed("cannot inspect the database's folder: \(error.localizedDescription)") }
+        }
+        var unreadableWAL = false
         for _ in 0..<attempts {
+            unreadableWAL = false
             for path in [tmp.path, tmpWAL] { try? fm.removeItem(atPath: path) }
-            let before = walHeader(wal)
+            let wasListed = try walIsListed()
+            let before = wasListed ? walHeader(wal) : nil
+            if wasListed && before == nil {
+                unreadableWAL = try walIsListed() // still there, but inaccessible
+                continue
+            }
             try fm.copyItem(at: url, to: tmp)
             betweenCopies()
-            if fm.fileExists(atPath: wal) {
+            let isListed = try walIsListed()
+            if isListed {
                 do { try fm.copyItem(atPath: wal, toPath: tmpWAL) }
                 // Checkpointed away since: the header check below sees that and tries again.
-                catch where !fm.fileExists(atPath: wal) {}
+                catch { if try walIsListed() { throw error } }
             }
-            if walHeader(tmpWAL) == before, walHeader(wal) == before { return }
+            let remainsListed = try walIsListed()
+            let after = remainsListed ? walHeader(wal) : nil
+            if wasListed == isListed, isListed == remainsListed,
+               (!remainsListed || after != nil),
+               walHeader(tmpWAL) == before, after == before { return }
         }
+        if unreadableWAL { throw ImportError.readFailed("the write-ahead log could not be read") }
         throw ImportError.readFailed("the database kept changing while it was being copied")
     }
 

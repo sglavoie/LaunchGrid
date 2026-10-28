@@ -1881,6 +1881,46 @@ func tempDir(_ prefix: String) -> URL {
         #expect(LaunchpadImporter.walHeader(url.path + "-wal") != first, "a reset log has new salts")
     }
 
+    @Test func anUnlistableDatabaseFolderCannotSilentlyOmitItsLog() throws {
+        let fm = FileManager.default
+        let folder = tempDir("unlistable-db")
+        let db = folder.appendingPathComponent("db")
+        let copy = tempDir("unlistable-copy")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            chmod(folder.path, 0o700)
+            try? fm.removeItem(at: folder)
+            try? fm.removeItem(at: copy)
+        }
+        try Data("database".utf8).write(to: db)
+        try Data(repeating: 0, count: 24).write(to: URL(fileURLWithPath: db.path + "-wal"))
+        #expect(chmod(folder.path, 0o111) == 0)
+        #expect((try? Data(contentsOf: db)) != nil, "the database itself is readable by name")
+        #expect(throws: LaunchpadImporter.ImportError.self) {
+            try LaunchpadImporter.copyDatabase(at: db, to: copy)
+        }
+    }
+
+    @Test func anUnreadableListedLogCannotBeImportedAsAbsent() throws {
+        let fm = FileManager.default
+        let folder = tempDir("unreadable-wal")
+        let db = folder.appendingPathComponent("db")
+        let wal = URL(fileURLWithPath: db.path + "-wal")
+        let copy = tempDir("unreadable-wal-copy")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            chmod(wal.path, 0o600)
+            try? fm.removeItem(at: folder)
+            try? fm.removeItem(at: copy)
+        }
+        try Data("database".utf8).write(to: db)
+        try Data(repeating: 0, count: 24).write(to: wal)
+        #expect(chmod(wal.path, 0o000) == 0)
+        #expect(throws: LaunchpadImporter.ImportError.self) {
+            try LaunchpadImporter.copyDatabase(at: db, to: copy)
+        }
+    }
+
     @Test func aLogResetBetweenTheTwoCopiesIsCopiedAgain() throws {
         let url = tempDir("lp").appendingPathExtension("db")
         let copy = tempDir("lp-copy").appendingPathExtension("db")

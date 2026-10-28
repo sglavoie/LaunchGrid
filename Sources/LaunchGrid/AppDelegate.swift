@@ -269,11 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             guard let layout = await readLayout(at: url) else { return }
             switch layout {
             case .database:
-                // The open panel granted the file alone, not the write-ahead log beside it.
-                let wal = url.path + "-wal"
-                if Sandbox.isActive, FileManager.default.fileExists(atPath: wal) {
-                    guard allowReading(url, from: url.lastPathComponent, checking: wal) else { return }
-                }
+                // The open panel granted the file alone. A write-ahead log beside it can be
+                // invisible to the sandbox even when it exists, so require its folder first.
+                guard await allowReading(url, from: url.lastPathComponent) else { return }
                 // Asks once the database is read, and only when apps in it were found.
                 handedOn = true
                 importDatabase(url, from: url.lastPathComponent, done: done, finished: finished)
@@ -749,36 +747,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// `done` gets what happened, for Settings to show beside its buttons.
     func importAppGrid(done: (@MainActor (String) -> Void)?) {
-        guard let url = LaunchpadImporter.appGridDatabaseURL, allowReading(url, from: "AppGrid") else { return }
-        importDatabase(url, from: "AppGrid", done: done)
+        guard let url = LaunchpadImporter.appGridDatabaseURL else { return }
+        Task {
+            guard await allowReading(url, from: "AppGrid") else { return }
+            importDatabase(url, from: "AppGrid", done: done)
+        }
     }
 
     func importLaunchpad(done: (@MainActor (String) -> Void)?) {
-        guard let url = LaunchpadImporter.launchpadDatabaseURL, allowReading(url, from: "Launchpad") else { return }
-        importDatabase(url, from: "Launchpad", done: done)
+        guard let url = LaunchpadImporter.launchpadDatabaseURL else { return }
+        Task {
+            guard await allowReading(url, from: "Launchpad") else { return }
+            importDatabase(url, from: "Launchpad", done: done)
+        }
     }
 
-    /// Inside the sandbox, a database outside it can only be read once the person picks its
-    /// folder (which also covers its write-ahead log). The panel opens on that folder, so
-    /// allowing it is one click.
-    /// `checking` is the file that has to be readable, the database itself by default.
-    private func allowReading(_ url: URL, from source: String, checking path: String? = nil) -> Bool {
-        let path = path ?? url.path
-        guard Sandbox.isActive, !FileManager.default.isReadableFile(atPath: path) else { return true }
-        overlay.hide(deactivate: false)
-        NSApp.activate()
-        let panel = NSOpenPanel()
-        panel.message = String(localized: "To import your \(source) layout, allow LaunchGrid to read this folder.")
-        panel.prompt = String(localized: "Allow")
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.directoryURL = url.deletingLastPathComponent()
-        guard panel.runModal() == .OK else { return false }
-        guard FileManager.default.isReadableFile(atPath: path) else {
-            showError(String(localized: "Could not import from \(source)"), String(localized: "Choose the folder that holds the \(source) database: \(url.deletingLastPathComponent().path)"))
+    /// Database imports need access to the containing folder, which covers a write-ahead log
+    /// that may exist but be invisible when an open panel granted only the database file.
+    /// The panel opens on that folder, so allowing it is one click.
+    private func allowReading(_ url: URL, from source: String) async -> Bool {
+        guard Sandbox.isActive else { return true }
+        let folder = url.deletingLastPathComponent()
+        let canList = await Disk.run { Self.canListDirectory(folder) }
+        if !canList {
+            overlay.hide(deactivate: false)
+            NSApp.activate()
+            let panel = NSOpenPanel()
+            panel.message = String(localized: "To import your \(source) layout, allow LaunchGrid to read this folder.")
+            panel.prompt = String(localized: "Allow")
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.directoryURL = folder
+            guard panel.runModal() == .OK else { return false }
+        }
+        let readable = await Disk.run {
+            Self.canListDirectory(folder) && FileManager.default.isReadableFile(atPath: url.path)
+        }
+        guard readable else {
+            showError(String(localized: "Could not import from \(source)"), String(localized: "Choose the folder that holds the \(source) database: \(folder.path)"))
             return false
         }
         return true
+    }
+
+    /// Actually listing the folder checks sandbox access. A file-only grant can make the
+    /// database readable while `fileExists` reports a sibling WAL as absent.
+    nonisolated private static func canListDirectory(_ url: URL) -> Bool {
+        (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
     }
 
     /// Asks before replacing a grid that has apps on it, as loading a grid file does, once the

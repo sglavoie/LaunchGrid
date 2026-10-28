@@ -2507,7 +2507,7 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite(.tempDir) struct BlurCacheIdentityTests {
-    @Test func aPictureCopiedOverInPlaceIsANewPicture() throws {
+    @Test func aPictureChangedAnywhereInPlaceIsANewPicture() throws {
         try FileManager.default.createDirectory(at: TempDir.url, withIntermediateDirectories: true)
         let url = TempDir.url.appendingPathComponent("bg.jpg")
         try Data(repeating: 1, count: 200_000).write(to: url)
@@ -2521,11 +2521,14 @@ func installed(_ name: String) -> InstalledApp {
             try handle.write(contentsOf: Data([2]))
             try handle.close()
         }
-        try overwrite(at: 199_999)
+        try overwrite(at: 100_000)
         let second = ImageBlurCache.identity(of: url)
-        #expect(second != first, "a change at the end")
+        #expect(second != first, "a change between the first and last 64 KB")
+        try overwrite(at: 199_999)
+        let third = ImageBlurCache.identity(of: url)
+        #expect(third != second, "a change at the end")
         try overwrite(at: 0)
-        #expect(ImageBlurCache.identity(of: url) != second, "a change at the start")
+        #expect(ImageBlurCache.identity(of: url) != third, "a change at the start")
     }
 }
 
