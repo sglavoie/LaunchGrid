@@ -664,6 +664,23 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["A", "C", "D"], "the range shrinks towards C, its new anchor")
     }
 
+    @Test func shiftClickOnAnotherPageKeepsThePreviousPagesRange() {
+        let state = makeState(["A", "B", "C", "D", "E", "F"])
+        let id = ids(state)
+        state.apply { g in
+            let items = g.pages[0].items
+            g.pages = [Page(items: Array(items.prefix(2))), Page(items: Array(items.dropFirst(2)))]
+        }
+        state.toggleSelection(id["A"]!)
+        state.extendSelection(to: id["B"]!)
+        state.goToPage(1)
+        state.extendSelection(to: id["C"]!)
+        state.extendSelection(to: id["E"]!)
+        #expect(selected(state) == ["A", "B", "C", "D", "E"])
+        state.extendSelection(to: id["D"]!)
+        #expect(selected(state) == ["A", "B", "C", "D"], "only the current page's range shrinks")
+    }
+
     @Test func closingAFolderDropsTheAppsSelectedInsideIt() {
         let state = makeState(["A", "B", "C", "D"])
         let id = ids(state)

@@ -1172,8 +1172,11 @@ final class AppState {
     func extendSelection(to id: UUID) {
         let ids = (openFolder?.apps.map(\.id)) ?? currentItems.map(\.id)
         guard let end = ids.firstIndex(of: id) else { return }
-        let start = selectionAnchor.flatMap { selection.contains($0) ? ids.firstIndex(of: $0) : nil }
-            ?? ids.lastIndex { selection.contains($0) } ?? end
+        let anchor = selectionAnchor.flatMap { selection.contains($0) ? ids.firstIndex(of: $0) : nil }
+        // A new anchor starts a new range. The old page's range stays selected,
+        // just like its individually selected items, when selecting across pages.
+        if anchor == nil { shiftRange = [] }
+        let start = anchor ?? ids.lastIndex { selection.contains($0) } ?? end
         // An anchor on another page (or removed since the last click) is no longer usable.
         // Remember the fallback too, so subsequent ranges can shrink towards it.
         selectionAnchor = ids[start]

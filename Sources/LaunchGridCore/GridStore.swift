@@ -283,11 +283,28 @@ public struct GridStore: Sendable {
                 }
             }
         }
-        // Restored apps become ordinary tiles without another decode. Reserve their
-        // containers too: an emptied page or folder may be recreated by the same scan.
-        for entry in grid.recentlyPruned {
-            seen.insert(entry.pageID)
-            if let id = entry.folderID { seen.insert(id) }
+        // Restored containers become ordinary pages and folders without another decode.
+        // Reuse a live container only of the right kind; otherwise reserve one fresh ID
+        // per remembered container, shared by every app waiting to return to it.
+        var pages = Dictionary(uniqueKeysWithValues: grid.pages.map { ($0.id, $0.id) })
+        var folders = Dictionary(uniqueKeysWithValues: grid.pages.flatMap {
+            $0.items.compactMap(\.folder).map { ($0.id, $0.id) }
+        })
+        func container(_ id: UUID, in mapping: inout [UUID: UUID]) -> UUID {
+            if let known = mapping[id] { return known }
+            var replacement = id
+            fresh(&replacement)
+            mapping[id] = replacement
+            return replacement
+        }
+        for i in grid.recentlyPruned.indices {
+            grid.recentlyPruned[i].pageID = container(grid.recentlyPruned[i].pageID, in: &pages)
+        }
+        for i in grid.recentlyPruned.indices {
+            if let id = grid.recentlyPruned[i].folderID {
+                grid.recentlyPruned[i].folderID = container(id, in: &folders)
+            }
+            grid.recentlyPruned[i].pageBefore = grid.recentlyPruned[i].pageBefore?.map { pages[$0] ?? $0 }
         }
         for i in grid.recentlyPruned.indices { fresh(&grid.recentlyPruned[i].app.id) }
     }

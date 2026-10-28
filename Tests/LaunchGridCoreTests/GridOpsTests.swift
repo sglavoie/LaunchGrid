@@ -749,6 +749,53 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(decoded.folder(folderID)?.apps == [c], "removing a restored app must leave its folder and siblings")
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func aRecreatedFolderCannotReuseALiveItemsID(collidesWithPage: Bool, returnsSeparately: Bool) throws {
+        let a = app("A"), b = app("B"), c = app("C"), page = Page()
+        let folderID = collidesWithPage ? page.id : a.id
+        let now = Date()
+        let g = Grid(pages: [Page(id: page.id, items: [.app(a)])], recentlyPruned: [b, c].enumerated().map { index, ref in
+            PrunedApp(app: ref, prunedAt: now, pageID: page.id, index: 1,
+                      folderID: folderID, folderName: "Work", folderIndex: index, folderEmptied: true)
+        })
+        var decoded = try GridStore.decode(GridStore.encode(g))
+        if returnsSeparately {
+            _ = Reconciler.reconcile(&decoded, installed: [a, b].map(InstalledApp.init),
+                                    autoAdd: false, now: now + 1)
+            decoded = try GridStore.decode(GridStore.encode(decoded))
+        }
+        _ = Reconciler.reconcile(&decoded, installed: [a, b, c].map(InstalledApp.init),
+                                autoAdd: false, now: now + 2)
+
+        let folders = decoded.pages.flatMap { $0.items.compactMap(\.folder) }
+        #expect(folders.count == 1, "the returning apps share one recreated folder")
+        #expect(folders.first?.apps.map(\.name) == ["B", "C"])
+        #expect(folders.first?.id != folderID)
+        decoded.remove([a.id])
+        #expect(decoded.allApps.map(\.name) == ["B", "C"], "removing the visible app must not remove the recreated folder")
+    }
+
+    @Test func recreatedPagesKeepTheirOrderWhenTheirIDsCollideWithLiveItems() throws {
+        let a = app("A"), b = app("B"), c = app("C")
+        let folder = Folder(name: "Work", apps: [a])
+        let page = Page(items: [.folder(folder)])
+        let now = Date()
+        let g = Grid(pages: [page], recentlyPruned: [
+            PrunedApp(app: b, prunedAt: now, pageID: a.id, index: 0,
+                      pageEmptied: true, pageIndex: 1, pageTitle: "Second", pageBefore: [page.id]),
+            PrunedApp(app: c, prunedAt: now, pageID: folder.id, index: 0,
+                      pageEmptied: true, pageIndex: 1, pageTitle: "Third", pageBefore: [page.id, a.id]),
+        ])
+        var decoded = try GridStore.decode(GridStore.encode(g))
+        _ = Reconciler.reconcile(&decoded, installed: [a, b, c].map(InstalledApp.init),
+                                autoAdd: false, now: now + 1)
+
+        #expect(decoded.pages.map(\.title) == [nil, "Second", "Third"])
+        #expect(decoded.allApps.map(\.name) == ["A", "B", "C"])
+        let ids = decoded.pages.map(\.id) + [folder.id] + decoded.allApps.map(\.id)
+        #expect(Set(ids).count == ids.count)
+    }
+
     @Test func anUnreadableEntrySkipsOnlyItself() throws {
         let json = #"""
         {"rows": 2, "columns": 2, "pages": [
