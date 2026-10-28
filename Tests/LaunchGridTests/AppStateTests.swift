@@ -225,14 +225,79 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
-    @Test func losingTheGridMeasurementDuringADragKeepsEveryApp() {
+    @Test func aNewGestureAfterAMissingEndLeavesTheTemporaryPage() {
+        let state = makeState(["A", "B"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        state.dragChanged(start: start, location: CGPoint(x: 695, y: start.y))
+        state.drag.edgeSince = .distantPast
+        state.drag.timer?.fire()
+        #expect(state.showsVirtualPage)
+
+        // SwiftUI never delivered the first gesture's end. A new background swipe
+        // must begin on a real page, even if this swipe is too short to turn it.
+        let next = CGPoint(x: 350, y: 250)
+        state.dragChanged(start: next, location: next)
+        state.dragEnded(start: next, location: next, predicted: next)
+
+        #expect(state.currentPage == 0)
+        #expect(state.currentItems.map(\.title) == ["A", "B"])
+        #expect(!state.drag.active)
+    }
+
+    @Test func aNewGestureAfterAMissingEndAppliesTheDeferredScan() {
+        let state = makeState(["A"])
+        state.catalogScanned([installed("A")])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        state.dragChanged(start: start, location: start)
+        state.catalogScanned(["A", "B"].map(installed))
+        #expect(state.grid.allApps.map(\.name) == ["A"])
+
+        let next = CGPoint(x: 350, y: 250)
+        state.dragChanged(start: next, location: next)
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"], "apply the scan before hit-testing the new gesture")
+        state.dragEnded(start: next, location: next, predicted: next)
+    }
+
+    @Test func leavingTheGridCancelsAPendingReorderAndEdgeFlip() {
         let state = makeState(["A", "B", "C"])
         let before = state.grid
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
         let start = state.iconCenter(0, inFolder: false)
-        state.dragChanged(start: start, location: start)
+        state.dragChanged(start: start, location: CGPoint(x: 320, y: start.y))
+        #expect(state.drag.pendingGap == 2)
+
+        let outside = CGPoint(x: 695, y: -100)
+        state.dragChanged(start: start, location: outside)
+        state.drag.pendingGapSince = .distantPast
+        state.drag.edgeSince = .distantPast
+        state.drag.timer?.fire()
+        #expect(state.drag.gap == 0, "the pointer left before the reorder dwell completed")
+        #expect(state.currentPage == 0, "holding above the grid must not turn pages")
+        state.dragEnded(start: start, location: outside, predicted: outside)
+        #expect(state.grid == before)
+    }
+
+    @Test(arguments: [false, true])
+    func losingTheGridMeasurementDuringADragKeepsEveryApp(inFolder: Bool) {
+        let state = makeState(["A", "B", "C"])
+        if inFolder {
+            let ids = state.grid.allApps.map(\.id)
+            var folderID: UUID?
+            state.apply { folderID = $0.group(ids, name: "F") }
+            if let folderID { state.openFolder(folderID) }
+        }
+        let before = state.grid
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 0, y: 0, width: 700, height: 100)
+        state.drag.folderPanelFrame = CGRect(x: 0, y: 0, width: 700, height: 150)
+        let start = state.iconCenter(0, inFolder: inFolder)
+        state.dragChanged(start: start, location: CGPoint(x: 320, y: start.y))
         #expect(state.drag.active)
+        #expect(state.drag.pendingGap == 2)
         state.drag.pagerFrame = .zero
+        state.drag.folderGridFrame = .zero
         state.dragEnded(start: start, location: .zero, predicted: .zero)
         #expect(state.grid == before)
         #expect(!state.drag.active)

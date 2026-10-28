@@ -209,8 +209,10 @@ extension AppState {
         }
         if drag.decided && start != drag.gestureStart {
             // A new gesture while the last one is still decided: its end never arrived.
-            // Drop what it left (a lifted item, a half swipe) and decide afresh.
-            drag.reset()
+            // Finish cancellation before hit-testing again: leave any temporary page,
+            // reopen the source folder and apply scans deferred by the abandoned drag.
+            cancelDrag()
+            drag.abandonedStart = nil // This event already belongs to the new gesture.
             swipeOffset = 0
         }
         if !drag.decided {
@@ -353,7 +355,11 @@ extension AppState {
             drag.edgeSince = Date()
         }
         let local = CGPoint(x: p.x - frame.minX, y: p.y - frame.minY)
-        guard let cell = folderLayout.cellIndex(at: local) else { return }
+        guard let cell = folderLayout.cellIndex(at: local) else {
+            drag.pendingGap = nil
+            drag.edgeSide = 0
+            return
+        }
         let index = min(folderPage * FolderLayout.perPage(grid) + cell, remainingFolderApps().count)
         if index == drag.gap {
             drag.pendingGap = nil
@@ -376,6 +382,10 @@ extension AppState {
             drag.edgeSince = Date()
         }
         guard let cell = pageLayout.cellIndex(at: local) else {
+            // Leaving the drop region also leaves its dwell targets. Otherwise the
+            // timer can reorder or flip a page while the icon is above/below the grid.
+            drag.pendingGap = nil
+            drag.edgeSide = 0
             drag.candidate = nil
             if drag.mergeTarget != nil { withAnimation(Self.dragMotion(.easeOut(duration: 0.15))) { drag.mergeTarget = nil } }
             return
