@@ -110,7 +110,10 @@ final class AppState {
     var query = "" {
         didSet {
             queryCaret = query.count
-            if query != oldValue { focusIndex = query.isEmpty ? nil : 0 }
+            if query != oldValue {
+                searchPage = 0
+                focusIndex = query.isEmpty ? nil : 0
+            }
             // However the search ended (a page jump, a reveal, hiding), the folder it started
             // in is no longer one to go back to.
             if query.isEmpty { folderBeforeSearch = nil }
@@ -118,6 +121,8 @@ final class AppState {
     }
     /// Caret in the search, in characters. Setting `query` puts it at the end.
     private(set) var queryCaret = 0
+    /// Page of ranked search matches currently shown.
+    var searchPage = 0
     /// The search with its caret, for keyboard editing.
     var searchLine: TextLine {
         get { TextLine(text: query, caret: queryCaret) }
@@ -378,7 +383,8 @@ final class AppState {
         let focusedID: UUID? = focusIndex.flatMap { i in
             let ids: [UUID]
             if !query.isEmpty {
-                ids = Search.results(in: old.allApps, query: query).prefix(old.capacity).map(\.id)
+                ids = Search.results(in: old.allApps, query: query)
+                    .dropFirst(searchPage * old.capacity).prefix(old.capacity).map(\.id)
             } else if let id = openFolderID, let folder = old.folder(id) {
                 ids = folder.apps.map(\.id)
             } else {
@@ -413,6 +419,13 @@ final class AppState {
         // A folder that lost its last page's apps shrinks; don't leave the view on a page it no longer has.
         if let f = openFolder {
             folderPage = max(0, min(folderPage, FolderLayout.pageCount(apps: f.apps.count, grid: grid) - 1))
+        }
+        if !query.isEmpty {
+            searchPage = min(searchPage, searchPageCount - 1)
+            if let focusedID, let index = allSearchResults.firstIndex(where: { $0.id == focusedID }) {
+                searchPage = index / grid.capacity
+                focusIndex = index % grid.capacity
+            }
         }
         if let i = focusIndex {
             let ids = !query.isEmpty ? searchResults.map(\.id) : openFolder?.apps.map(\.id) ?? currentItems.map(\.id)
@@ -965,9 +978,20 @@ final class AppState {
         return results
     }
 
-    /// The matches shown: one page of them.
+    var searchPageCount: Int {
+        max(1, (allSearchResults.count + grid.capacity - 1) / grid.capacity)
+    }
+
+    /// The matches shown on the current search page.
     var searchResults: [AppRef] {
-        Array(allSearchResults.prefix(grid.capacity))
+        Array(allSearchResults.dropFirst(searchPage * grid.capacity).prefix(grid.capacity))
+    }
+
+    func goToSearchPage(_ page: Int) {
+        let next = max(0, min(page, searchPageCount - 1))
+        guard next != searchPage else { return }
+        searchPage = next
+        focusIndex = focusIndex.map { min($0, searchResults.count - 1) }
     }
 
     var openFolder: Folder? { openFolderID.flatMap { grid.folder($0) } }
@@ -1140,7 +1164,9 @@ final class AppState {
     }
 
     func flipPage(_ delta: Int) {
-        if let f = openFolder {
+        if !query.isEmpty {
+            goToSearchPage(searchPage + delta)
+        } else if let f = openFolder {
             let pages = FolderLayout.pageCount(apps: f.apps.count, grid: grid)
             let p = max(0, min(folderPage + delta, pages - 1))
             withAnimationIfShown { folderPage = p }

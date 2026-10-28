@@ -794,21 +794,30 @@ struct PageDots: View {
                         .accessibilityAddTraits(p == state.currentPage ? [.isButton, .isSelected] : .isButton)
                         .accessibilityAction { state.goToPage(p) }
                 }
-            } else if !state.query.isEmpty {
-                // Search shows one page of matches; say how many didn't fit.
-                let hidden = state.allSearchResults.count - state.searchResults.count
-                if hidden > 0 {
-                    // Separate keys, so a translation can give the count its plural forms.
-                    Group {
-                        if hidden == 1 { Text("1 more match — keep typing to narrow the search") }
-                        else { Text("\(hidden) more matches — keep typing to narrow the search") }
-                    }
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.9 : 0.6))
-                        .modifier(Legible())
+            } else if !state.query.isEmpty && state.searchPageCount > 1 {
+                Button {
+                    state.flipPage(-1)
+                } label: {
+                    Image(systemName: "chevron.left")
                 }
+                .disabled(state.searchPage == 0)
+                .accessibilityLabel(Text("Previous search results"))
+
+                Text("Results \(state.searchPage + 1) of \(state.searchPageCount)")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(contrast == .increased ? 0.9 : 0.6))
+                    .modifier(Legible())
+
+                Button {
+                    state.flipPage(1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(state.searchPage == state.searchPageCount - 1)
+                .accessibilityLabel(Text("Next search results"))
             }
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -844,6 +853,9 @@ struct SearchResultsView: View {
             }
             .onChange(of: state.focusIndex) { _, i in
                 if let i, results.indices.contains(i) { voiceOverFocus = results[i].id }
+            }
+            .onChange(of: state.searchPage) { _, _ in
+                voiceOverFocus = state.focusIndex.flatMap { results.indices.contains($0) ? results[$0].id : nil }
             }
             .onChange(of: voiceOverFocus) { _, id in
                 guard let id, let i = results.firstIndex(where: { $0.id == id }), i != state.focusIndex else { return }

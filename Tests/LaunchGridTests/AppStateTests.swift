@@ -944,7 +944,7 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct SearchCountTests {
-    @Test func searchResultsShowOnePageButCountEveryMatch() {
+    @Test func searchPagesMakeEveryMatchReachable() {
         let names = (1...50).map { "App \($0)" }
         let state = makeState([])
         state.replaceGrid(Grid(rows: 2, columns: 3, pages: [Page(items: names.map {
@@ -953,6 +953,32 @@ func installed(_ name: String) -> InstalledApp {
         state.query = "app"
         #expect(state.searchResults.count == 6)
         #expect(state.allSearchResults.count == 50)
+        #expect(state.searchPageCount == 9)
+        var seen = Set<UUID>()
+        for page in 0..<state.searchPageCount {
+            state.goToSearchPage(page)
+            seen.formUnion(state.searchResults.map(\.id))
+        }
+        #expect(seen == Set(state.allSearchResults.map(\.id)))
+        #expect(state.searchResults.count == 2)
+        state.query = "app 1"
+        #expect(state.searchPage == 0)
+        #expect(state.searchResults.first?.title == "App 1")
+    }
+
+    @Test func searchKeepsTheFocusedAppWhenAnEarlierMatchIsRemoved() throws {
+        let state = makeState([])
+        state.replaceGrid(Grid(rows: 1, columns: 2, pages: [Page(items: (1...5).map {
+            .app(AppRef(bundleID: "com.test.\($0)", path: "/Applications/App \($0).app", name: "App \($0)"))
+        })]))
+        state.query = "app"
+        state.goToSearchPage(1)
+        state.focusIndex = 0
+        let focused = try #require(state.searchResults.first)
+        let first = try #require(state.allSearchResults.first)
+        state.apply { $0.remove([first.id]) }
+        #expect(state.searchPage == 0)
+        #expect(state.searchResults[try #require(state.focusIndex)].id == focused.id)
     }
 }
 
@@ -1006,6 +1032,42 @@ func installed(_ name: String) -> InstalledApp {
         try FileManager.default.createDirectory(atPath: later, withIntermediateDirectories: false)
         for _ in 0..<30 where changes == 0 { try await Task.sleep(for: .milliseconds(100)) }
         #expect(changes > 0, "creating ~/Applications, say, is noticed without waiting for the periodic rescan")
+        _ = watcher
+    }
+
+    @MainActor @Test func installingAndUpdatingAnAppTriggerScans() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("lg-watch-\(UUID().uuidString)")
+        let root = dir.appendingPathComponent("Applications")
+        let staging = dir.appendingPathComponent("Staging")
+        let stagedApp = staging.appendingPathComponent("New.app")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: stagedApp.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try NSDictionary(dictionary: ["CFBundleIdentifier": "com.test.new"])
+            .write(to: stagedApp.appendingPathComponent("Contents/Info.plist"))
+        defer { try? fm.removeItem(at: dir) }
+
+        var scans: [AppScanner.ScanResult] = []
+        let watcher = FolderWatcher(paths: [root.path], latency: 0.1) {
+            scans.append(AppScanner.scanReporting(roots: [root]))
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        try fm.moveItem(at: stagedApp, to: root.appendingPathComponent("New.app"))
+        for _ in 0..<50 where !scans.contains(where: { $0.apps.contains { $0.bundleID == "com.test.new" } }) {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(scans.contains { $0.apps.contains { $0.bundleID == "com.test.new" } },
+                "a completed app moved into a watched folder must appear in the next scan")
+
+        scans.removeAll()
+        let installedPlist = root.appendingPathComponent("New.app/Contents/Info.plist")
+        try NSDictionary(dictionary: ["CFBundleIdentifier": "com.test.updated"])
+            .write(to: installedPlist)
+        for _ in 0..<50 where !scans.contains(where: { $0.apps.contains { $0.bundleID == "com.test.updated" } }) {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(scans.contains { $0.apps.contains { $0.bundleID == "com.test.updated" } },
+                "rewriting Info.plist must make the next scan read the updated bundle")
         _ = watcher
     }
 }

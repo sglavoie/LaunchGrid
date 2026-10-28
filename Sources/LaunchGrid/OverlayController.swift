@@ -441,11 +441,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             return nil
         case kVK_Tab:
-            // Pages are hidden behind search results; don't turn them unseen.
-            if state.query.isEmpty { state.flipPage(mods.contains(.shift) ? -1 : 1) }
+            state.flipPage(mods.contains(.shift) ? -1 : 1)
             return nil
         case kVK_PageUp, kVK_PageDown:
-            if state.query.isEmpty { state.flipPage(code == kVK_PageUp ? -1 : 1) }
+            state.flipPage(code == kVK_PageUp ? -1 : 1)
             return nil
         case kVK_Home, kVK_End:
             // The first or last page (of the open folder), or in the search either end of it.
@@ -617,12 +616,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case kVK_DownArrow: next = i + cols
         default: break
         }
-        let paging = state.query.isEmpty && state.openFolder == nil
+        let paging = state.openFolder == nil
         if paging && (next < 0 || next >= count) && (code == kVK_LeftArrow || code == kVK_RightArrow) {
-            let before = state.currentPage
+            let before = state.query.isEmpty ? state.currentPage : state.searchPage
             state.flipPage(code == kVK_LeftArrow ? -1 : 1)
-            if state.currentPage != before {
-                state.focusIndex = code == kVK_LeftArrow ? max(0, state.currentItems.count - 1) : 0
+            let after = state.query.isEmpty ? state.currentPage : state.searchPage
+            if after != before {
+                let count = state.query.isEmpty ? state.currentItems.count : state.searchResults.count
+                state.focusIndex = code == kVK_LeftArrow ? max(0, count - 1) : 0
             }
             return
         }
