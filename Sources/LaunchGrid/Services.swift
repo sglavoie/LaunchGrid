@@ -701,7 +701,7 @@ enum FileAccess {
     /// LaunchGrid quits.
     static var onBookmarkFailure: (URL) -> Void = { _ in }
 
-    /// Whether access to `path` is held, for the tests.
+    /// Whether access to `path` is held, including after a bookmark was reopened.
     static func isGranted(_ path: String) -> Bool { granted[path] != nil }
 
     /// Ends the access held and goes back to the system's calls, for the tests.
@@ -814,11 +814,21 @@ enum FileAccess {
         backend.isActive() && backend.openOffMain != nil && granted[path] != nil
     }
 
-    /// For a scan to resolve off the main thread, with `reopenOffMain`, what `followVanished`
-    /// takes: the bookmarks in use, by path. Nil when they are resolved on the main thread.
+    /// App bookmarks are included even after an earlier reopen failed, so the next scan can
+    /// retry them. A missing path alone cannot distinguish a deleted app from lost sandbox
+    /// access. Nil when bookmarks are resolved on the main thread instead.
     static var bookmarksInUse: (bookmarks: [String: Data], open: @Sendable (Data) -> Opened?)? {
         guard backend.isActive(), let open = backend.openOffMain else { return nil }
-        return (saved.filter { granted[$0.key] != nil }, open)
+        return (saved.filter { granted[$0.key] != nil || ($0.key as NSString).pathExtension.lowercased() == "app" }, open)
+    }
+
+    /// Apps whose saved bookmark has not granted access. Their missing disk result is
+    /// inconclusive, so reconciliation must keep their tiles until access is retried.
+    static var unresolvedAppPaths: Set<String> {
+        guard backend.isActive() else { return [] }
+        return Set(saved.keys.filter {
+            ($0 as NSString).pathExtension.lowercased() == "app" && granted[$0] == nil
+        })
     }
 
     /// `follow` for each of `paths`, apps a scan found gone, that has a bookmark in use: one
@@ -826,18 +836,20 @@ enum FileAccess {
     /// `reopened` holds their bookmarks as a scan resolved them again (`bookmarksInUse`).
     static func followVanished(_ paths: some Sequence<String>, prefs: Preferences, reopened: [String: Opened]? = nil) -> [String: String] {
         guard backend.isActive() else { return [:] }
+        let paths = Set(paths)
         guard let reopened else {
+            let pendingToRetry = paths.contains { saved[$0] != nil && granted[$0] == nil }
             var moves: [String: String] = [:]
             for path in paths where granted[path] != nil {
                 moves.merge(follow(path, prefs: prefs)) { found, _ in found }
             }
+            if pendingToRetry { moves.merge(restore(prefs: prefs)) { found, _ in found } }
             return moves
         }
         var followed: [String: Opened] = [:]
-        for path in Set(paths) {
-            guard let url = granted.removeValue(forKey: path) else { continue }
-            backend.close(url)
-            followed[path] = reopened[path]
+        for path in paths {
+            if let url = granted.removeValue(forKey: path) { backend.close(url) }
+            if saved[path] != nil { followed[path] = reopened[path] }
         }
         // Resolved for apps that weren't gone after all, or no longer in use: not needed.
         for (path, opened) in reopened where followed[path] == nil { backend.close(opened.url) }

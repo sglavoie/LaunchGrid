@@ -709,7 +709,12 @@ final class AppState {
         outsideExisting = outside.existing
         // Apps added with Browse that moved since they were read: their bookmarks know where
         // to, so they are followed before reconciling would prune them as gone.
-        followMovedApps(FileAccess.followVanished(outside.checked.subtracting(outside.existing), prefs: prefs, reopened: reopened))
+        let absent = outside.checked.subtracting(outside.existing)
+        followMovedApps(FileAccess.followVanished(absent, prefs: prefs, reopened: reopened))
+        // Reopening a bookmark can restore access to the same path after the disk read
+        // above said it was absent. Read that path again with the new access before pruning.
+        let regained = Set(absent.filter { FileAccess.isGranted($0) })
+        outsideChecked.subtract(regained)
         let disk = disk ?? DiskState.read(roots: prefs.scanRoots.map(\.path), unlisted: unlisted)
         if self.disk != disk { self.disk = disk }
         if unlistedFolders != unlisted { unlistedFolders = unlisted }
@@ -785,15 +790,17 @@ final class AppState {
     /// an unmounted volume or under a scan folder that is currently missing or couldn't be listed.
     /// `mountedVolumes`, the names in /Volumes, comes from the last scan when given.
     nonisolated static func isReachable(_ path: String, unreachableFolders: [String], mountedVolumes: Set<String>? = nil) -> Bool {
-        if unreachableFolders.contains(where: { path.hasPrefix($0 + "/") }) { return false }
+        if unreachableFolders.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return false }
         return Volume.unmountedVolume(for: path, mounted: mountedVolumes) == nil
     }
 
-    /// Whether a scan could have seen an app at `path`, as of the last scan. Never looks at the
+    /// Whether a scan could have seen an app at `path`, as of the last scan. A saved app
+    /// bookmark without active access leaves its existence unknown too. Never looks at the
     /// disk: when the mounted volumes couldn't be told, apps on any of them keep their tiles.
     private var isReachable: (String) -> Bool {
         let unreachable = unreachableFolders, mounted = disk.mountedVolumes ?? []
-        return { Self.isReachable($0, unreachableFolders: unreachable, mountedVolumes: mounted) }
+        let unresolved = FileAccess.unresolvedAppPaths
+        return { !unresolved.contains($0) && Self.isReachable($0, unreachableFolders: unreachable, mountedVolumes: mounted) }
     }
 
     /// Folders that are there but the last scan couldn't list (privacy controls, a stalled

@@ -1874,6 +1874,47 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct UnlistedFolderTests {
+    @Test func failedChildMetadataProtectsAppsAndEveryRootAlias() throws {
+        let fm = FileManager.default
+        let root = TempDir.url.appendingPathComponent("Apps")
+        let alias = TempDir.url.appendingPathComponent("Alias")
+        let direct = root.appendingPathComponent("Direct.app")
+        let nested = root.appendingPathComponent("Locked/Nested.app")
+        let target = TempDir.url.appendingPathComponent("Elsewhere/Target.app")
+        let linked = root.appendingPathComponent("Linked.app")
+        for app in [direct, nested, target] {
+            let contents = app.appendingPathComponent("Contents")
+            try fm.createDirectory(at: contents, withIntermediateDirectories: true)
+            try NSDictionary(dictionary: ["CFBundleIdentifier": "com.test.\(app.lastPathComponent)"])
+                .write(to: contents.appendingPathComponent("Info.plist"))
+        }
+        try fm.createSymbolicLink(at: linked, withDestinationURL: target)
+        try fm.createSymbolicLink(at: alias, withDestinationURL: root)
+
+        let result = AppScanner.scanReporting(roots: [alias, root], maxDepth: 3) { url, keys in
+            if ["Direct.app", "Locked", "Target.app"].contains(url.lastPathComponent) {
+                throw CocoaError(.fileReadNoPermission)
+            }
+            return try url.resourceValues(forKeys: keys)
+        }
+        #expect(result.hasReadableRoot)
+        #expect(result.apps.isEmpty)
+        let protected = [direct.path, nested.path, linked.path,
+                         alias.appendingPathComponent("Direct.app").path,
+                         alias.appendingPathComponent("Locked/Nested.app").path,
+                         alias.appendingPathComponent("Linked.app").path]
+        for path in protected {
+            #expect(!AppState.isReachable(path, unreachableFolders: result.unlisted))
+        }
+        var grid = Grid(pages: [Page(items: protected.map {
+            .app(AppRef(bundleID: nil, path: $0))
+        })])
+        _ = Reconciler.reconcile(&grid, installed: [installed("Other")], autoAdd: false,
+                                 isReachable: { AppState.isReachable($0, unreachableFolders: result.unlisted) },
+                                 pathExists: { _ in false })
+        #expect(grid.allApps.map(\.path) == protected)
+    }
+
     @Test func aReadableEmptyScanRemovesGoneAppsButKeepsThoseUnderMissingRoots() throws {
         let root = TempDir.url.appendingPathComponent("Apps")
         let missing = TempDir.url.appendingPathComponent("Missing")
@@ -2178,6 +2219,68 @@ func installed(_ name: String) -> InstalledApp {
 // Serialized: `FileAccess` is one for the whole process.
 @MainActor @Suite(.tempDir, .serialized) struct SandboxFileAccessTests {
     let sandbox = FakeSandbox()
+
+    @Test func failedAppBookmarkReopenKeepsTileAndRetriesAfterAccessReturns() async throws {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let path = TempDir.url.appendingPathComponent("Elsewhere/B.app").path
+        #expect(FileAccess.remember(URL(fileURLWithPath: path)))
+        let state = makeState(["A"])
+        state.prefs.autoAddApps = false
+        var grid = state.grid
+        grid.pages[0].items.append(.app(AppRef(bundleID: "com.test.B", path: path, name: "B")))
+        state.replaceGrid(grid)
+
+        let missing = AppState.OutsideRead(checked: [path])
+        state.catalogScanned([installed("A")], outside: missing, reopened: [:])
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+        #expect(FileAccess.unresolvedAppPaths.contains(path))
+        #expect(sandbox.saved[path] != nil)
+        state.catalogScanned([installed("A"), installed("B")], outside: missing, reopened: [:])
+        #expect(state.grid.allApps.map(\.path) == [installed("A").path, path],
+                "an unresolved tile must not become another copy with the same bundle ID")
+        #expect(state.missingApps.contains(installed("B")),
+                "the other copy must remain available in Add Missing Apps")
+
+        // A later scan must offer the saved bookmark for another attempt, even though
+        // the earlier attempt released its active access.
+        var backend = FileAccess.backend
+        backend.openOffMain = { data in
+            FileAccess.Opened(url: URL(fileURLWithPath: String(decoding: data, as: UTF8.self)), stale: false)
+        }
+        FileAccess.backend = backend
+        #expect(FileAccess.bookmarksInUse?.bookmarks[path] != nil)
+
+        let app = URL(fileURLWithPath: path)
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        try NSDictionary(dictionary: ["CFBundleIdentifier": "com.test.B"])
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        // The scan's disk read preceded the successful bookmark reopen; the app must
+        // stay while it is checked again with access restored.
+        state.catalogScanned([installed("A"), installed("B")], outside: missing,
+                             reopened: [path: FileAccess.Opened(url: app, stale: false)])
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+        for _ in 0..<50 where !state.outsideReading.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(state.grid.allApps.map(\.name) == ["A", "B"])
+        #expect(!FileAccess.unresolvedAppPaths.contains(path))
+    }
+
+    @Test func failedBookmarkReopenIsRetriedWithoutABackgroundResolver() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let path = "/Users/x/Downloads/A.app"
+        #expect(FileAccess.remember(URL(fileURLWithPath: path)))
+        sandbox.gone.insert(path)
+        #expect(FileAccess.followVanished([path], prefs: prefs).isEmpty)
+        #expect(FileAccess.unresolvedAppPaths.contains(path))
+
+        sandbox.gone.remove(path)
+        #expect(FileAccess.followVanished([path], prefs: prefs).isEmpty)
+        #expect(FileAccess.isGranted(path))
+        #expect(!FileAccess.unresolvedAppPaths.contains(path))
+    }
 
     @Test func anAppPickedByPathIsUsedThroughItsBookmark() {
         // Browse hands over a URL made from a path, whose own access can't be started.

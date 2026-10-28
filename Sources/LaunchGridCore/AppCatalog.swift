@@ -46,9 +46,9 @@ public enum AppScanner {
     /// What a scan found, and the folders it couldn't list.
     public struct ScanResult: Sendable {
         public var apps: [InstalledApp]
-        /// Folders (roots included) that couldn't be listed: missing, denied by privacy
-        /// controls, a stalled network volume or a lapsed sandbox bookmark. Their apps went
-        /// unseen, which says nothing about whether they are still there.
+        /// Folders (roots included) that couldn't be listed, and children whose metadata
+        /// couldn't be read. Missing access, a stalled volume or a lapsed bookmark can
+        /// leave their apps unseen without proving those apps were deleted.
         public var unlisted: [String]
         /// Real paths and alternate app symlinks, each mapped to the path the scan lists the
         /// app at: /System/Cryptexes/…/Safari.app to /Applications/Safari.app. An open panel
@@ -69,6 +69,15 @@ public enum AppScanner {
 
     /// `scan(roots:maxDepth:)`, also reporting the folders it couldn't list.
     public static func scanReporting(roots: [URL], maxDepth: Int = 3) -> ScanResult {
+        scanReporting(roots: roots, maxDepth: maxDepth) { url, keys in
+            try url.resourceValues(forKeys: keys)
+        }
+    }
+
+    /// The metadata reader is replaceable so a failed child lookup can be tested without
+    /// depending on a particular filesystem's permission behavior.
+    static func scanReporting(roots: [URL], maxDepth: Int,
+                              metadata: (URL, Set<URLResourceKey>) throws -> URLResourceValues) -> ScanResult {
         let fm = FileManager.default
         // Largest remaining depth each directory was walked with. Roots can have different
         // limits (Homebrew's automatic scan is shallower), so depth alone isn't enough.
@@ -116,16 +125,36 @@ public enum AppScanner {
                 return
             }
             if depth == 1 { hasReadableRoot = true }
+            func unreadable(_ child: URL, at path: URL) {
+                let realChild = path.resolvingSymlinksInPath().path
+                unlisted.append(path.path)
+                unlistedDirectories.insert(realChild)
+                // Replay this failed edge for any other spelling of its parent, just as
+                // successfully listed subfolders are replayed below.
+                directoryChildren[real, default: [:]][child.lastPathComponent] = realChild
+            }
             for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 if child.lastPathComponent.hasPrefix(".") { continue }
                 // Answered from the values prefetched with the listing. Only a symlink is
                 // resolved, to ask about its target (e.g. Safari's).
-                guard let own = try? child.resourceValues(forKeys: scanKeys) else { continue }
+                let path = dir.appendingPathComponent(child.lastPathComponent)
+                guard let own = try? metadata(child, scanKeys) else {
+                    unreadable(child, at: path)
+                    continue
+                }
                 let target = own.isSymbolicLink == true ? child.resolvingSymlinksInPath() : nil
-                guard let v = target.map({ try? $0.resourceValues(forKeys: scanKeys) }) ?? own else { continue }
+                let v: URLResourceValues
+                if let target {
+                    guard let resolved = try? metadata(target, scanKeys) else {
+                        unreadable(child, at: path)
+                        continue
+                    }
+                    v = resolved
+                } else {
+                    v = own
+                }
                 // Keep the scan root's spelling even when the listing canonicalizes a parent
                 // (e.g. /var to /private/var), so saved paths and alternate links still match.
-                let path = dir.appendingPathComponent(child.lastPathComponent)
                 if homebrewOpt, let target, isHomebrewAlias(child, target: target) {
                     // Don't scan through a moving formula alias, but recognize apps saved or
                     // picked through it as the same apps found through the formula's own link.
