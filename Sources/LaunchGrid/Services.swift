@@ -73,7 +73,9 @@ enum Launcher {
 
     /// Whether `path` is inside a Trash: the home one (~/.Trash) or a volume's (.Trashes).
     nonisolated static func isInTrash(_ path: String) -> Bool {
-        (path as NSString).pathComponents.contains { $0 == ".Trash" || $0 == ".Trashes" }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        return [url.pathComponents, url.resolvingSymlinksInPath().pathComponents]
+            .contains { $0.contains { $0 == ".Trash" || $0 == ".Trashes" } }
     }
 
     /// Whether the person cancelled the launch (e.g. in Gatekeeper's "downloaded from the

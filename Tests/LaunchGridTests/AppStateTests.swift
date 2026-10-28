@@ -2163,10 +2163,19 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct LauncherTests {
-    @Test func copiesInTheTrashAreNotFallbacks() {
+    @Test func copiesInTheTrashAreNotFallbacks() throws {
         #expect(Launcher.isInTrash("/Users/x/.Trash/Xcode.app"))
         #expect(Launcher.isInTrash("/Volumes/Ext/.Trashes/501/Xcode.app"))
         #expect(!Launcher.isInTrash("/Applications/Xcode.app"))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lg-trash-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let trash = dir.appendingPathComponent(".Trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let app = trash.appendingPathComponent("Xcode.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let alias = dir.appendingPathComponent("Xcode.app")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: app)
+        #expect(Launcher.isInTrash(alias.path), "a symlink must not hide a Trash copy")
     }
 
     @Test func cancellingIsNotAnError() {

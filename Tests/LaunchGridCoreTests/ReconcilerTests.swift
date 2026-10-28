@@ -1536,6 +1536,12 @@ func tempDir(_ prefix: String) -> URL {
         #expect(!LaunchpadImporter.isLastingCopy("/Volumes/Backup/Applications/Old.app"))
         #expect(!LaunchpadImporter.isLastingCopy("/Volumes/Old 1.0/.Trashes/501/Old.app"))
         #expect(!LaunchpadImporter.isLastingCopy("/private/var/folders/x/T/AppTranslocation/ABC/d/Old.app"))
+        let trash = dir.appendingPathComponent(".Trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        try makeFakeApp("Old.app", id: "com.old", in: trash)
+        let alias = dir.appendingPathComponent("Old.app")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: trash.appendingPathComponent("Old.app"))
+        #expect(!LaunchpadImporter.isLastingCopy(alias.path), "a symlink must not hide a Trash copy")
 
         // Only for an app the scan didn't find: the database's own paths and the scan's copies stand.
         typealias Row = LaunchpadImporter.Row

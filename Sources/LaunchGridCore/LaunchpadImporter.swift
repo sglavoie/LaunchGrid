@@ -131,9 +131,13 @@ public enum LaunchpadImporter {
     /// another volume (a disk image, a backup disk), which would leave a tile behind once
     /// ejected. The old Launchpad database still lists apps deleted long since.
     public static func isLastingCopy(_ path: String) -> Bool {
-        let parts = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
-        if parts.contains(where: { $0 == ".Trash" || $0 == ".Trashes" || $0 == "AppTranslocation" }) { return false }
-        if parts.count > 2, parts[1] == "Volumes" { return false }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        // Launch Services can return an app through a symlink. Check both spellings so
+        // neither a link into Trash nor a link out of it makes a temporary copy look lasting.
+        for parts in [url.pathComponents, url.resolvingSymlinksInPath().pathComponents] {
+            if parts.contains(where: { $0 == ".Trash" || $0 == ".Trashes" || $0 == "AppTranslocation" }) { return false }
+            if parts.count > 2, parts[1] == "Volumes" { return false }
+        }
         return FileManager.default.fileExists(atPath: path)
     }
 
