@@ -72,9 +72,17 @@ public struct GridStore: Sendable {
             let day = String(name.dropFirst(prefix.count).dropLast(5))
             guard day.count == 10,
                   day.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil,
+                  Self.isCalendarDay(day),
                   let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { return false }
             return values.isRegularFile == true && values.isSymbolicLink != true
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private static func isCalendarDay(_ day: String) -> Bool {
+        let parts = day.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return false }
+        let date = DateComponents(year: parts[0], month: parts[1], day: parts[2])
+        return date.isValidDate(in: Calendar(identifier: .gregorian))
     }
 
     /// The day `date` falls on here, as daily backups are named.

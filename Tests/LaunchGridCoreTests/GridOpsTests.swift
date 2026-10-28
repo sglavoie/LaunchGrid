@@ -658,7 +658,8 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         let store = GridStore(url: dir.appendingPathComponent("grid.json"))
         let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
         try store.save(Grid(), now: start)
-        let manualNames = ["grid.backup-0000-manual.json", "grid.backup-latest.json", "grid.backup-.json"]
+        let manualNames = ["grid.backup-0000-manual.json", "grid.backup-latest.json", "grid.backup-.json",
+                           "grid.backup-2000-02-30.json", "grid.backup-9999-99-99.json"]
         let contents = Data("Keep this manual backup".utf8)
         for name in manualNames { try contents.write(to: dir.appendingPathComponent(name)) }
         let folder = dir.appendingPathComponent("grid.backup-2000-01-01.json")

@@ -1638,12 +1638,8 @@ func installed(_ name: String) -> InstalledApp {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("grid.json")
         try Data("not json".utf8).write(to: url)
-        // Take every backup name the next seconds could use, so the move fails.
-        let now = Int(Date().timeIntervalSince1970)
-        for t in (now - 2)...(now + 30) {
-            try FileManager.default.createDirectory(at: dir.appendingPathComponent("grid.corrupt-\(t).json"),
-                                                    withIntermediateDirectories: true)
-        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
         let state = AppState(prefs: testPreferences(), store: GridStore(url: url))
         #expect(state.loadProblem?.backup == url)
 
@@ -1652,9 +1648,40 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.lastSaveError != nil)
         #expect(try String(contentsOf: url, encoding: .utf8) == "not json")
 
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
         try FileManager.default.removeItem(at: url) // the user moved it away
         state.saveNow()
         #expect(try savedTitles(state) == ["A"])
+    }
+
+    @Test func recoveryNamesDoNotCollideWithinOneSecond() throws {
+        let dir = TempDir.url
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("grid.json")
+        let original = Data("not json".utf8)
+        try original.write(to: url)
+        let now = Int(Date().timeIntervalSince1970)
+        for second in (now - 2)...(now + 30) {
+            try FileManager.default.createDirectory(at: dir.appendingPathComponent("grid.corrupt-\(second).json"),
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: dir.appendingPathComponent("grid.partial-\(second).json"),
+                                                    withIntermediateDirectories: true)
+        }
+        let first = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        let firstCopy = try #require(first.loadProblem?.backup)
+        try original.write(to: url)
+        let second = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        let secondCopy = try #require(second.loadProblem?.backup)
+        #expect(firstCopy != secondCopy)
+        #expect(try Data(contentsOf: firstCopy) == original)
+        #expect(try Data(contentsOf: secondCopy) == original)
+
+        let partial = Data(#"{"pages":[{"items":[{"type":"app","app":{"name":"No path"}},{"type":"app","app":{"path":"/Applications/A.app"}}]}]}"#.utf8)
+        try partial.write(to: url)
+        let repaired = AppState(prefs: testPreferences(), store: GridStore(url: url))
+        let partialCopy = try #require(repaired.recoveryNotice?.file)
+        #expect(repaired.loadProblem == nil)
+        #expect(try Data(contentsOf: partialCopy) == partial)
     }
 }
 

@@ -204,8 +204,7 @@ final class AppState {
                 // The file a symlink points at, set aside beside its backup: moving the link
                 // would lose both, and the next save would write a file over the link.
                 let file = store.fileURL
-                let backup = file.deletingPathExtension()
-                    .appendingPathExtension("\(newer ? "newer" : "corrupt")-\(Int(Date().timeIntervalSince1970)).json")
+                let backup = Self.recoveryFileURL(for: file, kind: newer ? "newer" : "corrupt")
                 do {
                     try FileManager.default.moveItem(at: file, to: backup)
                     NSLog("LaunchGrid: could not load grid (\(error)); moved to \(backup.path)")
@@ -247,12 +246,18 @@ final class AppState {
         if recoveryNotice != nil && !savesBlocked { scheduleSave() }
     }
 
+    /// Keep each damaged file under a distinct name, even after a second launch in the
+    /// same second or when someone already has a file with the old timestamp-only name.
+    private static func recoveryFileURL(for file: URL, kind: String) -> URL {
+        file.deletingPathExtension()
+            .appendingPathExtension("\(kind)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString).json")
+    }
+
     /// Some entries of the saved layout couldn't be read and were left out: a copy of the
     /// file as it was is kept aside, as saves and backups will soon replace it with the rest.
     private func keepPartlyReadFile(skipped: Int) {
         let file = store.fileURL
-        let copy = file.deletingPathExtension()
-            .appendingPathExtension("partial-\(Int(Date().timeIntervalSince1970)).json")
+        let copy = Self.recoveryFileURL(for: file, kind: "partial")
         do {
             try FileManager.default.copyItem(at: file, to: copy)
             NSLog("LaunchGrid: \(skipped) entries of the grid could not be read; kept a copy at \(copy.path)")
