@@ -358,6 +358,19 @@ final class AppState {
     private func afterChange(from old: Grid) {
         canUndo = !undoStack.isEmpty
         canRedo = !redoStack.isEmpty
+        // A slot can now hold a different app after a scan, removal or sort. Remember
+        // the focused item's identity before adjusting pages and folder visibility.
+        let focusedID: UUID? = focusIndex.flatMap { i in
+            let ids: [UUID]
+            if !query.isEmpty {
+                ids = Search.results(in: old.allApps, query: query).prefix(old.capacity).map(\.id)
+            } else if let id = openFolderID, let folder = old.folder(id) {
+                ids = folder.apps.map(\.id)
+            } else {
+                ids = old.pages.indices.contains(currentPage) ? old.pages[currentPage].items.map(\.id) : []
+            }
+            return ids.indices.contains(i) ? ids[i] : nil
+        }
         // The page shown stays the same page when pages before it come or go (a rescan
         // emptying one), not whichever now has its number.
         if old.pages.indices.contains(currentPage) {
@@ -387,12 +400,13 @@ final class AppState {
             folderPage = max(0, min(folderPage, FolderLayout.pageCount(apps: f.apps.count, grid: grid) - 1))
         }
         if let i = focusIndex {
-            let count = !query.isEmpty ? searchResults.count : openFolder?.apps.count ?? currentItems.count
-            focusIndex = count > 0 ? min(i, count - 1) : nil
-            // Resizing (including undo/redo) changes how many apps fit on a folder page.
-            // Follow its focused app so keyboard actions still act on an app in view.
-            if query.isEmpty, openFolder != nil, let focusIndex,
-               old.rows != grid.rows || old.columns != grid.columns {
+            let ids = !query.isEmpty ? searchResults.map(\.id) : openFolder?.apps.map(\.id) ?? currentItems.map(\.id)
+            // Keep the same item when it is still in this view. If it left, focus the
+            // item taking its slot, or the last item when the view became shorter.
+            focusIndex = ids.isEmpty ? nil : focusedID.flatMap { ids.firstIndex(of: $0) } ?? min(i, ids.count - 1)
+            // Insertions and removals can move the focused app across a folder page
+            // boundary too, even when the grid dimensions haven't changed.
+            if query.isEmpty, openFolder != nil, let focusIndex {
                 folderPage = focusIndex / FolderLayout.perPage(grid)
             }
         }

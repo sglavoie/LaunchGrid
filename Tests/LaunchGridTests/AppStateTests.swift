@@ -289,7 +289,9 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.focusIndex == 29, "Return must act on the folder page now shown")
         state.dragEnded(start: start, location: edge, predicted: edge)
         #expect(state.folderPage == 1)
-        #expect(state.focusIndex == 29)
+        // Dropping App1 after App30 shifts App30 back a slot; focus stays on App30.
+        #expect(state.focusIndex == 28)
+        #expect(state.openFolder?.apps[safe: state.focusIndex ?? -1]?.id == refs[29].id)
     }
 
     @Test(arguments: [false, true])
@@ -1231,6 +1233,62 @@ func installed(_ name: String) -> InstalledApp {
         #expect(!state.canRedo)
         state.redo()
         #expect(state.grid.allApps.map(\.name) == ["A"], "redo must not bring back the empty grid")
+    }
+}
+
+@MainActor @Suite(.tempDir) struct FocusContinuityTests {
+    @Test func aRescanKeepsFocusOnTheSameApp() throws {
+        let state = makeState(["A", "B", "C"])
+        state.prefs.autoAddApps = false
+        state.focusIndex = 1
+        let focused = state.grid.allApps[1].id
+        state.catalogScanned([installed("B"), installed("C")],
+                             outside: AppState.OutsideRead(checked: [installed("A").path]),
+                             disk: DiskState(mountedVolumes: []))
+        #expect(state.currentItems.map(\.title) == ["B", "C"])
+        let index = try #require(state.focusIndex)
+        #expect(state.currentItems[index].id == focused)
+    }
+
+    @Test func sortingAndUndoKeepFocusOnTheSameApp() throws {
+        let state = makeState(["C", "A", "B"])
+        let focused = state.grid.allApps[0].id
+        state.focusIndex = 0
+        state.sortCurrentPage()
+        #expect(state.currentItems[try #require(state.focusIndex)].id == focused)
+        state.undo()
+        #expect(state.currentItems[try #require(state.focusIndex)].id == focused)
+        state.redo()
+        #expect(state.currentItems[try #require(state.focusIndex)].id == focused)
+    }
+
+    @Test func removingAnEarlierSearchResultKeepsTheFocusedResult() throws {
+        let state = makeState(["App A", "App B", "App C"])
+        let focused = state.grid.allApps[1].id
+        state.query = "App"
+        state.focusIndex = 1
+        state.remove([state.grid.allApps[0].id])
+        #expect(state.searchResults[try #require(state.focusIndex)].id == focused)
+    }
+
+    @Test func removingAnEarlierFolderAppKeepsFocusVisibleAcrossPages() throws {
+        let state = makeState()
+        let refs = (1...30).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.folder(folder)])]))
+        state.openFolder(folder.id)
+        state.folderPage = 1
+        state.focusIndex = 28
+        state.remove([refs[0].id])
+        #expect(state.openFolder?.apps[try #require(state.focusIndex)].id == refs[28].id)
+        #expect(state.folderPage == 0, "the focused app moved to the previous folder page")
+    }
+
+    @Test func removingTheFocusedAppFocusesItsSuccessor() throws {
+        let state = makeState(["A", "B", "C"])
+        state.focusIndex = 1
+        state.remove([state.grid.allApps[1].id])
+        #expect(state.currentItems[try #require(state.focusIndex)].title == "C")
     }
 }
 
