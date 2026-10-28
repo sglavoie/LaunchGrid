@@ -1440,6 +1440,28 @@ func tempDir(_ prefix: String) -> URL {
 }
 
 @Suite struct ImporterTests {
+    @Test func aRootWithDirectAppsDoesNotHideTheLayoutRoot() {
+        typealias Row = LaunchpadImporter.Row
+        let items = [
+            Row(id: 1, type: 1, parent: 0, ordering: 0),
+            Row(id: 2, type: 1, parent: 0, ordering: 1),
+            Row(id: 10, type: 4, parent: 1, ordering: 0),
+            Row(id: 11, type: 4, parent: 1, ordering: 1),
+            Row(id: 20, type: 3, parent: 2, ordering: 0),
+            Row(id: 21, type: 4, parent: 20, ordering: 0),
+        ]
+        let apps = [
+            10: LaunchpadImporter.AppRow(title: "Unplaced A", bundleID: "test.a"),
+            11: LaunchpadImporter.AppRow(title: "Unplaced B", bundleID: "test.b"),
+            21: LaunchpadImporter.AppRow(title: "On Page", bundleID: "test.page"),
+        ]
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [20: "Work"],
+                                             rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(result.grid.pages.map(\.title) == ["Work"])
+        #expect(result.grid.allApps.map(\.name) == ["On Page"])
+        #expect(result.imported == 1)
+    }
+
     @Test func importsAppsDirectlyUnderAParentlessPage() {
         typealias Row = LaunchpadImporter.Row
         let items = [

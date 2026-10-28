@@ -10,7 +10,7 @@ struct DiskState: Equatable, Sendable {
     var missingRoots: [String] = []
     /// Of the folders the scan couldn't list, those that exist.
     var unreadable: [String] = []
-    /// The names in /Volumes; nil until read.
+    /// Names of mounted volumes; nil until read.
     var mountedVolumes: Set<String>?
 
     nonisolated static func read(roots: [String], unlisted: [String]) -> DiskState {

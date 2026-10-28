@@ -273,10 +273,15 @@ public enum LaunchpadImporter {
         }
 
         // Containers of top-level pages: explicit roots (type 1) and parentless items.
-        // Apple's DB has several roots (holding page, apps, widgets); AppGrid's root is a
-        // type-3 item with parent 0. Pick the one holding the most apps.
+        // Apple's DB has several roots (holding pages, apps, widgets); a root holding
+        // direct app records can have more apps than the layout root. AppGrid's root is
+        // itself a parentless type-3 page. Only compare roots that can provide pages.
         let containers = items.filter { $0.type == ItemType.root.rawValue || $0.parent == 0 }
-        let root = containers.max { countApps(under: $0.id) < countApps(under: $1.id) }
+        let layoutRoots = containers.filter { root in
+            root.type == ItemType.page.rawValue
+                || (children[root.id] ?? []).contains { $0.type == ItemType.page.rawValue }
+        }
+        let root = layoutRoots.max { countApps(under: $0.id) < countApps(under: $1.id) }
 
         var grid = Grid(rows: rows, columns: columns, pages: [])
         if let root {

@@ -1231,9 +1231,22 @@ func installed(_ name: String) -> InstalledApp {
 
     @Test func theMountedVolumesComeFromTheSystem() throws {
         let names = try #require(Volume.mountedNames())
-        #expect(names == Set(try FileManager.default.contentsOfDirectory(atPath: "/Volumes")))
+        let urls = try #require(FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: []))
+        let mounted = Set(urls.map { ($0.path as NSString).pathComponents }
+            .filter { $0.count == 3 && $0[1] == "Volumes" }.map { $0[2] })
+        #expect(names.isSuperset(of: mounted))
         let startup = try #require(try URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeNameKey]).volumeName)
         #expect(names.contains(startup), "the startup disk, linked to / from there")
+    }
+
+    @Test func aLeftoverMountPointDoesNotCountAsAMountedVolume() throws {
+        let urls = [URL(fileURLWithPath: "/"), URL(fileURLWithPath: "/Volumes/Online")]
+        let names = try #require(Volume.mountedNames(from: urls) { _ in "Startup" })
+        #expect(names == ["Startup", "Online"])
+        #expect(Volume.unmountedVolume(for: "/Volumes/Leftover/App.app", mounted: names) == "Leftover")
+        #expect(Volume.unmountedVolume(for: "/Volumes/Online/App.app", mounted: names) == nil)
+        #expect(!AppState.isReachable("/Volumes/Leftover/App.app", unreachableFolders: [], mountedVolumes: names))
+        #expect(Volume.mountedNames(from: nil) { _ in "Startup" } == nil)
     }
 }
 

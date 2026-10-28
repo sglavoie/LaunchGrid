@@ -94,28 +94,35 @@ enum Launcher {
 enum Volume: Sendable {
     /// The name of the volume holding `path` when that volume isn't mounted. Only paths
     /// under /Volumes can be on one that isn't.
-    /// `mounted`, the names in /Volumes when already known, saves looking.
+    /// `mounted`, the names of mounted volumes when already known, saves looking.
     static func unmountedVolume(for path: String, mounted: Set<String>? = nil) -> String? {
         let parts = (path as NSString).pathComponents
         guard parts.count > 2, parts[0] == "/", parts[1] == "Volumes" else { return nil }
-        let there = mounted.map { $0.contains(parts[2]) } ?? FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
-        return there ? nil : parts[2]
+        // An unmounted disk can leave its mount-point directory behind. Its existence
+        // does not mean the volume is available; when the mount list is unavailable,
+        // treat the volume as unmounted so its tiles are kept and no other copy opens.
+        return (mounted ?? mountedNames())?.contains(parts[2]) == true ? nil : parts[2]
     }
 
-    /// The names in /Volumes of the volumes mounted. Asked of the system, which works in the
-    /// sandbox too, and added to what listing the folder gives; nil when neither can tell.
+    /// Names of volumes actually mounted. Listing /Volumes also includes directories left
+    /// behind by ejected disks, so only the system's mount list can establish this.
     static func mountedNames() -> Set<String>? {
         let fm = FileManager.default
-        let listed = (try? fm.contentsOfDirectory(atPath: "/Volumes")).map(Set.init)
-        guard let urls = fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: []) else { return listed }
+        return mountedNames(from: fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: [])) {
+            try? $0.resourceValues(forKeys: [.volumeNameKey]).volumeName
+        }
+    }
+
+    static func mountedNames(from urls: [URL]?, rootName: (URL) -> String?) -> Set<String>? {
+        guard let urls else { return nil }
         var names = Set(urls.map { ($0.path as NSString).pathComponents }
             .filter { $0.count == 3 && $0[1] == "Volumes" }
             .map { $0[2] })
         // The startup disk is mounted at /, and in /Volumes only as a link to it.
-        if let root = urls.first(where: { $0.path == "/" }), let name = try? root.resourceValues(forKeys: [.volumeNameKey]).volumeName {
+        if let root = urls.first(where: { $0.path == "/" }), let name = rootName(root) {
             names.insert(name)
         }
-        return names.union(listed ?? [])
+        return names
     }
 }
 
