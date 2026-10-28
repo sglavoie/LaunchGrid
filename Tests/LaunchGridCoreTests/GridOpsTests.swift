@@ -611,6 +611,26 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(leftovers.isEmpty)
     }
 
+    @Test func anUnflushedCopyCannotReplaceTheBackup() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let first = Grid(rows: 1, columns: 1)
+        let second = Grid(rows: 2, columns: 2)
+        let third = Grid(rows: 3, columns: 3)
+        try store.save(first)
+        try store.save(second)
+
+        let refreshed = try store.save(third, refreshingBackup: true, now: Date(), flushBackup: { _ in
+            throw CocoaError(.fileWriteOutOfSpace)
+        }, write: GridStore.writeDurably)
+        #expect(!refreshed)
+        #expect(try store.load() == third, "the layout can still be saved")
+        #expect(try store.loadBackup() == first, "an unflushed copy cannot replace it")
+        #expect(try fm.contentsOfDirectory(atPath: dir.path).allSatisfy { !$0.hasSuffix(".tmp") })
+    }
+
     @Test func repairingPartlyReadableFileKeepsTheLastGoodBackup() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)

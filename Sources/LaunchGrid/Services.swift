@@ -35,7 +35,8 @@ enum Launcher {
     /// there. Returns the path that was actually launched, and the app running from it.
     /// - Parameter activates: false opens it behind the grid, which stays up to open more.
     @MainActor
-    static func launch(_ app: AppRef, activates: Bool = true) async throws -> (path: String, running: NSRunningApplication) {
+    static func launch(_ app: AppRef, activates: Bool = true, knownPaths: Set<String> = []) async throws
+        -> (path: String, running: NSRunningApplication) {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = activates
         // Looked at off the main thread, so a stalled volume doesn't hang the app.
@@ -51,11 +52,15 @@ enum Launcher {
         // An app on a volume that isn't mounted hasn't gone anywhere: say so, rather than open
         // another copy with its bundle ID (Xcode for Xcode-beta).
         if let volume = unmounted { throw VolumeNotMounted(volume: volume) }
-        // Retry elsewhere only if Launch Services knows a copy outside the Trash or
-        // AppTranslocation. A translocated copy must not replace the saved app's path.
+        // Retry elsewhere only if Launch Services knows a stable copy. A copy on an
+        // unfamiliar external volume may be from a mounted installer disk image.
         if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
-           url.path != app.path, !isTemporaryFallback(url.path) {
-            return (url.path, try await NSWorkspace.shared.openApplication(at: url, configuration: config))
+           url.path != app.path {
+            let candidate = url.path
+            let reject = await Disk.run { shouldRejectFallback(candidate, knownPaths: knownPaths) }
+            if !reject {
+                return (candidate, try await NSWorkspace.shared.openApplication(at: url, configuration: config))
+            }
         }
         throw NotFound()
     }
@@ -79,12 +84,23 @@ enum Launcher {
             .contains { $0.contains { $0 == ".Trash" || $0 == ".Trashes" } }
     }
 
-    /// Launch Services can point at a quarantine copy under AppTranslocation. It is
-    /// removed after use and should not be opened or remembered as a moved app.
-    nonisolated static func isTemporaryFallback(_ path: String) -> Bool {
+    /// Launch Services can point at a quarantine copy or an app on an installer disk
+    /// image. External copies already in the scan or layout are intentional and can open.
+    nonisolated static func shouldRejectFallback(_ path: String, knownPaths: Set<String> = []) -> Bool {
         let url = URL(fileURLWithPath: path).standardizedFileURL
-        return isInTrash(path) || [url.pathComponents, url.resolvingSymlinksInPath().pathComponents]
-            .contains { $0.contains("AppTranslocation") }
+        let resolved = url.resolvingSymlinksInPath()
+        let spellings = [url, resolved]
+        if isInTrash(path) || spellings.contains(where: { $0.pathComponents.contains("AppTranslocation") }) { return true }
+        let onExternalVolume = spellings.contains { parts in
+            let components = parts.pathComponents
+            return components.count > 2 && components[0] == "/" && components[1] == "Volumes"
+        }
+        guard onExternalVolume else { return false }
+        return !knownPaths.contains { known in
+            let knownURL = URL(fileURLWithPath: known).standardizedFileURL
+            return spellings.contains(where: { $0.path == knownURL.path })
+                || knownURL.resolvingSymlinksInPath().path == resolved.path
+        }
     }
 
     /// Whether the person cancelled the launch (e.g. in Gatekeeper's "downloaded from the

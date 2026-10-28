@@ -1023,10 +1023,13 @@ final class AppState {
         // Get out of the way at once, as Launchpad does; a slow app can take seconds. Staying
         // up, the grid opens it behind itself and keeps the keyboard, to open more.
         let hides = prefs.hideAfterLaunch
+        // A copy on an external volume counts as intentional if it was scanned or added
+        // to the layout. An unknown copy may be on a mounted installer disk image.
+        let knownPaths = Set(installed.map(\.path) + grid.allApps.map(\.path))
         if hides { onHideForLaunch() }
         Task {
             do {
-                let (path, running) = try await Launcher.launch(app, activates: hides)
+                let (path, running) = try await Launcher.launch(app, activates: hides, knownPaths: knownPaths)
                 if !hides { onLaunchedBehind(running) }
                 // Off the main thread: a stalled volume mustn't hang the app.
                 let gone = path == app.path ? false

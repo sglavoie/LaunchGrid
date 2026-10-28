@@ -116,6 +116,7 @@ public struct GridStore: Sendable {
 
     @discardableResult
     func save(_ grid: Grid, refreshingBackup: Bool, now: Date,
+              flushBackup: (URL) throws -> Void = GridStore.flushFile,
               write: (Data, URL) throws -> Void) throws -> Bool {
         // Write through a symlink: an atomic write to the link itself would replace it with a file.
         let target = fileURL
@@ -134,14 +135,20 @@ public struct GridStore: Sendable {
             let backup = backupURL
             let tmp = backup.deletingLastPathComponent()
                 .appendingPathComponent(".\(backup.lastPathComponent).\(UUID().uuidString).tmp")
-            if (try? fm.copyItem(at: target, to: tmp)) != nil {
-                stagedBackup = tmp
-            }
+            // The main writer flushes its temporary file before renaming it. Do the
+            // same here: a copied backup can otherwise reappear empty after a power cut.
+            if (try? fm.copyItem(at: target, to: tmp)) != nil,
+               (try? flushBackup(tmp)) != nil { stagedBackup = tmp }
+            else { unlink(tmp.path) }
         }
         try write(GridStore.encode(grid), target)
         guard let stagedBackup else { return false }
         keepDailyCopy(day: GridStore.day(of: now))
-        return rename(stagedBackup.path, backupURL.path) == 0
+        guard rename(stagedBackup.path, backupURL.path) == 0 else { return false }
+        // The new backup's contents are flushed above. Some filesystems refuse directory
+        // syncing; the backup was still replaced, so count this refresh only once.
+        _ = GridStore.flushDirectory(at: target.deletingLastPathComponent())
+        return true
     }
 
     /// Deletes temporary files an earlier save left beside `url` when it was cut short (by a
@@ -196,16 +203,32 @@ public struct GridStore: Sendable {
             guard fchmod(fd, mode) == 0 else { throw posixError() }
             // F_FULLFSYNC also empties the drive's own cache, which fsync leaves to the drive.
             // Some file systems don't support it; fsync is the most they offer.
-            guard fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0 else { throw posixError() }
+            try flushDescriptor(fd)
         }
         guard rename(tmp, url.path) == 0 else { throw posixError() }
         renamed = true
         // The rename itself lives in the folder.
-        let dir = open(folder, O_RDONLY)
-        if dir >= 0 {
-            _ = fcntl(dir, F_FULLFSYNC) == 0 || fsync(dir) == 0
-            close(dir)
-        }
+        _ = flushDirectory(at: url.deletingLastPathComponent())
+    }
+
+    private static func flushDescriptor(_ fd: Int32) throws {
+        guard fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0 else { throw posixError() }
+    }
+
+    /// Flushes a copied file before it becomes the recovery copy.
+    static func flushFile(_ url: URL) throws {
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else { throw posixError() }
+        defer { close(fd) }
+        try flushDescriptor(fd)
+    }
+
+    @discardableResult
+    private static func flushDirectory(at url: URL) -> Bool {
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        return (try? flushDescriptor(fd)) != nil
     }
 
     private static func posixError() -> Error {
