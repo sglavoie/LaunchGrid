@@ -235,9 +235,11 @@ final class AppState {
                 }
             }
         }
-        // Restoration records also belong to an existing layout: an update can temporarily
-        // empty the whole grid. Only a file with neither apps nor records is a welcome choice.
-        hasGridFile = loaded.map { !$0.allApps.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
+        // Older files have no setup marker. Apps or restoration records still identify
+        // their existing layout, and the next edit saves the marker even if it empties it.
+        let hasLayout = loaded.map { $0.hasCreatedLayout || !$0.allApps.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
+        hasGridFile = hasLayout
+        if hasLayout { loaded?.hasCreatedLayout = true }
         grid = loaded ?? Grid()
         if skipped > 0 { keepPartlyReadFile(skipped: skipped) }
         // The unreadable file is gone: write the restored layout back before anything else
@@ -290,6 +292,8 @@ final class AppState {
 
     /// Replaces the whole grid (import, rebuild, load) as one undo step.
     func replaceGrid(_ new: Grid) {
+        var new = new
+        new.hasCreatedLayout = true
         if !hasGridFile {
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.

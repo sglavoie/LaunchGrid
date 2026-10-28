@@ -830,11 +830,12 @@ func installed(_ name: String) -> InstalledApp {
     @Test func movingTheLastAppOutOfAFolderToItsOwnPageCanBeUndone() {
         let state = makeState()
         let x = installed("X").makeRef()
-        let original = Grid(rows: 1, columns: 3, pages: [Page(items: [
+        let layout = Grid(rows: 1, columns: 3, pages: [Page(items: [
             .folder(Folder(name: "F", apps: [x])),
             .app(installed("A").makeRef()), .app(installed("B").makeRef()),
         ])])
-        state.replaceGrid(original)
+        state.replaceGrid(layout)
+        let original = state.grid
 
         state.moveToPage([x.id], page: 0)
         #expect(state.grid.pages.map { $0.items.map(\.title) } == [["A", "B", "X"]])
@@ -1770,6 +1771,45 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct WelcomeExclusionTests {
+    @Test(arguments: [false, true])
+    func removingEveryAppDoesNotRestartSetup(legacy: Bool) throws {
+        let state = makeState(["A"])
+        if legacy {
+            var old = state.grid
+            old.hasCreatedLayout = false
+            try state.store.save(old)
+        }
+        let editing = legacy ? AppState(prefs: testPreferences(), store: state.store) : state
+        editing.remove(editing.grid.allApps.map(\.id))
+        #expect(editing.saveNow())
+
+        let reopened = AppState(prefs: testPreferences(), store: state.store)
+        #expect(reopened.hasGridFile, "an intentionally empty layout has already completed setup")
+        #expect(reopened.grid.allApps.isEmpty)
+        reopened.catalogScanned([installed("A"), installed("B")])
+        #expect(reopened.grid.allApps.map(\.name) == ["B"], "new apps still reconcile into the existing layout")
+    }
+
+    @Test func anExplicitlyEmptyLayoutSurvivesRelaunch() {
+        let state = makeState()
+        state.apply { $0.setPageTitle(0, "Work") }
+        #expect(state.saveNow())
+
+        let reopened = AppState(prefs: testPreferences(), store: state.store)
+        #expect(reopened.hasGridFile)
+        #expect(reopened.grid.pages.first?.title == "Work")
+    }
+
+    @Test func savedWelcomeChoicesStillNeedSetup() {
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        state.chooseApps(include: [], exclude: [installed("A")])
+        #expect(state.saveNow())
+
+        let reopened = AppState(prefs: testPreferences(), store: state.store)
+        #expect(!reopened.hasGridFile)
+        #expect(reopened.grid.isExcluded(installed("A")))
+    }
+
     @Test func includingTheLastExcludedAppAgainIsSaved() {
         let url = TempDir.url.appendingPathComponent("grid.json")
         let state = AppState(prefs: testPreferences(), store: GridStore(url: url))

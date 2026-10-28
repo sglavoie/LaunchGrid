@@ -5,6 +5,9 @@ public struct Grid: Codable, Equatable, Sendable {
     public static let currentVersion = 1
 
     public var version: Int = Grid.currentVersion
+    /// Setup was completed, even if the user later removes every app. False also covers
+    /// older files, whose apps or restoration records identify an existing layout.
+    public var hasCreatedLayout = false
     /// At least 1, so `capacity` is never 0. Change through `resize(rows:columns:)`.
     public internal(set) var rows: Int { didSet { rows = max(1, rows) } }
     public internal(set) var columns: Int { didSet { columns = max(1, columns) } }
@@ -221,7 +224,7 @@ public struct InstalledApp: Equatable, Hashable, Sendable {
 // title) fall back to defaults so hand-edited or older files still load, and an entry that can't
 // be read (an app without a path) is skipped, not the whole file.
 extension Grid {
-    private enum CodingKeys: String, CodingKey { case version, rows, columns, pages, removedBundleIDs, recentlyPruned }
+    private enum CodingKeys: String, CodingKey { case version, hasCreatedLayout, rows, columns, pages, removedBundleIDs, recentlyPruned }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -241,11 +244,13 @@ extension Grid {
         )
         // GridStore reads the version first, also when written as text, and rejects bad ones.
         version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? 1
+        hasCreatedLayout = (try? c.decodeIfPresent(Bool.self, forKey: .hasCreatedLayout)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(version, forKey: .version)
+        if hasCreatedLayout { try c.encode(true, forKey: .hasCreatedLayout) }
         try c.encode(rows, forKey: .rows)
         try c.encode(columns, forKey: .columns)
         try c.encode(pages, forKey: .pages)
