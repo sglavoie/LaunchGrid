@@ -171,7 +171,11 @@ public struct GridStore: Sendable {
     static func writeDurably(_ data: Data, to url: URL) throws {
         let folder = url.deletingLastPathComponent().path
         let tmp = folder + "/.\(url.lastPathComponent).\(UUID().uuidString).tmp"
-        let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        // Keep a private new file private, and preserve permissions someone set on an
+        // existing layout. Replacing it by rename otherwise resets its mode on every save.
+        var existing = stat()
+        let mode: mode_t = stat(url.path, &existing) == 0 ? existing.st_mode & 0o777 : 0o600
+        let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard fd >= 0 else { throw posixError() }
         var renamed = false
         defer { if !renamed { unlink(tmp) } }
@@ -189,6 +193,7 @@ public struct GridStore: Sendable {
                     written += n
                 }
             }
+            guard fchmod(fd, mode) == 0 else { throw posixError() }
             // F_FULLFSYNC also empties the drive's own cache, which fsync leaves to the drive.
             // Some file systems don't support it; fsync is the most they offer.
             guard fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0 else { throw posixError() }

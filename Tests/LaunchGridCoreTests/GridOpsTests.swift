@@ -576,6 +576,19 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(leftovers.isEmpty, "the temporary file is renamed into place")
     }
 
+    @Test func savingPreservesLayoutPermissions() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        try store.save(Grid())
+        #expect((try fm.attributesOfItem(atPath: store.url.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+
+        try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: store.url.path)
+        try store.save(Grid(rows: 2, columns: 2))
+        #expect((try fm.attributesOfItem(atPath: store.url.path)[.posixPermissions] as? NSNumber)?.intValue == 0o640)
+    }
+
     @Test func aFailedSavePreservesTheEarlierBackup() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)

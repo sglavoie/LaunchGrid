@@ -6,14 +6,14 @@ cd "$(dirname "$0")/.."
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 DEST="$INSTALL_DIR/LaunchGrid.app"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-if [ ! -e "$DEST" ]; then
+if [ ! -e "$DEST" ] && [ ! -L "$DEST" ]; then
     echo "Nothing installed at $DEST"
     exit 0
 fi
 # The login item belongs to the bundle, so drop it while the bundle is still there. A copy
 # from before --unregister-login-item would just start up instead, so only ask one that has it.
 BIN="$DEST/Contents/MacOS/LaunchGrid"
-if ! { grep -qaF -- --unregister-login-item "$BIN" && "$BIN" --unregister-login-item; }; then
+if ! { [ -f "$BIN" ] && grep -qaF -- --unregister-login-item "$BIN" && "$BIN" --unregister-login-item; }; then
     echo "If LaunchGrid opened at login, remove it in System Settings › General › Login Items."
 fi
 scripts/quit-app.sh "$DEST"
