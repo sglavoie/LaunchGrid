@@ -1151,9 +1151,13 @@ struct MenuEntry {
         let multi = targets.count > 1
         var entries: [MenuEntry] = []
         if case .app(let a) = item {
-            entries.append(.button(String(localized: "Open")) { state.launch(a) })
+            entries.append(.button(String(localized: "Open")) {
+                guard let current = state.grid.item(a.id)?.app else { return }
+                state.launch(current)
+            })
             entries.append(.button(String(localized: "Show in Finder")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: a.path)])
+                guard let current = state.grid.item(a.id)?.app else { return }
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                 // Finder comes forward like a launched app: an app opened behind mustn't cover it.
                 state.onHideForLaunch()
             })

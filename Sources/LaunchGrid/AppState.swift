@@ -1056,18 +1056,22 @@ final class AppState {
     // MARK: Actions
 
     func launch(_ app: AppRef) {
+        // A SwiftUI tile or an open menu can still hold a ref from before a scan moved it.
+        guard let app = grid.item(app.id)?.app else { return }
         // Get out of the way at once, as Launchpad does; a slow app can take seconds. Staying
         // up, the grid opens it behind itself and keeps the keyboard, to open more.
         let hides = prefs.hideAfterLaunch
         // A copy on an external volume counts as intentional if it was scanned or added
         // to the layout. An unknown copy may be on a mounted installer disk image.
         let knownPaths = Set(installed.map(\.path) + grid.allApps.map(\.path))
+        let excludedPaths = Set(grid.removedBundleIDs.filter { $0.hasPrefix("/") })
         let otherTilePaths = Set(grid.allApps.filter { $0.id != app.id && $0.bundleID == app.bundleID }.map(\.path))
         if hides { onHideForLaunch() }
         Task {
             do {
                 let (path, running) = try await Launcher.launch(app, activates: hides,
-                                                                 knownPaths: knownPaths, otherTilePaths: otherTilePaths)
+                                                                 knownPaths: knownPaths, excludedPaths: excludedPaths,
+                                                                 otherTilePaths: otherTilePaths)
                 if !hides { onLaunchedBehind(running) }
                 // Off the main thread: a stalled volume mustn't hang the app.
                 let gone = path == app.path ? false

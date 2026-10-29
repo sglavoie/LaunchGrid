@@ -36,7 +36,7 @@ enum Launcher {
     /// - Parameter activates: false opens it behind the grid, which stays up to open more.
     @MainActor
     static func launch(_ app: AppRef, activates: Bool = true, knownPaths: Set<String> = [],
-                       otherTilePaths: Set<String> = []) async throws
+                       excludedPaths: Set<String> = [], otherTilePaths: Set<String> = []) async throws
         -> (path: String, running: NSRunningApplication) {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = activates
@@ -59,7 +59,8 @@ enum Launcher {
            url.path != app.path {
             let candidate = url.path
             let reject = await Disk.run {
-                shouldRejectFallback(candidate, from: app.path, knownPaths: knownPaths, otherTilePaths: otherTilePaths)
+                shouldRejectFallback(candidate, from: app.path, knownPaths: knownPaths,
+                                     excludedPaths: excludedPaths, otherTilePaths: otherTilePaths)
             }
             if !reject {
                 return (candidate, try await NSWorkspace.shared.openApplication(at: url, configuration: config))
@@ -88,20 +89,23 @@ enum Launcher {
     }
 
     /// Launch Services can point at a quarantine copy or an app on an installer disk
-    /// image. External copies already in the scan or layout are intentional and can open.
+    /// image. A known local copy existed before this launch, so it isn't evidence that
+    /// the missing tile moved there. External copies need to be known to be intentional.
     nonisolated static func shouldRejectFallback(_ path: String, from originalPath: String? = nil,
-                                                 knownPaths: Set<String> = [], otherTilePaths: Set<String> = []) -> Bool {
+                                                 knownPaths: Set<String> = [], excludedPaths: Set<String> = [],
+                                                 otherTilePaths: Set<String> = []) -> Bool {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let resolved = url.resolvingSymlinksInPath()
         let spellings = [url, resolved]
         if isInTrash(path) || spellings.contains(where: { $0.pathComponents.contains("AppTranslocation") }) { return true }
         // Bundle IDs are shared by copies (Xcode and Xcode-beta). A missing tile must not
         // launch a copy already represented by another tile, including through a symlink.
-        if otherTilePaths.contains(where: { other in
+        func matches(_ other: String) -> Bool {
             let known = URL(fileURLWithPath: other).standardizedFileURL
             return spellings.contains(where: { $0.path == known.path })
                 || known.resolvingSymlinksInPath().path == resolved.path
-        }) { return true }
+        }
+        if otherTilePaths.contains(where: matches) || excludedPaths.contains(where: matches) { return true }
         // Launch Services does not tell a moved app from another copy with the same ID.
         // Accept a move with the same bundle filename; a different name needs a scan to
         // establish that it belongs to this tile.
@@ -111,12 +115,8 @@ enum Launcher {
             let components = parts.pathComponents
             return components.count > 2 && components[0] == "/" && components[1] == "Volumes"
         }
-        guard onExternalVolume else { return false }
-        return !knownPaths.contains { known in
-            let knownURL = URL(fileURLWithPath: known).standardizedFileURL
-            return spellings.contains(where: { $0.path == knownURL.path })
-                || knownURL.resolvingSymlinksInPath().path == resolved.path
-        }
+        let knownCopy = knownPaths.contains(where: matches)
+        return onExternalVolume ? !knownCopy : knownCopy
     }
 
     /// Whether the person cancelled the launch (e.g. in Gatekeeper's "downloaded from the

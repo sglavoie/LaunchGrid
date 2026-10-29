@@ -1390,6 +1390,25 @@ func installed(_ name: String) -> InstalledApp {
                                               otherTilePaths: ["/Users/x/Applications/Xcode-beta.app"]))
     }
 
+    @Test func aMissingTileDoesNotLaunchAnAlreadyKnownCopyWithTheSameName() {
+        let original = "/Applications/Editor.app"
+        let existingCopy = "/Users/x/Applications/Editor.app"
+        #expect(Launcher.shouldRejectFallback(existingCopy, from: original,
+                                              knownPaths: [original, existingCopy]))
+        #expect(!Launcher.shouldRejectFallback(existingCopy, from: original,
+                                               knownPaths: [original]),
+                "a copy first seen after the old path disappeared can be a move")
+    }
+
+    @Test func anExcludedCopyIsNeverALaunchFallback() {
+        let original = "/Applications/Editor.app"
+        let excluded = "/Users/x/Applications/Editor.app"
+        #expect(Launcher.shouldRejectFallback(excluded, from: original, excludedPaths: [excluded]))
+        let external = "/Volumes/Apps/Editor.app"
+        #expect(Launcher.shouldRejectFallback(external, from: original,
+                                              knownPaths: [external], excludedPaths: [external]))
+    }
+
     @Test(.tempDir) func anAliasOfAnotherTileIsNotALaunchFallback() throws {
         let target = TempDir.url.appendingPathComponent("Elsewhere/Editor.app")
         let alias = TempDir.url.appendingPathComponent("Applications/Editor.app")
