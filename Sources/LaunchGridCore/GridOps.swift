@@ -387,13 +387,39 @@ extension Grid {
     /// its place, unless the page after has room for it and no title it would end up under.
     public mutating func deletePage(_ index: Int) {
         guard pages.indices.contains(index) else { return }
-        let items = pages.remove(at: index).items
+        let removed = pages.remove(at: index)
+        let items = removed.items
+        let target = max(0, index - 1)
+        let start = index == 0 ? 0 : pages[target].items.count
+        defer {
+            // Apps temporarily absent during an update move with the page's visible
+            // contents. Otherwise their deleted page ID sends them to the first free
+            // slot anywhere in the grid when they return.
+            let waiting = Set(recentlyPruned.flatMap { [$0.app.id] + ($0.folderID.map { [$0] } ?? []) })
+            for k in recentlyPruned.indices where recentlyPruned[k].pageID == removed.id {
+                let slot = min(max(0, Self.slot(after: recentlyPruned[k].before,
+                    fallback: recentlyPruned[k].index, in: items.map(\.id))), items.count)
+                let absolute = start + slot
+                let page = min(target + absolute / capacity, pages.count - 1)
+                let at = min(absolute - (page - target) * capacity, pages[page].items.count)
+                recentlyPruned[k].pageID = pages[page].id
+                recentlyPruned[k].index = at
+                let prefix = pages[page].items.prefix(at).map(\.id)
+                let neighbours = (recentlyPruned[k].before ?? []).filter {
+                    prefix.contains($0) || waiting.contains($0)
+                }
+                recentlyPruned[k].before = prefix.filter { !neighbours.contains($0) } + neighbours
+                recentlyPruned[k].pageEmptied = false
+                recentlyPruned[k].pageIndex = nil
+                recentlyPruned[k].pageTitle = nil
+                recentlyPruned[k].pageBefore = nil
+            }
+        }
         if pages.isEmpty {
             pages = [Page(items: items)]
             spill(from: 0)
             return
         }
-        let target = max(0, index - 1)
         if index == 0 {
             pages[0].items.insert(contentsOf: items, at: 0)
         } else {

@@ -9,6 +9,58 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
 }
 
 @Suite struct ReconcilerTests {
+    @Test(arguments: (0...2).flatMap { page in [3, 6].map { (page, $0) } }, 0...2)
+    func deletingAPageKeepsUpdatingAppsWithItsContents(configuration: (Int, Int), missingIndex: Int) {
+        let (deletedPage, columns) = configuration
+        let source = [installed("A"), installed("B"), installed("C")]
+        let refs = source.map { $0.makeRef() }
+        let other = [installed("Other0"), installed("Other1")]
+        var pages = other.map { Page(items: [.app($0.makeRef())]) }
+        let deleted = Page(title: "Deleted", items: refs.map(GridItem.app))
+        pages.insert(deleted, at: deletedPage)
+        var g = Grid(rows: 1, columns: columns, pages: pages)
+        var expected = g
+        expected.deletePage(deletedPage)
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let missing = source[missingIndex]
+        _ = Reconciler.reconcile(&g, installed: source.filter { $0 != missing } + other, autoAdd: false,
+                                pathExists: { $0 != missing.path }, now: now)
+
+        g.deletePage(deletedPage)
+        _ = Reconciler.reconcile(&g, installed: source + other, autoAdd: false, now: now + 5)
+
+        #expect(g.pages.map(\.items) == expected.pages.map(\.items))
+        #expect(!g.pages.contains { $0.id == deleted.id })
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
+    @Test(arguments: [false, true], [3, 6].flatMap { columns in (0...2).map { (columns, $0) } })
+    func deletingAPageKeepsSeveralUpdatingAppsInOrder(returnLastFirst: Bool, configuration: (Int, Int)) {
+        let (columns, visibleIndex) = configuration
+        let source = [installed("A"), installed("B"), installed("C")]
+        let refs = source.map { $0.makeRef() }
+        let other = [installed("Other0"), installed("Other1")]
+        var g = Grid(rows: 1, columns: columns, pages: [
+            Page(items: [.app(other[0].makeRef())]),
+            Page(items: [.app(other[1].makeRef())]),
+            Page(title: "Deleted", items: refs.map(GridItem.app)),
+        ])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let visible = source[visibleIndex]
+        let missing = source.filter { $0 != visible }
+        _ = Reconciler.reconcile(&g, installed: [visible] + other, autoAdd: false,
+                                pathExists: { $0 == visible.path || other.map(\.path).contains($0) }, now: now)
+        g.deletePage(2)
+        let first = missing[returnLastFirst ? 1 : 0]
+        _ = Reconciler.reconcile(&g, installed: [first, visible] + other, autoAdd: false,
+                                pathExists: { $0 == first.path || $0 == visible.path || other.map(\.path).contains($0) }, now: now + 5)
+        _ = Reconciler.reconcile(&g, installed: source + other, autoAdd: false, now: now + 10)
+
+        #expect(g.pages[0].items.map(\.title) == ["Other0"])
+        #expect(g.allApps.filter { refs.map(\.id).contains($0.id) }.map(\.id) == refs.map(\.id))
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
     @Test func aMissingExcludedCopyDoesNotExcludeAnExistingCaseVariant() {
         let gone = installed("Editor", id: "com.test.editor")
         let kept = installed("editor", id: gone.bundleID)
