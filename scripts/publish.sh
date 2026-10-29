@@ -2,18 +2,17 @@
 # Publishes the build from release.sh: creates the GitHub release vVERSION at the commit it was
 # built from, with build/release/LaunchGrid.zip, then points the Homebrew cask at it.
 # Usage: scripts/publish.sh [release notes]
-# TAP_DIR is a clone of github.com/sglavoie/homebrew-tap (default ../homebrew-tap).
+# TAP_DIR optionally selects a clone of github.com/sglavoie/homebrew-tap.
 set -eu
 cd "$(dirname "$0")/.."
 OUT_DIR="build/release"
 APP="$OUT_DIR/LaunchGrid.app"
 ZIP="$OUT_DIR/LaunchGrid.zip"
-TAP_DIR="${TAP_DIR:-../homebrew-tap}"
-CASK="$TAP_DIR/Casks/launchgrid.rb"
 
 if [ ! -f "$ZIP" ] || [ ! -f "$OUT_DIR/COMMIT" ]; then echo "No release build; run: just release" >&2; exit 1; fi
 xcrun stapler validate "$APP" >/dev/null || { echo "$APP has no notarisation ticket" >&2; exit 1; }
-[ -f "$CASK" ] || { echo "No cask at $CASK; set TAP_DIR to your homebrew-tap clone" >&2; exit 1; }
+# shellcheck source=scripts/homebrew-tap.sh
+. scripts/homebrew-tap.sh
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 COMMIT="$(cat "$OUT_DIR/COMMIT")"

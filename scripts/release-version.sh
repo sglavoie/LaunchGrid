@@ -24,11 +24,8 @@ if ! git merge-base --is-ancestor origin/main HEAD; then
     echo 'main is behind or has diverged from origin/main; reconcile it before releasing.' >&2
     exit 1
 fi
-TAP_DIR="${TAP_DIR:-../homebrew-tap}"
-if [ ! -f "$TAP_DIR/Casks/launchgrid.rb" ]; then
-    echo "No cask at $TAP_DIR/Casks/launchgrid.rb; set TAP_DIR to your homebrew-tap clone." >&2
-    exit 1
-fi
+# shellcheck source=scripts/homebrew-tap.sh
+. scripts/homebrew-tap.sh
 if [ -n "$(git -C "$TAP_DIR" status --porcelain)" ]; then
     echo "Commit or stash changes in $TAP_DIR before releasing (or use just publish to retry a cask update)." >&2
     exit 1

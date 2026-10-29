@@ -19,6 +19,7 @@ export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 export GIT_AUTHOR_NAME='Release Test' GIT_AUTHOR_EMAIL='release@example.invalid'
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 export TAP_DIR="$ROOT/tap" TRACE="$ROOT/trace"
+export MOCK_TAP_SOURCE="$TAP_DIR"
 mkdir -p "$ROOT/bin" "$TAP_DIR/Casks"
 git init -q -b main "$TAP_DIR"
 echo 'cask "launchgrid"' > "$TAP_DIR/Casks/launchgrid.rb"
@@ -29,6 +30,10 @@ cat > "$ROOT/bin/gh" <<'EOF'
 set -eu
 case "$1 $2" in
     'auth status') exit 0 ;;
+    'repo clone')
+        [ "$3" = sglavoie/homebrew-tap ]
+        echo tap-clone >> "$TRACE"
+        git clone -q "$MOCK_TAP_SOURCE" "$4" ;;
     'run list')
         echo 'ci-list' >> "$TRACE"
         case "$*" in
@@ -59,7 +64,8 @@ setup() {
     git init -q -b main "$CASE_DIR"
     cd "$CASE_DIR"
     mkdir scripts
-    cp "$SOURCE_DIR/scripts/release-version.sh" "$SOURCE_DIR/scripts/release-checks.sh" scripts/
+    cp "$SOURCE_DIR/scripts/release-version.sh" "$SOURCE_DIR/scripts/release-checks.sh" \
+        "$SOURCE_DIR/scripts/homebrew-tap.sh" scripts/
     printf '#!/bin/sh\nVERSION="1.2.3"\n' > scripts/bundle.sh
     chmod +x scripts/bundle.sh
     echo build/ > .gitignore
@@ -78,6 +84,9 @@ EOF
 #!/bin/sh
 set -eu
 echo publish >> "$TRACE"
+# shellcheck source=scripts/homebrew-tap.sh
+. scripts/homebrew-tap.sh
+printf '%s' "$TAP_DIR" > build/tap-dir
 printf '%s' "$1" > build/notes
 exit "${MOCK_PUBLISH_FAIL:-0}"
 EOF
@@ -179,4 +188,30 @@ setup build-only
 scripts/release-version.sh
 [ "$(cat "$TRACE")" = build ]
 [ "$(git rev-parse HEAD)" = "$INITIAL" ]
+
+setup tap-prefixed
+git clone -q "$MOCK_TAP_SOURCE" "$ROOT/sglavoie_homebrew-tap"
+(unset TAP_DIR; scripts/release-version.sh patch > "$ROOT/output.log" 2>&1)
+[ "$(cat build/tap-dir)" = ../sglavoie_homebrew-tap ]
+if grep -qx tap-clone "$TRACE"; then exit 1; fi
+
+setup tap-override
+scripts/release-version.sh patch > "$ROOT/output.log" 2>&1
+[ "$(cat build/tap-dir)" = "$TAP_DIR" ]
+
+setup tap-invalid
+(TAP_DIR="$ROOT/missing" expect_failure patch)
+[ ! -e "$ROOT/missing" ]
+[ "$(git rev-parse HEAD)" = "$INITIAL" ]
+
+setup tap-clone
+rm -rf "$ROOT/sglavoie_homebrew-tap"
+(unset TAP_DIR; scripts/release-version.sh patch > "$ROOT/output.log" 2>&1)
+[ "$(cat build/tap-dir)" = ../homebrew-tap ]
+[ "$(grep -c '^tap-clone$' "$TRACE")" = 1 ]
+
+setup tap-existing
+(unset TAP_DIR; scripts/release-version.sh patch > "$ROOT/output.log" 2>&1)
+[ "$(cat build/tap-dir)" = ../homebrew-tap ]
+if grep -qx tap-clone "$TRACE"; then exit 1; fi
 echo 'Release orchestration passed: bumps, guards, CI, retries and build-only compatibility.'
