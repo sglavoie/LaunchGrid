@@ -224,9 +224,12 @@ final class AppState {
                             String(localized: "Your saved layout could not be read, so LaunchGrid restored an earlier save. Changes from the last few minutes may be missing; the unreadable file was kept as \(backup.lastPathComponent)."),
                             backup)
                     } else {
+                        let backupUnreadable = !newer && FileManager.default.fileExists(atPath: store.backupURL.path)
                         let message = newer
                             ? String(localized: "Your saved layout was made by a newer version of LaunchGrid. It was kept as \(backup.lastPathComponent).")
-                            : String(localized: "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent).")
+                            : backupUnreadable
+                                ? String(localized: "Your saved layout could not be read and was kept as \(backup.lastPathComponent). Its previous-save backup also could not be read completely and was kept as \(store.backupURL.lastPathComponent).")
+                                : String(localized: "Your saved layout could not be read, so it was set aside as \(backup.lastPathComponent).")
                         loadProblem = (message, backup)
                     }
                 } catch let moveError {

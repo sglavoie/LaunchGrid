@@ -541,6 +541,22 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)
     }
 
+    @Test func partlyReadableBackupIsNotSilentlyRestored() throws {
+        let dir = TempDir.url
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        try Data("not json".utf8).write(to: store.url)
+        let backup = #"{"pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app"}}, {"type": "app", "app": {"name": "Missing path"}}]}]}"#
+        try Data(backup.utf8).write(to: store.backupURL)
+
+        let state = AppState(prefs: testPreferences(), store: store)
+        #expect(!state.hasGridFile)
+        #expect(state.recoveryNotice == nil)
+        #expect(state.loadProblem?.message.contains("previous-save backup") == true)
+        #expect(try String(contentsOf: store.backupURL, encoding: .utf8) == backup)
+        #expect(throws: GridFileError.self) { try store.loadBackup() }
+    }
+
     @Test(arguments: [
         #"{"version": 1, "pages": null}"#,
         #"{"version": 1, "pages": [{"items": null}]}"#,

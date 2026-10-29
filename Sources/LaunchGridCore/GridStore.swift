@@ -44,7 +44,13 @@ public struct GridStore: Sendable {
     }
 
     public func loadBackup() throws -> Grid {
-        try GridStore.decode(Data(contentsOf: backupURL))
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(contentsOf: backupURL))
+        // Recovery must not silently promote a partly readable backup to the new layout.
+        // Leave that file intact for the user to inspect or load explicitly.
+        guard skipped == 0 else {
+            throw GridFileError.invalid("the previous-save backup has \(skipped) unreadable entries")
+        }
+        return grid
     }
 
     /// How many daily copies of the backup are kept.

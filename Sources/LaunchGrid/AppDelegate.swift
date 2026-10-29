@@ -949,11 +949,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         overlay.hide(deactivate: false)
         NSApp.activate()
         let panel = NSOpenPanel()
-        // Layouts, plus SQLite databases for the importer: `.agrid` files and copies of a
-        // Launchpad or AppGrid database. Their live, extension-less `db` files are imported
-        // from the Import menu instead.
+        // Layouts and previous-save `.bak` files, plus SQLite databases for the importer:
+        // `.agrid` files and copies of a Launchpad or AppGrid database. Their live,
+        // extension-less `db` files are imported from the Import menu instead.
         panel.allowedContentTypes = [.launchGridLayout, .json]
-            + ["agrid", "db", "sqlite", "sqlite3"].compactMap { UTType(filenameExtension: $0) }
+            + ["bak", "agrid", "db", "sqlite", "sqlite3"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         openLayout(url, done: done)
