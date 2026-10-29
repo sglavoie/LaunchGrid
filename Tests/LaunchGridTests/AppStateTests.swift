@@ -61,6 +61,28 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct PreferencesTests {
+    @Test(arguments: [-1, 65_536, Int(UInt32.max), Int.max])
+    func outOfRangeShortcutKeyCodesFallBackToSpace(code: Int) {
+        let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
+        defaults.set(code, forKey: "hotkeyKeyCode")
+
+        #expect(Preferences(defaults: defaults).hotkeyKeyCode == UInt32(kVK_Space))
+    }
+
+    @Test(arguments: [-1, 65_536, Int(UInt32.max), Int.max])
+    func outOfRangeShortcutKeyCodesHaveNoTranslatedCharacter(code: Int) {
+        #expect(KeyCombo.characterName(code) == nil)
+        #expect(KeyCombo.keyName(code) == String(localized: "Key \(code)"))
+    }
+
+    @Test(arguments: [kVK_ANSI_A, kVK_Space, kVK_F20, kVK_ANSI_KeypadEnter])
+    func validShortcutKeyCodesAreKept(code: Int) {
+        let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
+        defaults.set(code, forKey: "hotkeyKeyCode")
+
+        #expect(Preferences(defaults: defaults).hotkeyKeyCode == UInt32(code))
+    }
+
     @Test func invalidAppearanceDefaultsAreSafeToDisplay() {
         let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
         defaults.set(Double.nan, forKey: "blurRadius")

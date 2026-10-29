@@ -479,7 +479,8 @@ enum KeyCombo {
 
     /// The character the key produces on the current keyboard layout.
     static func characterName(_ code: Int) -> String? {
-        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+        guard let keyCode = UInt16(exactly: code),
+              let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let ptr = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
         let data = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
         var dead: UInt32 = 0
@@ -487,7 +488,7 @@ enum KeyCombo {
         var length = 0
         let status = data.withUnsafeBytes { raw -> OSStatus in
             guard let layout = raw.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return -1 }
-            return UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+            return UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
                                   OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, chars.count, &length, &chars)
         }
         guard status == noErr, length > 0 else { return nil }

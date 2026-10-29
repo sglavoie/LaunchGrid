@@ -108,8 +108,9 @@ final class Preferences {
             "showLabels": true,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
-        // A hand-edited value out of range (`defaults write … -int -1`) falls back to ⌥Space.
-        hotkeyKeyCode = UInt32(exactly: d.integer(forKey: "hotkeyKeyCode")) ?? UInt32(kVK_Space)
+        // Keyboard translation takes a 16-bit key code. A hand-edited value outside that
+        // range must not reach the shortcut label's narrowing conversion.
+        hotkeyKeyCode = UInt16(exactly: d.integer(forKey: "hotkeyKeyCode")).map(UInt32.init) ?? UInt32(kVK_Space)
         hotkeyModifiers = UInt32(exactly: d.integer(forKey: "hotkeyModifiers")) ?? UInt32(optionKey)
         hotkeyEnabled = d.bool(forKey: "hotkeyEnabled")
         hotkeyWarningDismissed = d.string(forKey: "hotkeyWarningDismissed")
