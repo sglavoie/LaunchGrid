@@ -1440,9 +1440,25 @@ final class AppState {
         goToPage(p - 1)
     }
 
+    /// A menu can outlive its page, or an auto-add that filled it. Only delete the empty
+    /// page the menu offered; a different page must not inherit that action.
+    func deleteEmptyPage(_ pageID: UUID) {
+        guard grid.pages.count > 1, let page = grid.pages.firstIndex(where: { $0.id == pageID }),
+              grid.pages[page].items.isEmpty else { return }
+        goToPage(page)
+        deleteCurrentPage()
+    }
+
     func sortCurrentPage() {
+        guard grid.pages.indices.contains(currentPage) else { return }
+        sortPage(grid.pages[currentPage].id)
+    }
+
+    /// The page named by an open menu, even if a scan changed its index meanwhile.
+    func sortPage(_ pageID: UUID) {
+        guard let p = grid.pages.firstIndex(where: { $0.id == pageID }) else { return }
         bringPageForward()
-        let p = currentPage
+        goToPage(p)
         apply { $0.sortPage(p, folders: prefs.folderPlacement) }
     }
 
@@ -1473,8 +1489,13 @@ final class AppState {
 
     func beginPageTitleEdit(_ page: Int) {
         guard grid.pages.indices.contains(page) else { return }
+        beginPageTitleEdit(grid.pages[page].id)
+    }
+
+    func beginPageTitleEdit(_ pageID: UUID) {
+        guard let page = grid.pages.firstIndex(where: { $0.id == pageID }) else { return }
         bringPageForward()
-        textEdit = TextEditRequest(target: .pageTitle(grid.pages[page].id), title: String(localized: "Page Title"), text: grid.pages[page].title ?? "")
+        textEdit = TextEditRequest(target: .pageTitle(pageID), title: String(localized: "Page Title"), text: grid.pages[page].title ?? "")
     }
 
     func commitTextEdit(_ text: String) {

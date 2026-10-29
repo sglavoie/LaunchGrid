@@ -1195,6 +1195,7 @@ struct MenuEntry {
     /// The page menu: the ⋯ button's, and a right-click on the background.
     @MainActor
     static func page(state: AppState) -> [MenuEntry] {
+        let pageID = state.grid.pages[safe: state.currentPage]?.id
         var entries: [MenuEntry] = [
             .button(state.editing ? String(localized: "Done Editing") : String(localized: "Edit Layout")) { state.editing.toggle() },
             .divider,
@@ -1202,13 +1203,13 @@ struct MenuEntry {
             .button(String(localized: "Redo"), enabled: state.canRedo) { state.redo() },
             .divider,
             .button(String(localized: "New Page")) { state.newPage() },
-            .button(String(localized: "Edit Page Title…")) { state.beginPageTitleEdit(state.currentPage) },
+            .button(String(localized: "Edit Page Title…")) { if let pageID { state.beginPageTitleEdit(pageID) } },
         ]
         if state.currentItems.isEmpty && state.grid.pages.count > 1 {
-            entries.append(.button(String(localized: "Delete Empty Page")) { state.deleteCurrentPage() })
+            entries.append(.button(String(localized: "Delete Empty Page")) { if let pageID { state.deleteEmptyPage(pageID) } })
         }
         entries += [
-            .button(String(localized: "Sort This Page")) { state.sortCurrentPage() },
+            .button(String(localized: "Sort This Page")) { if let pageID { state.sortPage(pageID) } },
             .button(String(localized: "Sort Everything")) { state.sortEverything() },
             .divider,
             .button(String(localized: "Add Missing Apps…")) { state.onAddMissing() },

@@ -1200,6 +1200,45 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct PageActionTests {
+    @Test func anEmptyPageMenuDoesNotDeleteAPageFilledMeanwhile() throws {
+        let state = makeState(["A"])
+        state.newPage()
+        let menu = MenuEntry.page(state: state)
+        let entry = try #require(menu.first { $0.title == "Delete Empty Page" })
+        guard case .action(let delete) = entry.kind else {
+            Issue.record("expected Delete Empty Page action")
+            return
+        }
+        // Auto-add can fill the page while its context menu is still open.
+        state.apply { $0.appendAtEnd([.app(installed("B").makeRef())]) }
+        let before = state.grid
+
+        delete()
+
+        #expect(state.grid == before)
+    }
+
+    @Test(arguments: ["Delete Empty Page", "Sort This Page", "Edit Page Title…"])
+    func aStalePageMenuDoesNotActOnAnotherPage(title: String) throws {
+        let state = makeState(["C", "B", "A"])
+        state.newPage()
+        let page = state.grid.pages[state.currentPage].id
+        let menu = MenuEntry.page(state: state)
+        let entry = try #require(menu.first { $0.title == title })
+        guard case .action(let action) = entry.kind else {
+            Issue.record("expected page menu action")
+            return
+        }
+        // A scan can remove the original page while a menu still holds its actions.
+        state.apply { $0.pages.removeAll { $0.id == page } }
+        let before = state.grid
+
+        action()
+
+        #expect(state.grid == before)
+        #expect(state.textEdit == nil)
+    }
+
     @Test func movingTheLastAppOutOfAFolderToItsOwnPageCanBeUndone() {
         let state = makeState()
         let x = installed("X").makeRef()
