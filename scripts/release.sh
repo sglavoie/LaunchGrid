@@ -82,6 +82,7 @@ rm -f "$ZIP"
 # Before zipping: a zip is only left behind for publish.sh once Gatekeeper accepts the app.
 spctl --assess --type execute --verbose "$APP"
 (cd "$OUT_DIR" && ditto -c -k --keepParent LaunchGrid.app LaunchGrid.zip)
+shasum -a 256 "$ZIP" | cut -d ' ' -f 1 > "$OUT_DIR/SHA256"
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 echo "Built $ZIP (version $VERSION, commit $(cut -c1-7 "$OUT_DIR/COMMIT")); publish it with: just publish"

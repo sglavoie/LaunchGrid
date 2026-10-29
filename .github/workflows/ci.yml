@@ -116,3 +116,5 @@ jobs:
       - name: Check the shell scripts
         # Preinstalled on GitHub's Ubuntu runners.
         run: shellcheck scripts/*.sh
+      - name: Test release orchestration
+        run: scripts/test-release-version.sh

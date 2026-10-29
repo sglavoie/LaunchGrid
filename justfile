@@ -44,9 +44,9 @@ install *args:
 uninstall:
     INSTALL_DIR="{{install_dir}}" scripts/uninstall.sh
 
-# Build the signed, notarised, universal build/release/LaunchGrid.zip
-release:
-    scripts/release.sh
+# Build only, or bump patch/minor/major, push, wait for CI, release and update Homebrew (resume retries without bumping)
+release bump="" *notes:
+    scripts/release-version.sh {{quote(bump)}} {{quote(notes)}}
 
 # Build the sandboxed, signed build/app-store/LaunchGrid.pkg for App Store Connect (--upload sends it)
 app-store *args:
@@ -58,6 +58,7 @@ publish *notes:
 
 # Run CI's checks: build, test and bundle both variants, verify the bundles, shellcheck (leaves the App Store one in build/)
 ci: build test test-app-store
+    scripts/test-release-version.sh
     scripts/test-install-swap.sh
     env -u APP_STORE -u SANDBOX -u ENTITLEMENTS UNIVERSAL=1 scripts/bundle.sh release
     plutil -lint {{app}}/Contents/Info.plist scripts/PrivacyInfo.xcprivacy scripts/LaunchGrid.entitlements
