@@ -116,7 +116,15 @@ final class AppState {
             }
             // However the search ended (a page jump, a reveal, hiding), the folder it started
             // in is no longer one to go back to.
-            if query.isEmpty { folderBeforeSearch = nil }
+            if query.isEmpty {
+                // A reveal or page jump can end a search without reopening its folder.
+                // As when closing it directly, don't leave its apps selected out of sight.
+                if let folder = folderBeforeSearch, openFolderID != folder.id,
+                   let apps = grid.folder(folder.id)?.apps {
+                    selection.subtract(apps.map(\.id))
+                }
+                folderBeforeSearch = nil
+            }
         }
     }
     /// Caret in the search, in characters. Setting `query` puts it at the end.
@@ -1051,13 +1059,14 @@ final class AppState {
     /// it started in.
     func endSearch() {
         let folder = folderBeforeSearch
+        if let folder, grid.folder(folder.id) != nil {
+            // Reopen before clearing the query, so its visible selection stays selected.
+            // A rescan meanwhile can have moved it to another page number.
+            openFolder(folder.id)
+            let pages = FolderLayout.pageCount(apps: openFolder?.apps.count ?? 0, grid: grid)
+            folderPage = min(folder.page, pages - 1)
+        }
         query = ""
-        guard let folder, let page = grid.locate(folder.id)?.page else { return }
-        // A rescan meanwhile can have moved it to another page number.
-        goToPage(page)
-        openFolder(folder.id)
-        let pages = FolderLayout.pageCount(apps: openFolder?.apps.count ?? 0, grid: grid)
-        folderPage = min(folder.page, pages - 1)
     }
 
     var currentItems: [GridItem] {
@@ -1214,6 +1223,9 @@ final class AppState {
     }
 
     func openFolder(_ id: UUID) {
+        guard grid.folder(id) != nil, let page = grid.locate(id)?.page else { return }
+        // An open menu can outlive a scan that moved the folder to another page.
+        goToPage(page)
         // Animated by the folder layer (GridRootView), not `withAnimation`: see there.
         folderPage = 0
         focusIndex = nil

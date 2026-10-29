@@ -909,6 +909,71 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["D"], "out of sight, ⌫ or Group would act on it unseen")
     }
 
+    @Test(arguments: [false, true])
+    func leavingAFolderThroughSearchDropsItsHiddenSelection(revealResult: Bool) throws {
+        let state = makeState(["A", "B", "C", "D"])
+        let id = ids(state)
+        state.apply { _ = $0.group([id["A"]!, id["B"]!], name: "F") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        state.toggleSelection(id["D"]!)
+        state.openFolder(folder.id)
+        state.toggleSelection(id["A"]!)
+        state.folderBeforeSearch = (folder.id, 0)
+        state.openFolderID = nil
+        state.query = "C"
+
+        if revealResult {
+            state.reveal(try #require(state.grid.item(id["C"]!)?.app))
+        } else {
+            state.query = "" // As with a direct page jump.
+        }
+
+        #expect(state.openFolder == nil)
+        #expect(selected(state) == ["D"], "leaving search must drop selections inside the folder left behind")
+        state.remove(state.orderedSelection)
+        #expect(state.grid.item(id["A"]!) != nil, "Delete must not remove the hidden folder selection")
+    }
+
+    @Test func endingSearchBackInItsFolderKeepsTheSelection() throws {
+        let state = makeState(["A", "B", "C"])
+        let id = ids(state)
+        state.apply { _ = $0.group([id["A"]!, id["B"]!], name: "F") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        state.openFolder(folder.id)
+        state.toggleSelection(id["A"]!)
+        state.folderBeforeSearch = (folder.id, 0)
+        state.openFolderID = nil
+        state.query = "C"
+
+        state.endSearch()
+
+        #expect(state.openFolderID == folder.id)
+        #expect(selected(state) == ["A"])
+    }
+
+    @Test func openingAFolderFromAnOldMenuFollowsItsCurrentPage() throws {
+        let state = makeState(["A", "B"])
+        state.apply { _ = $0.group([$0.allApps[0].id], name: "F") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        let menu = MenuEntry.item(.folder(folder), state: state)
+        state.apply { g in
+            let destination = g.addPage()
+            g.move([folder.id], toPage: destination, at: 0)
+        }
+        #expect(state.currentPage == 0)
+        guard case .action(let open) = menu[0].kind else {
+            Issue.record("expected Open Folder menu action")
+            return
+        }
+
+        open()
+
+        #expect(state.currentPage == 1)
+        #expect(state.openFolderID == folder.id)
+        state.closeFolder(restoringFocus: true)
+        #expect(state.focusIndex == 0)
+    }
+
     @Test func aSelectionOnOtherPagesIsCounted() {
         let state = makeState(["A", "B", "C"])
         state.apply { $0.pages = [Page(items: Array($0.pages[0].items.prefix(2))), Page(items: Array($0.pages[0].items.suffix(1)))] }
