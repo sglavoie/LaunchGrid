@@ -317,6 +317,9 @@ final class AppState {
     func replaceGrid(_ new: Grid) {
         var new = new
         new.hasCreatedLayout = true
+        // A loaded file can reuse the same IDs. Close against the old layout so its
+        // folder selection cannot survive out of sight in the replacement.
+        if openFolderID != nil { closeFolder() }
         if !hasGridFile {
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
@@ -382,7 +385,7 @@ final class AppState {
         let target = back.contains(currentPage) ? nil
             : back.first ?? (changed.contains(currentPage) ? nil : changed.first)
         guard let page = target else { return }
-        if openFolderID != nil { openFolderID = nil }
+        if openFolderID != nil { closeFolder() }
         goToPage(page)
     }
 
@@ -449,7 +452,15 @@ final class AppState {
                 folderPage = focusIndex / FolderLayout.perPage(grid)
             }
         }
-        selection = selection.filter { grid.locate($0) != nil }
+        selection = selection.filter { id in
+            guard let loc = grid.locate(id) else { return false }
+            // Undo or loading can put a selected top-level app inside a closed folder.
+            // Keep folder selections only where they can be seen, or while a search
+            // temporarily hides that folder. A drag manages its selection after the drop.
+            guard !drag.active, loc.folderIndex != nil else { return true }
+            let folderID = grid.pages[loc.page].items[loc.index].id
+            return folderID == openFolderID || (!query.isEmpty && folderID == folderBeforeSearch?.id)
+        }
     }
 
     // MARK: Persistence

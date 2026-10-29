@@ -110,6 +110,48 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct UndoTests {
+    @Test(arguments: [false, true])
+    func historyDropsSelectionsMovedIntoAClosedFolder(redo: Bool) {
+        let state = makeState(["A", "B", "C"])
+        let apps = state.grid.allApps
+        state.apply { _ = $0.group([apps[0].id, apps[1].id], name: "Work") }
+        if redo {
+            state.undo()
+        } else {
+            let folder = state.grid.pages[0].items[0].id
+            state.apply { $0.ungroup(folder) }
+        }
+        state.selection = [apps[0].id, apps[2].id]
+
+        if redo { state.redo() } else { state.undo() }
+
+        #expect(state.openFolderID == nil)
+        #expect(state.selection == [apps[2].id])
+        state.remove(state.orderedSelection)
+        #expect(state.grid.item(apps[0].id) != nil)
+    }
+
+    @Test(arguments: [false, true])
+    func historyPageJumpsDropSelectionsInsideTheFolderTheyClose(redo: Bool) {
+        let state = makeState()
+        let app = installed("A").makeRef()
+        let folder = Folder(name: "Work", apps: [app])
+        let other = installed("B").makeRef()
+        state.replaceGrid(Grid(pages: [Page(items: [.folder(folder)]), Page(items: [.app(other)])]))
+        state.apply { $0.rename(other.id, to: "Renamed") }
+        if redo { state.undo() }
+        state.openFolder(folder.id)
+        state.selection = [app.id, other.id]
+
+        if redo { state.redo() } else { state.undo() }
+
+        #expect(state.currentPage == 1)
+        #expect(state.openFolderID == nil)
+        #expect(state.selection == [other.id])
+        state.remove(state.orderedSelection)
+        #expect(state.grid.item(app.id) != nil, "Delete must not remove an app selected inside the closed folder")
+    }
+
     @Test func undoingFolderRemovalRestoresItsTemporarilyMissingApps() {
         let state = makeState()
         state.prefs.autoAddApps = false
@@ -934,7 +976,8 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.item(id["A"]!) != nil, "Delete must not remove the hidden folder selection")
     }
 
-    @Test func endingSearchBackInItsFolderKeepsTheSelection() throws {
+    @Test(arguments: [false, true])
+    func endingSearchBackInItsFolderKeepsTheSelection(layoutChanged: Bool) throws {
         let state = makeState(["A", "B", "C"])
         let id = ids(state)
         state.apply { _ = $0.group([id["A"]!, id["B"]!], name: "F") }
@@ -944,6 +987,7 @@ func installed(_ name: String) -> InstalledApp {
         state.folderBeforeSearch = (folder.id, 0)
         state.openFolderID = nil
         state.query = "C"
+        if layoutChanged { state.apply { $0.rename(id["C"]!, to: "Changed") } }
 
         state.endSearch()
 
@@ -1777,6 +1821,27 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct ReplaceGridTests {
+    @Test(arguments: [false, true])
+    func loadingALayoutDropsSelectionsInsideTheFolderItCloses(unchanged: Bool) {
+        let state = makeState()
+        let app = installed("A").makeRef()
+        let folder = Folder(name: "Work", apps: [app])
+        let other = installed("B").makeRef()
+        let layout = Grid(pages: [Page(items: [.folder(folder), .app(other)])])
+        state.replaceGrid(layout)
+        state.openFolder(folder.id)
+        state.selection = [app.id, other.id]
+
+        var replacement = layout
+        if !unchanged { replacement.pages[0].title = "Imported" }
+        state.replaceGrid(replacement)
+
+        #expect(state.openFolderID == nil)
+        #expect(!state.selection.contains(app.id))
+        state.remove(state.orderedSelection)
+        #expect(state.grid.item(app.id) != nil)
+    }
+
     @Test(arguments: [false, true])
     func replacingALayoutClearsFocusFromTheFolderItCloses(unchanged: Bool) {
         let state = makeState()
