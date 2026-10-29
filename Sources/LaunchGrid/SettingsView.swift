@@ -356,10 +356,7 @@ struct AppearanceSettings: View {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            if let old = state.prefs.customImagePath { FileAccess.forget(old) }
-            FileAccess.remember(url)
-            state.prefs.customImagePath = url.path
-            picks += 1
+            if PickedFileAccess.replaceImage(with: url, prefs: state.prefs) { picks += 1 }
         }
     }
 
@@ -590,9 +587,7 @@ struct LibrarySettings: View {
                     panel.canChooseDirectories = true
                     panel.canChooseFiles = false
                     if panel.runModal() == .OK, let url = panel.url, !prefs.extraFolders.contains(url.path) {
-                        FileAccess.remember(url)
-                        prefs.extraFolders.append(url.path)
-                        actions.foldersChanged()
+                        if PickedFileAccess.addFolder(url, prefs: prefs) { actions.foldersChanged() }
                     }
                 }
                 // Folders inside the scan folders, or the standard ones, that couldn't be read.
@@ -727,7 +722,7 @@ struct AddMissingAppsView: View {
 
     /// Adds apps from anywhere on disk, along with those already ticked in the list.
     private func browse(adding picked: [InstalledApp]) {
-        let browsed = AppBrowser.pick()
+        let browsed = AppBrowser.pick(scannedPaths: Set(state.installed.map(\.path)))
         guard !browsed.isEmpty else { return }
         let apps = picked + browsed.filter { app in !picked.contains { $0.path == app.path } }
         state.addApps(apps)
@@ -739,7 +734,7 @@ struct AddMissingAppsView: View {
 @MainActor
 enum AppBrowser {
     /// The apps picked, remembered (in the sandbox) so access to them outlasts this run.
-    static func pick() -> [InstalledApp] {
+    static func pick(scannedPaths: Set<String> = []) -> [InstalledApp] {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.applicationBundle]
         panel.allowsMultipleSelection = true
@@ -747,8 +742,36 @@ enum AppBrowser {
         guard panel.runModal() == .OK else { return [] }
         let browsed = panel.urls.compactMap { AppScanner.read(appAt: $0) }
         // Apps outside the scan folders are read again at each scan.
-        for app in browsed { FileAccess.remember(URL(fileURLWithPath: app.path)) }
-        return browsed
+        return PickedFileAccess.appsWithLastingAccess(browsed, scannedPaths: scannedPaths)
+    }
+}
+
+/// Commits panel choices only when their sandbox access will survive this run. A bookmark
+/// made but not yet open is kept for folders and apps, so the next restore can retry it.
+@MainActor
+enum PickedFileAccess {
+    static func replaceImage(with url: URL, prefs: Preferences) -> Bool {
+        let old = prefs.customImagePath
+        guard FileAccess.remember(url) else {
+            // Keep showing the working image. An unopened new bookmark has no selected
+            // setting to retry for, so leave no unused bookmark behind either.
+            if old != url.path { FileAccess.forget(url.path) }
+            return false
+        }
+        if let old, old != url.path { FileAccess.forget(old) }
+        prefs.customImagePath = url.path
+        return true
+    }
+
+    static func addFolder(_ url: URL, prefs: Preferences) -> Bool {
+        guard !prefs.extraFolders.contains(url.path), FileAccess.rememberForSelection(url) else { return false }
+        prefs.extraFolders.append(url.path)
+        return true
+    }
+
+    static func appsWithLastingAccess(_ apps: [InstalledApp], scannedPaths: Set<String> = []) -> [InstalledApp] {
+        // An app already found by the scanner has lasting access through its scan root.
+        apps.filter { scannedPaths.contains($0.path) || FileAccess.rememberForSelection(URL(fileURLWithPath: $0.path)) }
     }
 }
 

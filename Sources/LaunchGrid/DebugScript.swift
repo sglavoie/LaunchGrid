@@ -192,7 +192,7 @@ enum DebugScript {
                 case "datafolder": state.showDataFolder() // as Settings › Library's button
                 case "browseapp":
                     // Browse for App… (Settings › Library › Add Missing Apps), adding what is picked.
-                    let picked = AppBrowser.pick()
+                    let picked = AppBrowser.pick(scannedPaths: Set(state.installed.map(\.path)))
                     state.addApps(picked)
                     print("browseapp: \(picked.map(\.path))")
                     fflush(stdout)
@@ -466,9 +466,9 @@ enum DebugScript {
                     panel.canChooseDirectories = true
                     panel.canChooseFiles = false
                     if panel.runModal() == .OK, let url = panel.url, !state.prefs.extraFolders.contains(url.path) {
-                        FileAccess.remember(url)
-                        state.prefs.extraFolders.append(url.path)
-                        delegate.libraryActions.foldersChanged()
+                        if PickedFileAccess.addFolder(url, prefs: state.prefs) {
+                            delegate.libraryActions.foldersChanged()
+                        }
                     }
                     print("folders: \(state.prefs.extraFolders)")
                     fflush(stdout)

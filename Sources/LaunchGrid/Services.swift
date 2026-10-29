@@ -35,7 +35,8 @@ enum Launcher {
     /// there. Returns the path that was actually launched, and the app running from it.
     /// - Parameter activates: false opens it behind the grid, which stays up to open more.
     @MainActor
-    static func launch(_ app: AppRef, activates: Bool = true, knownPaths: Set<String> = []) async throws
+    static func launch(_ app: AppRef, activates: Bool = true, knownPaths: Set<String> = [],
+                       otherTilePaths: Set<String> = []) async throws
         -> (path: String, running: NSRunningApplication) {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = activates
@@ -57,7 +58,9 @@ enum Launcher {
         if let id = app.bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
            url.path != app.path {
             let candidate = url.path
-            let reject = await Disk.run { shouldRejectFallback(candidate, knownPaths: knownPaths) }
+            let reject = await Disk.run {
+                shouldRejectFallback(candidate, from: app.path, knownPaths: knownPaths, otherTilePaths: otherTilePaths)
+            }
             if !reject {
                 return (candidate, try await NSWorkspace.shared.openApplication(at: url, configuration: config))
             }
@@ -86,11 +89,24 @@ enum Launcher {
 
     /// Launch Services can point at a quarantine copy or an app on an installer disk
     /// image. External copies already in the scan or layout are intentional and can open.
-    nonisolated static func shouldRejectFallback(_ path: String, knownPaths: Set<String> = []) -> Bool {
+    nonisolated static func shouldRejectFallback(_ path: String, from originalPath: String? = nil,
+                                                 knownPaths: Set<String> = [], otherTilePaths: Set<String> = []) -> Bool {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let resolved = url.resolvingSymlinksInPath()
         let spellings = [url, resolved]
         if isInTrash(path) || spellings.contains(where: { $0.pathComponents.contains("AppTranslocation") }) { return true }
+        // Bundle IDs are shared by copies (Xcode and Xcode-beta). A missing tile must not
+        // launch a copy already represented by another tile, including through a symlink.
+        if otherTilePaths.contains(where: { other in
+            let known = URL(fileURLWithPath: other).standardizedFileURL
+            return spellings.contains(where: { $0.path == known.path })
+                || known.resolvingSymlinksInPath().path == resolved.path
+        }) { return true }
+        // Launch Services does not tell a moved app from another copy with the same ID.
+        // Accept a move with the same bundle filename; a different name needs a scan to
+        // establish that it belongs to this tile.
+        if let originalPath,
+           URL(fileURLWithPath: originalPath).lastPathComponent != url.lastPathComponent { return true }
         let onExternalVolume = spellings.contains { parts in
             let components = parts.pathComponents
             return components.count > 2 && components[0] == "/" && components[1] == "Volumes"
@@ -924,6 +940,12 @@ enum FileAccess {
         }
         granted[url.path] = scoped
         return true
+    }
+
+    /// A newly picked folder or app may be kept when its bookmark was made but could not
+    /// be opened yet: the next restore retries it. A pick without a bookmark cannot last.
+    static func rememberForSelection(_ url: URL) -> Bool {
+        remember(url) || saved[url.path] != nil
     }
 
     static func forget(_ path: String) {

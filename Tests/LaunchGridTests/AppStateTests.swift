@@ -1376,7 +1376,27 @@ func installed(_ name: String) -> InstalledApp {
     @Test func aTileDoesNotTakeOverAnotherTilesCopy() {
         #expect(!AppState.followsLaunch(to: xcode.path, of: beta, in: grid(xcode, beta),
                                         isReachable: { _ in true }, pathExists: { _ in false }),
-                "Xcode-beta's tile opened Xcode: it must not become a second Xcode")
+                "a copy already represented by another tile must not take over this tile")
+    }
+
+    @Test func aMissingTileDoesNotLaunchAnotherCopy() {
+        #expect(Launcher.shouldRejectFallback(xcode.path, from: beta.path,
+                                              knownPaths: [xcode.path], otherTilePaths: [xcode.path]))
+        #expect(Launcher.shouldRejectFallback(xcode.path, from: beta.path),
+                "a different bundle filename may be another copy even when it has no tile")
+        #expect(!Launcher.shouldRejectFallback("/Users/x/Applications/Xcode-beta.app", from: beta.path),
+                "moving the same bundle to another folder still permits the fallback")
+        #expect(Launcher.shouldRejectFallback("/Users/x/Applications/Xcode-beta.app", from: beta.path,
+                                              otherTilePaths: ["/Users/x/Applications/Xcode-beta.app"]))
+    }
+
+    @Test(.tempDir) func anAliasOfAnotherTileIsNotALaunchFallback() throws {
+        let target = TempDir.url.appendingPathComponent("Elsewhere/Editor.app")
+        let alias = TempDir.url.appendingPathComponent("Applications/Editor.app")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: alias.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        #expect(Launcher.shouldRejectFallback(target.path, from: "/Old/Editor.app", otherTilePaths: [alias.path]))
     }
 
     @Test func anUnreachableOrStillPresentAppIsNotRewritten() {
@@ -2259,6 +2279,7 @@ func installed(_ name: String) -> InstalledApp {
 @MainActor final class FakeSandbox {
     var moves: [String: String] = [:]
     var gone: Set<String> = []
+    var cannotBookmark: Set<String> = []
     private(set) var closed: [String] = []
     /// Bookmarks resolved and started, by the path each was made for.
     private(set) var opened: [String] = []
@@ -2268,7 +2289,7 @@ func installed(_ name: String) -> InstalledApp {
         FileAccess.backend = FileAccess.Backend(
             isActive: { true },
             defaults: { defaults },
-            bookmark: { Data($0.path.utf8) },
+            bookmark: { [self] url in cannotBookmark.contains(url.path) ? nil : Data(url.path.utf8) },
             open: { [self] data in
                 let path = String(decoding: data, as: UTF8.self)
                 opened.append(path)
@@ -2288,6 +2309,58 @@ func installed(_ name: String) -> InstalledApp {
 // Serialized: `FileAccess` is one for the whole process.
 @MainActor @Suite(.tempDir, .serialized) struct SandboxFileAccessTests {
     let sandbox = FakeSandbox()
+
+    @Test func aFailedImagePickKeepsTheWorkingImage() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let old = URL(fileURLWithPath: "/Users/x/old.jpg")
+        let new = URL(fileURLWithPath: "/Users/x/new.jpg")
+        #expect(PickedFileAccess.replaceImage(with: old, prefs: prefs))
+
+        sandbox.cannotBookmark.insert(new.path)
+        #expect(!PickedFileAccess.replaceImage(with: new, prefs: prefs))
+        #expect(prefs.customImagePath == old.path)
+        #expect(FileAccess.isGranted(old.path))
+        #expect(sandbox.saved[old.path] != nil && sandbox.saved[new.path] == nil)
+
+        sandbox.cannotBookmark.remove(new.path)
+        sandbox.gone.insert(new.path)
+        #expect(!PickedFileAccess.replaceImage(with: new, prefs: prefs))
+        #expect(prefs.customImagePath == old.path)
+        #expect(FileAccess.isGranted(old.path))
+        #expect(sandbox.saved[new.path] == nil, "an unselected pending bookmark is not kept")
+
+        sandbox.gone.remove(new.path)
+        #expect(PickedFileAccess.replaceImage(with: new, prefs: prefs))
+        #expect(prefs.customImagePath == new.path)
+        #expect(!FileAccess.isGranted(old.path) && sandbox.saved[old.path] == nil)
+    }
+
+    @Test func picksWithoutABookmarkAreNotAddedButPendingBookmarksCanRetry() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let failedFolder = URL(fileURLWithPath: "/Users/x/NoAccess")
+        let pendingFolder = URL(fileURLWithPath: "/Users/x/Pending")
+        sandbox.cannotBookmark.insert(failedFolder.path)
+        #expect(!PickedFileAccess.addFolder(failedFolder, prefs: prefs))
+        #expect(prefs.extraFolders.isEmpty)
+        sandbox.gone.insert(pendingFolder.path)
+        #expect(PickedFileAccess.addFolder(pendingFolder, prefs: prefs))
+        #expect(prefs.extraFolders == [pendingFolder.path])
+        #expect(sandbox.saved[pendingFolder.path] != nil)
+
+        let failedApp = InstalledApp(bundleID: "com.test.Failed", path: "/Users/x/Failed.app", name: "Failed")
+        let pendingApp = InstalledApp(bundleID: "com.test.Pending", path: "/Users/x/Pending.app", name: "Pending")
+        let scannedApp = InstalledApp(bundleID: "com.test.Scanned", path: "/Applications/Scanned.app", name: "Scanned")
+        sandbox.cannotBookmark.insert(failedApp.path)
+        sandbox.cannotBookmark.insert(scannedApp.path)
+        sandbox.gone.insert(pendingApp.path)
+        #expect(PickedFileAccess.appsWithLastingAccess([failedApp, pendingApp]) == [pendingApp])
+        #expect(PickedFileAccess.appsWithLastingAccess([scannedApp], scannedPaths: [scannedApp.path]) == [scannedApp])
+        #expect(sandbox.saved[failedApp.path] == nil && sandbox.saved[pendingApp.path] != nil)
+    }
 
     @Test func failedAppBookmarkReopenKeepsTileAndRetriesAfterAccessReturns() async throws {
         sandbox.install()

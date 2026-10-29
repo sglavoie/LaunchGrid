@@ -1062,10 +1062,12 @@ final class AppState {
         // A copy on an external volume counts as intentional if it was scanned or added
         // to the layout. An unknown copy may be on a mounted installer disk image.
         let knownPaths = Set(installed.map(\.path) + grid.allApps.map(\.path))
+        let otherTilePaths = Set(grid.allApps.filter { $0.id != app.id && $0.bundleID == app.bundleID }.map(\.path))
         if hides { onHideForLaunch() }
         Task {
             do {
-                let (path, running) = try await Launcher.launch(app, activates: hides, knownPaths: knownPaths)
+                let (path, running) = try await Launcher.launch(app, activates: hides,
+                                                                 knownPaths: knownPaths, otherTilePaths: otherTilePaths)
                 if !hides { onLaunchedBehind(running) }
                 // Off the main thread: a stalled volume mustn't hang the app.
                 let gone = path == app.path ? false
@@ -1089,8 +1091,8 @@ final class AppState {
     }
 
     /// Whether launching `app` through its bundle ID, which opened the copy at `launched`,
-    /// means the app moved there. Not when another tile already stands for that copy
-    /// (Xcode-beta's tile opened Xcode), when its own path is only out of reach (an unmounted
+    /// means the app moved there. Not when another tile already stands for that copy,
+    /// when its own path is only out of reach (an unmounted
     /// volume), or when its app is still there and merely failed to open.
     nonisolated static func followsLaunch(
         to launched: String, of app: AppRef, in grid: Grid,
