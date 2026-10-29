@@ -452,6 +452,11 @@ final class AppState {
                 folderPage = focusIndex / FolderLayout.perPage(grid)
             }
         }
+        pruneSelection()
+    }
+
+    /// Keep selections inside folders only while that folder is visible (or hidden by search).
+    private func pruneSelection() {
         selection = selection.filter { id in
             guard let loc = grid.locate(id) else { return false }
             // Undo or loading can put a selected top-level app inside a closed folder.
@@ -1570,6 +1575,10 @@ final class AppState {
 
     /// After a drop or a cancelled drag: applies a scan, or moved apps, that came in meanwhile.
     func dragFinished() {
+        // Closing the source folder during a drag keeps its selection until the drop.
+        // An unselected app can leave other selected apps behind in that now-hidden folder.
+        // Cancellation reopens it first, so those selections stay visible and are kept.
+        defer { pruneSelection() }
         installedBeforeDrag = nil
         if !movesAfterDrag.isEmpty {
             let moves = movesAfterDrag

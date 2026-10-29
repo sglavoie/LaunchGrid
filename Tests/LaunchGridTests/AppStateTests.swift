@@ -399,6 +399,37 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct DragTests {
+    @Test(arguments: [false, true])
+    func draggingAnUnselectedAppOutOfAFolderDoesNotLeaveHiddenSelections(cancelled: Bool) throws {
+        let state = makeState(["A", "B", "C"])
+        let apps = state.grid.allApps
+        state.apply { $0.group([apps[0].id, apps[1].id], name: "Work") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        state.openFolder(folder.id)
+        state.selection = [apps[0].id, apps[2].id]
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 100, y: 100, width: 500, height: 200)
+        state.drag.folderPanelFrame = CGRect(x: 80, y: 80, width: 540, height: 240)
+        let center = state.iconCenter(1, inFolder: true)
+        let start = CGPoint(x: 100 + center.x, y: 100 + center.y)
+        let release = CGPoint(x: 0, y: 400)
+
+        state.dragChanged(start: start, location: release)
+        #expect(state.drag.ids == [apps[1].id])
+        #expect(state.openFolderID == nil)
+        if cancelled {
+            state.cancelDrag()
+            #expect(state.openFolderID == folder.id)
+            #expect(state.selection == [apps[0].id, apps[2].id])
+        } else {
+            state.dragEnded(start: start, location: release, predicted: release)
+            #expect(state.grid.locate(apps[1].id)?.folderIndex == nil)
+            #expect(state.selection == [apps[2].id])
+            state.remove(state.orderedSelection)
+            #expect(state.grid.item(apps[0].id) != nil, "Delete must not remove an app inside the closed folder")
+        }
+    }
+
     @Test func aLateEndFromThePreviousGestureDoesNotDropTheNewDrag() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
