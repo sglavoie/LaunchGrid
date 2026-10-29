@@ -2279,6 +2279,7 @@ func installed(_ name: String) -> InstalledApp {
 @MainActor final class FakeSandbox {
     var moves: [String: String] = [:]
     var gone: Set<String> = []
+    var cannotOpenBookmarks: Set<String> = []
     var cannotBookmark: Set<String> = []
     private(set) var closed: [String] = []
     /// Bookmarks resolved and started, by the path each was made for.
@@ -2293,6 +2294,7 @@ func installed(_ name: String) -> InstalledApp {
             open: { [self] data in
                 let path = String(decoding: data, as: UTF8.self)
                 opened.append(path)
+                guard !cannotOpenBookmarks.contains(path) else { return nil }
                 let now = moves[path] ?? path
                 guard !gone.contains(now) else { return nil }
                 return (URL(fileURLWithPath: now), now != path)
@@ -2535,6 +2537,30 @@ func installed(_ name: String) -> InstalledApp {
         #expect(sandbox.saved.keys.sorted() == ["/Users/x/Apps/A.app"])
         #expect(sandbox.closed.dropFirst(closedBefore) == ["/Users/x/Apps/A.app"], "one access for it, not two")
         #expect(FileAccess.isGranted("/Users/x/Apps/A.app"))
+    }
+
+    @Test func movedItemReplacesAnUnopenableBookmarkAtItsNewPlace() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let old = "/Users/x/A.app", new = "/Users/x/Apps/A.app"
+        FileAccess.remember(URL(fileURLWithPath: old))
+        FileAccess.remember(URL(fileURLWithPath: new))
+        FileAccess.reset()
+        sandbox.install()
+        sandbox.moves[old] = new
+        sandbox.cannotOpenBookmarks.insert(new)
+
+        #expect(FileAccess.restore(prefs: prefs) == [old: new])
+        #expect(FileAccess.isGranted(new), "the moved item's working bookmark still grants access")
+        #expect(sandbox.saved.keys.sorted() == [new])
+
+        FileAccess.reset()
+        sandbox.cannotOpenBookmarks.remove(new)
+        sandbox.moves = [:]
+        sandbox.install()
+        #expect(FileAccess.restore(prefs: prefs).isEmpty)
+        #expect(FileAccess.isGranted(new), "the replacement bookmark survives relaunch")
     }
 
     @Test func anAppMovedWhileInUseIsFollowed() {

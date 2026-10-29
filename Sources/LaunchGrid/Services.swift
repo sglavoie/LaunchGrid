@@ -809,7 +809,10 @@ enum FileAccess {
         for (path, opened) in usable {
             let (url, stale) = (opened.url, opened.stale)
             if let now = moves[path] {
-                if saved[now] == nil {
+                // An older bookmark at the destination may no longer open. Keep the
+                // working access from this moved item unless that destination already
+                // has access, or its own bookmark was opened in this restore pass.
+                if saved[now] == nil || (granted[now] == nil && usable[now] == nil) {
                     saved[now] = backend.bookmark(url) ?? original[path]
                     granted[now] = url
                 } else {
