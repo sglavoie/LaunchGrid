@@ -180,6 +180,88 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.first?.title == "Custom")
     }
 
+    @Test func historyDoesNotMistakeAnExistingCopyForARename() throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = false
+        let a = try #require(state.grid.allApps.first)
+        let copy = InstalledApp(bundleID: a.bundleID, path: "/Applications/Other A.app", name: "Other A")
+        state.catalogScanned([installed("A"), installed("B"), copy])
+        state.remove([a.id])
+        let outside = AppState.OutsideRead(checked: [a.path])
+        state.catalogScanned([installed("B"), copy], outside: outside)
+        state.undo()
+
+        #expect(state.grid.allApps.map(\.name) == ["B"])
+        #expect(state.grid.recentlyPruned.first?.app.id == a.id)
+        #expect(state.grid.recentlyPruned.first?.app.path == a.path)
+    }
+
+    @Test func anAppStillAtItsHistoricalPathDoesNotFollowAnotherCopy() throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = false
+        let a = try #require(state.grid.allApps.first)
+        state.catalogScanned([installed("A"), installed("B")])
+        state.remove([a.id])
+        let copy = InstalledApp(bundleID: a.bundleID, path: "/Applications/New A.app", name: "New A")
+        let outside = AppState.OutsideRead(apps: [a.path: installed("A")], checked: [a.path], existing: [a.path])
+        state.catalogScanned([installed("B"), copy], outside: outside)
+        state.undo()
+
+        #expect(state.grid.allApps.map(\.path) == [a.path, installed("B").path])
+        #expect(state.grid.allApps.first?.id == a.id)
+    }
+
+    @Test(arguments: [false, true])
+    func undoingRemovalKeepsAnAppRenamedWhileItWasExcluded(autoAdd: Bool) throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = autoAdd
+        state.catalogScanned([installed("A"), installed("B")])
+        let a = try #require(state.grid.allApps.first)
+        state.apply { $0.rename(a.id, to: "Custom") }
+        state.remove([a.id])
+
+        let renamed = InstalledApp(bundleID: a.bundleID, path: "/Applications/New A.app", name: "New A")
+        let outside = AppState.OutsideRead(checked: [a.path])
+        state.catalogScanned([renamed, installed("B")], outside: outside)
+        state.catalogScanned([renamed, installed("B")], outside: outside)
+        state.undo()
+
+        #expect(state.grid.allApps.map(\.path) == [renamed.path, installed("B").path])
+        #expect(state.grid.allApps.first?.id == a.id)
+        #expect(state.grid.allApps.first?.title == "Custom")
+
+        state.redo()
+        #expect(state.grid.allApps.map(\.name) == ["B"])
+        #expect(state.grid.isExcluded(renamed))
+        state.undo()
+        #expect(state.grid.allApps.first?.path == renamed.path)
+        #expect(state.grid.allApps.first?.id == a.id)
+    }
+
+    @Test func aCopyRenamedWhileRemovedKeepsItsExclusionAndUndoTile() throws {
+        let state = makeState()
+        let original = installed("Xcode")
+        let beta = InstalledApp(bundleID: original.bundleID, path: "/Applications/Xcode-beta.app", name: "Xcode-beta")
+        state.catalogScanned([original, beta])
+        let tile = try #require(state.grid.allApps.first { $0.path == beta.path })
+        state.apply { $0.rename(tile.id, to: "Beta") }
+        state.remove([tile.id])
+        let renamed = InstalledApp(bundleID: beta.bundleID, path: "/Applications/New Xcode-beta.app", name: "New Xcode-beta")
+        let outside = AppState.OutsideRead(checked: [beta.path])
+        state.catalogScanned([original, renamed], outside: outside)
+        state.catalogScanned([original, renamed], outside: outside)
+
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.grid.removedBundleIDs == [renamed.path])
+        state.undo()
+        #expect(state.grid.allApps.map(\.path) == [original.path, renamed.path])
+        #expect(state.grid.allApps.last?.id == tile.id)
+        #expect(state.grid.allApps.last?.title == "Beta")
+        state.redo()
+        #expect(state.grid.allApps.map(\.path) == [original.path])
+        #expect(state.grid.removedBundleIDs == [renamed.path])
+    }
+
     @Test func scanDetectedMovesKeepRedoExclusionsForAppCopies() throws {
         let state = makeState()
         let original = installed("Xcode")
@@ -3203,6 +3285,26 @@ func installed(_ name: String) -> InstalledApp {
         state.moveToPage([UUID()], pageID: nil)
         #expect(state.grid.pages.count == 1)
         #expect(state.canUndo == undoable)
+    }
+}
+
+@MainActor @Suite(.serialized) struct SearchInputTests {
+    @Test(arguments: ["👩‍💻", "क्‍ष", "می\u{200C}نویسم"])
+    func committedTextKeepsUnicodeJoiners(text: String) {
+        let input = SearchInputView()
+        var inserted = ""
+        input.onInsert = { inserted += $0 }
+        input.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(inserted == text)
+    }
+
+    @Test(arguments: ["\n", "\t", "\u{7}", "\u{F700}"])
+    func controlAndFunctionKeysDoNotBecomeSearchText(text: String) {
+        let input = SearchInputView()
+        var inserted = ""
+        input.onInsert = { inserted += $0 }
+        input.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(inserted.isEmpty)
     }
 }
 

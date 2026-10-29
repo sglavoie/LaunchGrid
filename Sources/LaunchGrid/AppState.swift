@@ -637,7 +637,7 @@ final class AppState {
         let roots = prefs.scanRoots
         let scanner = scanner
         // Apps from elsewhere are checked in the same pass, so reconciling needs no disk access.
-        let candidates = outsideCandidates()
+        let candidates = outsideCandidates(includingHistory: true)
         // Bookmarks of apps added with Browse, resolved again here for those found gone.
         let inUse = FileAccess.bookmarksInUse
         Task {
@@ -706,7 +706,7 @@ final class AppState {
         if drag.active, installedBeforeDrag == nil { installedBeforeDrag = everInstalled }
         installedBefore = installedBeforeDrag ?? everInstalled
         everInstalled.formUnion(apps.map(\.path))
-        let outside = outside ?? Self.readOutsideApps(outsideCandidates().filter { needsDiskCheck($0) })
+        let outside = outside ?? Self.readOutsideApps(outsideCandidates(includingHistory: true).filter { needsDiskCheck($0) })
         outsideApps = outside.apps
         outsideChecked = outside.checked
         outsideExisting = outside.existing
@@ -733,10 +733,11 @@ final class AppState {
 
     /// Paths of grid apps, recently pruned ones, and path-based exclusions. Exclusions
     /// need disk checks too before following a change in capitalization.
-    private func outsideCandidates() -> [String] {
-        let recent = grid.recentlyPruned.filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
+    private func outsideCandidates(includingHistory: Bool = false) -> [String] {
+        let grids = includingHistory ? [grid] + undoStack + redoStack : [grid]
+        let recent = grids.flatMap(\.recentlyPruned).filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
         var seen = Set<String>()
-        let paths = (grid.allApps + recent.map(\.app)).filter { !isSelf($0.bundleID) }.map(\.path)
+        let paths = (grids.flatMap(\.allApps) + recent.map(\.app)).filter { !isSelf($0.bundleID) }.map(\.path)
             + grid.removedBundleIDs.filter { $0.hasPrefix("/") }.sorted()
         return paths.filter { seen.insert($0).inserted }
     }
@@ -842,16 +843,19 @@ final class AppState {
         // second installed copy alongside the scan's spelling.
         let extra = candidates.filter { isOutside($0) }.compactMap { outsideApps[$0] }
         let reachable = isReachable
+        // Removed apps can move while only history remembers their identity. Discover
+        // those moves before auto-add, so a renamed copy keeps its path-based exclusion.
+        let checked = outsideChecked
+        let historyMoves = scannedMovesInHistory(installed: installed + extra,
+            isReachable: { reachable($0) && (!self.needsDiskCheck($0) || checked.contains($0)) },
+            pathExists: knownToExist)
         var g = grid
+        g.followMoves(historyMoves)
         let report = Reconciler.reconcile(&g, installed: installed + extra, autoAdd: prefs.autoAddApps,
                                           pruneOnEmpty: lastScanHadReadableRoot,
                                           isReachable: { !unchecked.contains($0) && reachable($0) },
                                           pathExists: knownToExist, aliases: pathAliases,
                                           wasInstalledBefore: installedBefore.contains)
-        guard g != grid else { return }
-        if !report.isEmpty {
-            NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
-        }
         let old = grid
         // A scan can discover a move or rename without a sandbox bookmark. Carry its
         // confirmed paths into history too, including exclusions in a pending redo.
@@ -860,8 +864,12 @@ final class AppState {
         let moves = Dictionary(g.allApps.compactMap { app -> (String, String)? in
             guard let previous = previousPaths[app.id], previous != app.path else { return nil }
             return (previous, app.path)
-        }, uniquingKeysWith: { first, _ in first })
+        }, uniquingKeysWith: { first, _ in first }).merging(historyMoves) { confirmed, _ in confirmed }
         followMovesInHistory(moves)
+        guard g != grid else { return }
+        if !report.isEmpty {
+            NSLog("LaunchGrid: reconcile added \(report.added), removed \(report.removed), moved \(report.moved), restored \(report.restored)")
+        }
         grid = g
         afterChange(from: old)
         if !report.added.isEmpty || !report.restored.isEmpty {
@@ -1148,6 +1156,30 @@ final class AppState {
         guard !moves.isEmpty else { return }
         for i in undoStack.indices { undoStack[i].followMoves(moves) }
         for i in redoStack.indices { redoStack[i].followMoves(moves) }
+    }
+
+    /// Finds moves of apps absent from the live layout using the same copy matching as
+    /// reconciliation. Live tiles and pending restorations own their paths; history cannot
+    /// redirect one of them or claim its copy. Conflicting historical identities stay put.
+    private func scannedMovesInHistory(installed: [InstalledApp], isReachable: (String) -> Bool,
+                                       pathExists: (String) -> Bool) -> [String: String] {
+        let live = grid.allApps + grid.recentlyPruned.map(\.app)
+        let owned = Set(live.map(\.path)).union(live.compactMap { pathAliases[$0.path] })
+        var destinations: [String: Set<String>] = [:]
+        for snapshot in undoStack + redoStack {
+            var refreshed = snapshot
+            _ = Reconciler.reconcile(&refreshed, installed: installed, autoAdd: false, pruneMissing: false,
+                                      isReachable: isReachable, pathExists: pathExists, aliases: pathAliases,
+                                      wasInstalledBefore: installedBefore.contains)
+            let paths = Dictionary((snapshot.allApps + snapshot.recentlyPruned.map(\.app)).map { ($0.id, $0.path) },
+                                   uniquingKeysWith: { first, _ in first })
+            for app in refreshed.allApps {
+                guard let old = paths[app.id], old != app.path,
+                      !owned.contains(old), !owned.contains(app.path) else { continue }
+                destinations[old, default: []].insert(app.path)
+            }
+        }
+        return destinations.compactMapValues { $0.count == 1 ? $0.first : nil }
     }
 
     /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode

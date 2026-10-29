@@ -896,9 +896,10 @@ final class SearchInputView: NSView, @preconcurrency NSTextInputClient {
     func insertText(_ string: Any, replacementRange: NSRange) {
         composition.marked = ""
         let text = Self.plain(string)
-        // Function keys and other control characters aren't text.
+        // Function keys and control characters aren't text. Foundation's controlCharacters
+        // also includes format characters: joiners in Indic text, Persian and emoji are text.
         guard !text.isEmpty, text.unicodeScalars.allSatisfy({
-            !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .privateUse
+            $0.properties.generalCategory != .control && $0.properties.generalCategory != .privateUse
         }) else { return }
         onInsert(text)
     }
