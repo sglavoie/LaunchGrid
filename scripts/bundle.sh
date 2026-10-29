@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 APP="build/LaunchGrid.app"
-VERSION="1.0.1"
+VERSION="1.1.0"
 # The deployment target set in Package.swift, so the two can't disagree.
 MIN_MACOS="$(sed -n 's/.*\.macOS(\.v\([0-9][0-9]*\)).*/\1.0/p' Package.swift)"
 if [ -z "$MIN_MACOS" ]; then
