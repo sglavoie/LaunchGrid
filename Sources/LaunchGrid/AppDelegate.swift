@@ -497,7 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             statusItem = item
         }
         // With VoiceOver, pressing the icon (or VoiceOver's own show-menu command) opens the
-        // menu, whose first item shows the grid.
+        // menu, whose first action shows the grid.
         statusItem?.menu = NSWorkspace.shared.isVoiceOverEnabled || attachesStatusMenu ? voiceOverMenu : nil
         statusItem?.button?.image = switch prefs.menuBarIconStyle {
         case .monochrome: NSImage(systemSymbolName: "square.grid.3x3.fill", accessibilityDescription: "LaunchGrid")
@@ -563,6 +563,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let title = version.map { "LaunchGrid \($0)" } ?? "LaunchGrid"
+        let about = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        about.isEnabled = false
+        menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Show LaunchGrid"), action: #selector(showOverlay), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Settings…"), action: #selector(showSettings), keyEquivalent: ",").target = self
@@ -584,8 +589,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.setSubmenu(importMenu, for: importItem)
         menu.addItem(withTitle: String(localized: "Rebuild from Scratch…"), action: #selector(confirmRebuild), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        // Without the Dock icon (the default) there's no app menu, so About is here too.
-        menu.addItem(withTitle: String(localized: "About LaunchGrid"), action: #selector(showAbout), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "LaunchGrid Support"), action: #selector(openSupport), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Privacy Policy"), action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         menu.addItem(.separator())
