@@ -201,9 +201,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             state.scanTimeout = .seconds(s)
         }
         #endif
-        // Before the first scan, so it sees the folders and apps the bookmarks reach. Resolved
-        // off the main thread: one to a volume that has stopped answering could hang the launch.
-        let restored = Task { await FileAccess.restoreInBackground(prefs: prefs) }
         // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
         if Sandbox.isActive { state.onAppPathsInUse = { FileAccess.forgetApps(notIn: $0) } }
         FileAccess.onBookmarkFailure = { [weak self] url in
@@ -219,6 +216,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
 
+        #if !APP_STORE
+        if let scenario = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_UI_TEST"] {
+            guard Preferences.isScratch,
+                  ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_DEFAULTS"]?.hasPrefix("com.sglavoie.launchgrid.uitest.") == true else {
+                FileHandle.standardError.write(Data("UI tests require a scratch layout and a dedicated uitest settings domain.\n".utf8))
+                exit(1)
+            }
+            buildMainMenu()
+            applyDockPolicy()
+            DebugUITest.run(scenario, state: state, overlay: overlay, delegate: self)
+            return
+        }
+        #endif
+        // Before the first scan, so it sees the folders and apps the bookmarks reach. Resolved
+        // off the main thread: one to a volume that has stopped answering could hang the launch.
+        let restored = Task { await FileAccess.restoreInBackground(prefs: prefs) }
         buildMainMenu()
         applyDockPolicy()
         applyMenuBarIcon()

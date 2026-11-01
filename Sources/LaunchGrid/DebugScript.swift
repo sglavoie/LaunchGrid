@@ -18,7 +18,8 @@ enum DebugScript {
     /// The menu "menuhold" built, for "menurun".
     private static var heldMenu: [MenuEntry] = []
 
-    static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate) {
+    static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate,
+                    strict: Bool = false, completion: (@MainActor (String?) -> Void)? = nil) {
         let steps = script.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let dir = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_DIR"] ?? NSTemporaryDirectory()
         Task {
@@ -515,7 +516,10 @@ enum DebugScript {
                         }
                         return nil
                     }
-                    if let run = find(heldMenu) { run() } else { print("menurun: no \(arg)"); fflush(stdout) }
+                    if let run = find(heldMenu) { run() } else {
+                        print("menurun: no \(arg)"); fflush(stdout)
+                        if strict { completion?("No held menu action named '\(arg)'"); return }
+                    }
                 case "pagetitle":
                     // Titles the current page, as the rename card does.
                     let p = state.currentPage
@@ -569,10 +573,13 @@ enum DebugScript {
                     print("savedfile: pages=\(saved.map { $0.pages.compactMap(\.title) }.map { "\($0)" } ?? "unreadable") apps=\(saved?.allApps.count ?? 0)")
                     fflush(stdout)
                 case "quit": NSApp.terminate(nil)
-                default: NSLog("LaunchGrid debug: unknown step \(step)")
+                default:
+                    NSLog("LaunchGrid debug: unknown step \(step)")
+                    if strict { completion?("Unknown debug step '\(step)'"); return }
                 }
                 try? await Task.sleep(for: .milliseconds(400))
             }
+            completion?(nil)
         }
     }
 
@@ -688,8 +695,8 @@ enum DebugScript {
         send(.leftMouseUp, end)
     }
 
-    static func snapshot(name: String, dir: String) {
-        for (i, window) in NSApp.windows.enumerated() where window.isVisible {
+    static func snapshot(name: String, dir: String, includingHidden: Bool = false) {
+        for (i, window) in NSApp.windows.enumerated() where window.isVisible || includingHidden {
             guard let view = window.contentView, view.bounds.width > 0,
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
             view.cacheDisplay(in: view.bounds, to: rep)

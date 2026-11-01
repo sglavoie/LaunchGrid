@@ -1,0 +1,32 @@
+{
+  "name": "Typing in a folder and Escape restore the folder and keyboard focus",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Tools", "Delta"], ["Echo"]],
+    "pageTitles": ["First", "Second"],
+    "folders": {"Tools": ["Alpha", "Beta", "Gamma"]}
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "click:0"},
+    {"expect": {"folder": "Tools", "folderReady": true}},
+    {"run": "keys:b,e,t,a"},
+    {"expect": {"query": "beta", "folder": "", "searchResults": ["Beta"], "focus": "Beta"}},
+    {"run": "keys:53"},
+    {"expect": {"query": "", "folder": "Tools", "shown": true}},
+    {"run": "keys:53"},
+    {"expect": {"folder": "", "focus": "Tools", "shown": true}},
+    {"run": "keys:cmd+e@14"},
+    {"run": "keys:b,e,t,a"},
+    {"expect": {"editing": true, "query": "beta", "searchResults": ["Beta"]}},
+    {"run": "keys:36"},
+    {"expect": {"query": "", "folder": "Tools", "focus": "Beta", "editing": true}},
+    {"run": "keys:53"},
+    {"expect": {"folder": "", "focus": "Tools", "editing": true}},
+    {"run": "keys:53"},
+    {"expect": {"editing": false, "shown": true, "selection": []}},
+    {"run": "keys:53"},
+    {"expect": {"shown": false, "apps": ["Alpha", "Beta", "Delta", "Echo", "Gamma"]}}
+  ]
+}

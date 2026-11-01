@@ -1,0 +1,27 @@
+{
+  "name": "Moving an item between pages and undo/redo preserve its page and contents",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Alpha"], ["Beta", "Gamma"]],
+    "pageTitles": ["First", "Second"], "folders": {}
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "keys:cmd+e@14"},
+    {"run": "keys:125"},
+    {"expect": {"focus": "Alpha", "editing": true}},
+    {"run": "menuhold"},
+    {"run": "menurun:2 — Second"},
+    {"expect": {"pages": [["Beta", "Gamma", "Alpha"]], "currentPage": 0, "pageTitles": ["Second"]}},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {"pages": [["Alpha"], ["Beta", "Gamma"]], "currentPage": 0, "pageTitles": ["First", "Second"]}},
+    {"run": "keys:cmd+shift+z@6"},
+    {"expect": {"pages": [["Beta", "Gamma", "Alpha"]], "currentPage": 0}},
+    {"run": "keys:cmd+z@6"},
+    {"run": "keys:cmd+2@19"},
+    {"expect": {"currentPage": 1, "pages": [["Alpha"], ["Beta", "Gamma"]]}},
+    {"run": "keys:cmd+1@18"},
+    {"expect": {"currentPage": 0, "selection": [], "apps": ["Alpha", "Beta", "Gamma"]}}
+  ]
+}

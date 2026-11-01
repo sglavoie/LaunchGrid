@@ -49,7 +49,14 @@ final class Preferences {
 
     /// The app's settings domain, or the scratch one.
     static var appDefaults: UserDefaults {
-        isScratch ? UserDefaults(suiteName: "com.sglavoie.launchgrid.scratch") ?? .standard : .standard
+        #if !APP_STORE
+        // UI regression runs get a fresh domain, without changing an interactive scratch copy.
+        if isScratch, let suite = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_DEFAULTS"],
+           suite.hasPrefix("com.sglavoie.launchgrid.uitest.") {
+            return UserDefaults(suiteName: suite)!
+        }
+        #endif
+        return isScratch ? UserDefaults(suiteName: "com.sglavoie.launchgrid.scratch") ?? .standard : .standard
     }
 
     @ObservationIgnored private let d: UserDefaults

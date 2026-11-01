@@ -1,0 +1,32 @@
+{
+  "name": "Held page menus keep their original page after navigation and auto-add",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Beta", "Alpha"], ["Delta", "Charlie"], []],
+    "pageTitles": ["First", "Second", "Empty"], "folders": {}
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "pagemenuhold"},
+    {"run": "keys:cmd+2@19"},
+    {"run": "menurun:Sort This Page"},
+    {"expect": {"currentPage": 0, "pages": [["Alpha", "Beta"], ["Delta", "Charlie"], []]}},
+    {"run": "show"},
+    {"run": "keys:cmd+2@19"},
+    {"run": "menurun:Edit Page Title…"},
+    {"expect": {"textEdit": "page:First", "currentPage": 1}},
+    {"run": "show"},
+    {"run": "keys:53"},
+    {"run": "keys:cmd+3@20"},
+    {"run": "pagemenuhold"},
+    {"run": "autoadd:on"},
+    {"run": "fakeinstall:Echo"},
+    {"expect": {"pages": [["Alpha", "Beta"], ["Delta", "Charlie"], ["Echo"]]}},
+    {"run": "menurun:Delete Empty Page"},
+    {"expect": {"pages": [["Alpha", "Beta"], ["Delta", "Charlie"], ["Echo"]], "currentPage": 2}},
+    {"run": "keys:cmd+1@18"},
+    {"run": "menurun:Delete Empty Page"},
+    {"expect": {"pages": [["Alpha", "Beta"], ["Delta", "Charlie"], ["Echo"]], "currentPage": 0}}
+  ]
+}

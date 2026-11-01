@@ -1,0 +1,42 @@
+{
+  "name": "Dragging an unselected app out of a folder clears hidden selections before Delete",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Tools", "Delta", "Echo"], ["Golf", "Foxtrot"]],
+    "pageTitles": ["First", "Second"],
+    "folders": {"Tools": ["Alpha", "Beta", "Gamma"]}
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"shown": true, "keyWindow": true, "pagerReady": true, "selection": []}},
+    {"run": "keys:cmd+e@14"},
+    {"run": "click:0"},
+    {"expect": {"editing": true, "folder": "Tools", "folderReady": true}},
+    {"run": "keys:125"},
+    {"run": "keys: @49"},
+    {"expect": {"focus": "Alpha", "selection": ["Alpha"]}},
+    {"run": "fdrag:1,1"},
+    {"expect": {
+      "folder": "", "dragging": false, "selection": [],
+      "pages": [["Tools", "Beta", "Delta", "Echo"], ["Golf", "Foxtrot"]],
+      "folders": {"Tools": ["Alpha", "Gamma"]}
+    }},
+    {"run": "keys:125"},
+    {"expect": {"focus": "Tools"}},
+    {"run": "keys:124"},
+    {"expect": {"focus": "Beta"}},
+    {"run": "keys:51"},
+    {"expect": {
+      "apps": ["Alpha", "Delta", "Echo", "Foxtrot", "Gamma", "Golf"],
+      "pages": [["Tools", "Delta", "Echo"], ["Golf", "Foxtrot"]],
+      "folders": {"Tools": ["Alpha", "Gamma"]}, "selection": []
+    }},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {"pages": [["Tools", "Beta", "Delta", "Echo"], ["Golf", "Foxtrot"]]}},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {
+      "pages": [["Tools", "Delta", "Echo"], ["Golf", "Foxtrot"]],
+      "folders": {"Tools": ["Alpha", "Beta", "Gamma"]}, "selection": []
+    }}
+  ]
+}

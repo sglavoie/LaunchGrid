@@ -15,6 +15,10 @@ build:
 test *args:
     swift test {{args}}
 
+# Run UI regressions in isolated scratch copies (optional: --no-build and a scenario.json)
+test-ui *args:
+    scripts/test-ui.sh {{args}}
+
 # Run the tests against the Mac App Store variant, in its own build folder
 test-app-store:
     swift test --scratch-path .build/app-store -Xswiftc -DAPP_STORE
@@ -56,7 +60,7 @@ app-store *args:
 publish *notes:
     scripts/publish.sh {{quote(notes)}}
 
-# Run CI's checks: build, test and bundle both variants, verify the bundles, shellcheck (leaves the App Store one in build/)
+# Build, test and verify both variants, shellcheck (UI workflows are separate; leaves the App Store bundle in build/)
 ci: build test test-app-store
     scripts/test-release-version.sh
     scripts/test-install-swap.sh
@@ -69,7 +73,7 @@ ci: build test test-app-store
     /usr/libexec/PlistBuddy -c 'Print :DTXcode' {{app}}/Contents/Info.plist
     codesign --verify --strict --verbose=2 {{app}}
     codesign -d --entitlements - {{app}} | grep -q com.apple.security.app-sandbox
-    ! strings -a {{app}}/Contents/MacOS/LaunchGrid | grep -E 'LAUNCHGRID_DEBUG_(SCRIPT|DIR)'
+    ! strings -a {{app}}/Contents/MacOS/LaunchGrid | grep -E 'LAUNCHGRID_DEBUG_(SCRIPT|DIR|UI_TEST|DEFAULTS)'
     shellcheck scripts/*.sh
 
 # Serve the website (launchgrid.sglavoie.com) locally with the Workers runtime
