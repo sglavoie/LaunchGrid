@@ -1,11 +1,11 @@
 # Mac App Store submission
 
-**October 21, 2026.** What Apple requires before LaunchGrid can be accepted on the Mac App Store, what is already done, and what is left. Apple's rules change: re-read the [sources](#sources) before submitting.
+**Rules reviewed October 21, 2026; sandbox acceptance updated October 31, 2026.** What Apple requires before LaunchGrid can be accepted on the Mac App Store, what is already done, and what is left. Apple's rules change: re-read the [sources](#sources) before submitting.
 
 ## Summary
 
 - **The website is ready.** `website/` holds the home page, privacy policy and support page for `launchgrid.sglavoie.com`.
-- **The app is ready to be sandboxed.** `just app-store` builds the sandboxed, signed package (see [What's done in the app](#whats-done-in-the-app)). It needs a Mac App Store certificate pair and provisioning profile first, and the sandboxed build needs a manual test pass.
+- **The App Store code variant has passed the sandbox checks below, except a fresh login.** The distribution certificates and provisioning profile are present on the development Mac. `just app-store` builds the sandboxed, signed package (see [What's done in the app](#whats-done-in-the-app)); packaging and submission of the current changes remain separate release steps.
 - **The repository is public** under the MIT licence, so the support page's issue links work.
 - The rest is App Store Connect paperwork.
 
@@ -47,7 +47,30 @@ The App Store build is signed with the sandbox, `files.user-selected.read-write`
 | Shortcut conflict warning (`KeyCombo` in `Services.swift`) | Doesn't read `com.apple.symbolichotkeys` (compiled out, and unreadable in the sandbox anyway), so it can't tell a system shortcut turned off from one still on: the warning says "unless that shortcut is off" |
 | Launching, Show in Finder, `.launchgrid` files from Finder, Carbon hotkey, `SMAppService` | Work unchanged. Open at Login is off until the person turns it on, which satisfies 2.4.5(iii) |
 
-Checked: a sandboxed build (`SANDBOX=1 scripts/bundle.sh`) finds the same 128 apps as the unsandboxed one, including the five in `~/Applications`. Tested by hand in a sandboxed build (October 24, 2026): an app added from `~/Downloads` with Browse keeps its bookmark across relaunches, and follows the app when it moves, also after it left the grid meanwhile and when it was picked again at its new place, and while LaunchGrid runs (the next scan follows its bookmark). A copy of a database with its write-ahead log, loaded with Load Grid File…, asks for its folder through the Allow panel and imports what the log holds. **Still to test by hand with `just sandbox --keep`** (quit the installed copy first; without `--keep`, each run starts from an empty container): add an extra folder and a custom picture, relaunch and check they still work; import from AppGrid and from Launchpad (on a Mac that still has one) through the Allow panel; save and load a grid file; Open at Login.
+Earlier checks: a sandboxed build (`SANDBOX=1 scripts/bundle.sh`) found the same 128 apps as the unsandboxed one, including the five in `~/Applications`. Tested by hand on October 24, 2026: an app added from `~/Downloads` with Browse kept its bookmark across relaunches and followed moves, including after removal from the grid and while LaunchGrid was running. A database copy with its write-ahead log was also imported through Load Grid File… and its folder Allow panel.
+
+#### Sandbox acceptance — October 31, 2026
+
+UI testing ran on **Seb's MacBook Pro over SSH**, with a logged-in graphical session, macOS 27.0.1 (26A434), Apple silicon and Xcode 27.2 (27B52). The tested source was `f2ef5ef` plus the accompanying database-folder access fix. The app was compiled with `APP_STORE=1`, signed ad hoc with the actual sandbox entitlements, and checked with `codesign --verify --strict`. Debug script and UI test driver strings were absent. The embedded profile was a stand-in, so these results establish runtime sandbox behavior, not distribution signing or App Store acceptance.
+
+| Check | Result and evidence |
+| --- | --- |
+| First launch | The welcome window appeared with an empty grid and a real scan found 126 apps. Closing the welcome window built the category layout. |
+| Extra folder across relaunch | Added a folder in Downloads using Add Folder…. After quitting and relaunching, the folder remained readable without a warning. A second fixture app added afterward appeared automatically on the saved grid. |
+| Custom image across relaunch | Chose an image outside the container with the image picker. After relaunch, Appearance still showed Custom Image and `background.jpg`, without a read warning; both the image and folder bookmarks remained saved. A remote screenshot confirmed the image rendered as the grid background. |
+| Save and load | Saved through NSSavePanel and compared the export with `grid.json`. After replacing the layout with an imported database, loaded the export through NSOpenPanel and confirmed complete JSON equality, including IDs, pages and folders. |
+| Import a database copy | Loaded an AppGrid-schema `.agrid` fixture from a separate folder in Documents. The folder Allow panel appeared. Import confirmation found both apps, including Notes, which existed only in the SQLite write-ahead log. Canceling replacement preserved the complete grid. Accepting imported the fixture apps; SHA-256 checks confirmed the source database and WAL were unchanged. |
+| Native AppGrid import action | No genuine AppGrid database was present on this MacBook. A temporary fixture at AppGrid's expected database path exercised Settings › Library › Import from AppGrid…. The actual App Store code variant requested its folder and reported “Imported 2 apps from AppGrid”, including the WAL-only app. The source database and WAL were unchanged. |
+| Native Launchpad import | No legacy Launchpad database was present on this MacBook, so a genuine legacy import could not be exercised. Its folder-permission dialog could be canceled without replacing the layout. The shared importer and WAL handling were exercised by the AppGrid fixtures above. |
+| Open at Login registration | From `/Applications/LaunchGrid.app`, toggling on reported Enabled; that status survived quitting and relaunching. Toggling off reported Off, and toggling on again reported Enabled. **A fresh logout/login remains to be verified.** |
+| Global shortcut | From Finder, ⌥Space opened the installed sandboxed grid. |
+| Existing regression suites | All 238 tests passed in each of the normal and `-DAPP_STORE` variants. All four fixture-based UI scenarios passed on the MacBook, with 32 state checkpoints. |
+
+The import fixture exposed a failure in the old folder-permission flow: pressing Allow still produced “Choose the folder that holds the … database”. The code ignored the security-scoped URL returned by the folder picker. `readDatabase` now starts access through that URL, retains it while the background importer reads the database and WAL, and balances it with `stopAccessingSecurityScopedResource()` before asking to replace the layout. Permission cancellation also completes the queued load. See Apple's [security-scoped URL lifetime documentation](https://developer.apple.com/documentation/foundation/url/startaccessingsecurityscopedresource()).
+
+To reproduce the regression, use a database outside the container and outside any bookmarked scan folder, with a committed app entry only in its live WAL. Select the database file through Load Grid File…, then press Allow for its containing folder. Both apps must reach the replacement confirmation; cancel must preserve the grid, and accepting must import the WAL entry without modifying the source files. Repeat from Import from AppGrid… with a database at its expected path. Run this on the MacBook over SSH, not on the development Mac.
+
+The remaining runtime check is an actual fresh login with the installed sandboxed build registered. Confirm it starts from `/Applications`, restores the folder and image, and opens through its shortcut. `just sandbox --keep` is useful for persistence checks; without `--keep`, the container is reset for each run. A genuine pre-macOS 26 Launchpad database remains an additional compatibility check when one is available.
 
 ### 2. Privacy manifest
 
@@ -70,9 +93,9 @@ No file timestamps are read. A scratch run's marker (`AppDelegate.isScratch`) ho
 
 `just app-store --upload` sends the package with `xcrun altool` and an App Store Connect API key (IDs in `private/app-store-connect.env`, the `.p8` in `~/.appstoreconnect/private_keys`); the Transporter app works too. One-time setup in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/):
 
-- Create the **Apple Distribution** and **Mac Installer Distribution** certificates and install them. The keychain has only Apple Development and Developer ID Application ones today.
-- Register the explicit App ID `com.sglavoie.launchgrid` (no capabilities needed).
-- Create a **Mac App Store Connect** provisioning profile for it and save it as `private/LaunchGrid.provisionprofile`, which git ignores (or set `PROVISIONING_PROFILE`).
+- **Present on October 31, 2026:** Apple Distribution and 3rd Party Mac Developer Installer signing identities, in addition to Apple Development and Developer ID Application.
+- The explicit App ID is `com.sglavoie.launchgrid` (no capabilities needed).
+- **Present on October 31, 2026:** `private/LaunchGrid.provisionprofile`, named “LaunchGrid App Store”, for the expected App ID; it expires October 21, 2027. The file is git-ignored (or set `PROVISIONING_PROFILE` to another path).
 
 `CFBundleVersion` is the commit count, which rises with each commit, as App Store Connect requires. The icon set already includes the 1024 px (`512@2x`) size.
 

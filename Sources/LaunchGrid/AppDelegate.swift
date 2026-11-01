@@ -344,9 +344,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             guard let layout = await readLayout(at: url) else { return }
             switch layout {
             case .database:
-                // The open panel granted the file alone. A write-ahead log beside it can be
-                // invisible to the sandbox even when it exists, so require its folder first.
-                guard await allowReading(url, from: url.lastPathComponent) else { return }
                 // Asks once the database is read, and only when apps in it were found.
                 handedOn = true
                 importDatabase(url, from: url.lastPathComponent, done: done, finished: finished)
@@ -832,28 +829,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// `done` gets what happened, for Settings to show beside its buttons.
     func importAppGrid(done: (@MainActor (String) -> Void)?) {
         guard let url = LaunchpadImporter.appGridDatabaseURL else { return }
-        Task {
-            guard await allowReading(url, from: "AppGrid") else { return }
-            importDatabase(url, from: "AppGrid", done: done)
-        }
+        importDatabase(url, from: "AppGrid", done: done)
     }
 
     func importLaunchpad(done: (@MainActor (String) -> Void)?) {
         guard let url = LaunchpadImporter.launchpadDatabaseURL else { return }
-        Task {
-            guard await allowReading(url, from: "Launchpad") else { return }
-            importDatabase(url, from: "Launchpad", done: done)
-        }
+        importDatabase(url, from: "Launchpad", done: done)
     }
 
     /// Database imports need access to the containing folder, which covers a write-ahead log
     /// that may exist but be invisible when an open panel granted only the database file.
     /// The panel opens on that folder, so allowing it is one click.
-    private func allowReading(_ url: URL, from source: String) async -> Bool {
-        guard Sandbox.isActive else { return true }
+    private func readDatabase(_ url: URL, from source: String, rows: Int, columns: Int,
+                              installed: [String]) async -> Result<LaunchpadImporter.Result, Error>? {
         let folder = url.deletingLastPathComponent()
-        let canList = await Disk.run { Self.canListDirectory(folder) }
-        if !canList {
+        var scopedFolder: URL?
+        defer { scopedFolder?.stopAccessingSecurityScopedResource() }
+        if Sandbox.isActive, !(await Disk.run { Self.canListDirectory(folder) }) {
             overlay.hide(deactivate: false)
             NSApp.activate()
             let panel = NSOpenPanel()
@@ -862,16 +854,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             panel.canChooseDirectories = true
             panel.canChooseFiles = false
             panel.directoryURL = folder
-            guard panel.runModal() == .OK else { return false }
+            guard panel.runModal() == .OK, let picked = panel.url else { return nil }
+            // Consume the grant attached to the selected URL before using path-based file
+            // APIs, and hold it until the background copy has read the database and its WAL.
+            if picked.startAccessingSecurityScopedResource() { scopedFolder = picked }
         }
-        let readable = await Disk.run {
-            Self.canListDirectory(folder) && FileManager.default.isReadableFile(atPath: url.path)
+        if Sandbox.isActive {
+            let readable = await Disk.run {
+                Self.canListDirectory(folder) && FileManager.default.isReadableFile(atPath: url.path)
+            }
+            guard readable else {
+                showError(String(localized: "Could not import from \(source)"), String(localized: "Choose the folder that holds the \(source) database: \(folder.path)"))
+                return nil
+            }
         }
-        guard readable else {
-            showError(String(localized: "Could not import from \(source)"), String(localized: "Choose the folder that holds the \(source) database: \(folder.path)"))
-            return false
+        return await Disk.run {
+            Result {
+                try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed,
+                                                     keeps: LaunchpadImporter.isLastingCopy) { id in
+                    NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
+                }
+            }
         }
-        return true
     }
 
     /// Actually listing the folder checks sandbox access. A file-only grant can make the
@@ -890,14 +894,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Task {
             defer { finished?() }
             // Reading the database and asking Launch Services about every app can take a while.
-            let outcome = await Disk.run {
-                Result {
-                    try LaunchpadImporter.importDatabase(at: url, rows: rows, columns: columns, installed: installed,
-                                                         keeps: LaunchpadImporter.isLastingCopy) { id in
-                        NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.path
-                    }
-                }
-            }
+            guard let outcome = await readDatabase(url, from: source, rows: rows, columns: columns,
+                                                  installed: installed) else { return }
             switch outcome {
             case .failure(let error):
                 showError(String(localized: "Could not import from \(source)"), error.localizedDescription)
