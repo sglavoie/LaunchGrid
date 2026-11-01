@@ -85,7 +85,7 @@ enum DebugUITest {
         "fdrag", "finside", "fhold", "hold", "release", "page", "folder", "focus",
         "edit", "select", "fselect", "search", "type", "group", "undo", "redo",
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
-        "movetopage", "titleedit", "autoadd",
+        "movetopage", "titleedit", "autoadd", "windowsize",
     ]
 
     static func snapshot(_ state: AppState, overlay: OverlayController) -> [String: Value] {

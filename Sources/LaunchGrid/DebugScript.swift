@@ -627,6 +627,16 @@ enum DebugScript {
         NSLog("LaunchGrid debug: active=\(NSApp.isActive) key=\(window.isKeyWindow) start=\(start)")
         send(.leftMouseDown, start)
         try? await Task.sleep(for: .milliseconds(50))
+        var approach = start
+        if kind == "fdrag" || kind == "fhold" {
+            // In a short window the page gap can still be under the open folder. Leave
+            // the panel first, as a person dragging out would, before aiming at that gap.
+            let panel = state.drag.folderPanelFrame
+            let height = (window.contentView?.bounds.height ?? 0) - root.y
+            let y = panel.minY >= height - panel.maxY ? panel.minY - 40 : panel.maxY + 40
+            approach = CGPoint(x: start.x, y: y)
+            await glide(start, approach)
+        }
         var end: CGPoint
         switch kind {
         case "merge":
@@ -650,7 +660,7 @@ enum DebugScript {
             await glide(edge, end)
         case "hold", "fhold":
             end = rootPoint(to, dx: -layout.cell.width * 0.4)
-            await glide(start, end)
+            await glide(approach, end)
             for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
             heldAt = (end, window)
             return
@@ -688,7 +698,7 @@ enum DebugScript {
             return
         default:
             end = rootPoint(to, dx: -layout.cell.width * 0.4 + grab)
-            await glide(start, end)
+            await glide(approach, end)
             if grab != 0 { snapshot(name: "middrag", dir: snapDir) }
         }
         try? await Task.sleep(for: .milliseconds(150))

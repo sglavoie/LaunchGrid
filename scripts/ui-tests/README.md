@@ -48,6 +48,7 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | Commands | Purpose |
 | --- | --- |
 | `show`, `hide` | Show/hide the overlay |
+| `windowsize:718,534` | Resize the overlay window in points to cover compact layouts |
 | `keys:cmd+e@14`, `keys:125`, `keys: @49` | Post keyboard events: edit mode, Down, Space |
 | `click:0`, `press:0`, `fpress:0` | Click or long-press a page/folder cell |
 | `drag:0,2`, `fdrag:1,1`, `finside:0,2`, `merge:0,1`, `edge:0,0` | Send mouse events through the gesture path |

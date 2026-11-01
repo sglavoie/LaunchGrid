@@ -9,6 +9,7 @@
   "steps": [
     {"run": "show"},
     {"expect": {"shown": true, "keyWindow": true, "pagerReady": true, "selection": []}},
+    {"run": "windowsize:718,534"},
     {"run": "keys:cmd+e@14"},
     {"run": "click:0"},
     {"expect": {"editing": true, "folder": "Tools", "folderReady": true}},
