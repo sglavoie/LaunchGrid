@@ -1,11 +1,11 @@
 # Mac App Store submission
 
-**Rules reviewed October 21, 2026; sandbox acceptance updated October 31, 2026.** What Apple requires before LaunchGrid can be accepted on the Mac App Store, what is already done, and what is left. Apple's rules change: re-read the [sources](#sources) before submitting.
+**Rules reviewed October 21, 2026; sandbox acceptance updated November 1, 2026.** What Apple requires before LaunchGrid can be accepted on the Mac App Store, what is already done, and what is left. Apple's rules change: re-read the [sources](#sources) before submitting.
 
 ## Summary
 
 - **The website is ready.** `website/` holds the home page, privacy policy and support page for `launchgrid.sglavoie.com`.
-- **The App Store code variant has passed the sandbox checks below, except a fresh login.** The distribution certificates and provisioning profile are present on the development Mac. `just app-store` builds the sandboxed, signed package (see [What's done in the app](#whats-done-in-the-app)); packaging and submission of the current changes remain separate release steps.
+- **The App Store code variant has passed the available sandbox checks below, including a fresh login.** A genuine legacy Launchpad database was unavailable on the test MacBook. The distribution certificates and provisioning profile are present on the development Mac. `just app-store` builds the sandboxed, signed package (see [What's done in the app](#whats-done-in-the-app)); packaging and submission of the current changes remain separate release steps.
 - **The repository is public** under the MIT licence, so the support page's issue links work.
 - The rest is App Store Connect paperwork.
 
@@ -49,9 +49,9 @@ The App Store build is signed with the sandbox, `files.user-selected.read-write`
 
 Earlier checks: a sandboxed build (`SANDBOX=1 scripts/bundle.sh`) found the same 128 apps as the unsandboxed one, including the five in `~/Applications`. Tested by hand on October 24, 2026: an app added from `~/Downloads` with Browse kept its bookmark across relaunches and followed moves, including after removal from the grid and while LaunchGrid was running. A database copy with its write-ahead log was also imported through Load Grid File… and its folder Allow panel.
 
-#### Sandbox acceptance — October 31, 2026
+#### Sandbox acceptance — October 31–November 1, 2026
 
-UI testing ran on **Seb's MacBook Pro over SSH**, with a logged-in graphical session, macOS 27.0.1 (26A434), Apple silicon and Xcode 27.2 (27B52). The tested source was `f2ef5ef` plus the accompanying database-folder access fix. The app was compiled with `APP_STORE=1`, signed ad hoc with the actual sandbox entitlements, and checked with `codesign --verify --strict`. Debug script and UI test driver strings were absent. The embedded profile was a stand-in, so these results establish runtime sandbox behavior, not distribution signing or App Store acceptance.
+UI testing ran on **Seb's MacBook Pro over SSH**, with a logged-in graphical session, macOS 27.0.1 (26A434), Apple silicon and Xcode 27.2 (27B52). The tested source was `f2ef5ef` plus the database-folder access fix, now committed as `bbce5f2`; the committed source matched the tested source by SHA-256. The app was compiled with `APP_STORE=1`, signed ad hoc with the actual sandbox entitlements, and checked with `codesign --verify --strict`. Debug script and UI test driver strings were absent. The embedded profile was a stand-in, so these results establish runtime sandbox behavior, not distribution signing or App Store acceptance.
 
 | Check | Result and evidence |
 | --- | --- |
@@ -62,7 +62,7 @@ UI testing ran on **Seb's MacBook Pro over SSH**, with a logged-in graphical ses
 | Import a database copy | Loaded an AppGrid-schema `.agrid` fixture from a separate folder in Documents. The folder Allow panel appeared. Import confirmation found both apps, including Notes, which existed only in the SQLite write-ahead log. Canceling replacement preserved the complete grid. Accepting imported the fixture apps; SHA-256 checks confirmed the source database and WAL were unchanged. |
 | Native AppGrid import action | No genuine AppGrid database was present on this MacBook. A temporary fixture at AppGrid's expected database path exercised Settings › Library › Import from AppGrid…. The actual App Store code variant requested its folder and reported “Imported 2 apps from AppGrid”, including the WAL-only app. The source database and WAL were unchanged. |
 | Native Launchpad import | No legacy Launchpad database was present on this MacBook, so a genuine legacy import could not be exercised. Its folder-permission dialog could be canceled without replacing the layout. The shared importer and WAL handling were exercised by the AppGrid fixtures above. |
-| Open at Login registration | From `/Applications/LaunchGrid.app`, toggling on reported Enabled; that status survived quitting and relaunching. Toggling off reported Off, and toggling on again reported Enabled. **A fresh logout/login remains to be verified.** |
+| Open at Login | From `/Applications/LaunchGrid.app`, toggling on reported Enabled; that status survived quitting and relaunching. Toggling off reported Off, and toggling on again reported Enabled. **Fresh login passed November 1:** after the user logged out and back in, the console session ID changed and the original app process was gone. A new process was already running from `/Applications` at the login time, before any test activation or launch command. The installed binary was unchanged, Settings reported Enabled, the custom image rendered, and ⌥Space opened the grid. A new fixture app added after login appeared automatically within 4.3 seconds, verifying restored folder access and watcher delivery. |
 | Global shortcut | From Finder, ⌥Space opened the installed sandboxed grid. |
 | Existing regression suites | All 238 tests passed in each of the normal and `-DAPP_STORE` variants. All four fixture-based UI scenarios passed on the MacBook, with 32 state checkpoints. |
 
@@ -70,7 +70,7 @@ The import fixture exposed a failure in the old folder-permission flow: pressing
 
 To reproduce the regression, use a database outside the container and outside any bookmarked scan folder, with a committed app entry only in its live WAL. Select the database file through Load Grid File…, then press Allow for its containing folder. Both apps must reach the replacement confirmation; cancel must preserve the grid, and accepting must import the WAL entry without modifying the source files. Repeat from Import from AppGrid… with a database at its expected path. Run this on the MacBook over SSH, not on the development Mac.
 
-The remaining runtime check is an actual fresh login with the installed sandboxed build registered. Confirm it starts from `/Applications`, restores the folder and image, and opens through its shortcut. `just sandbox --keep` is useful for persistence checks; without `--keep`, the container is reset for each run. A genuine pre-macOS 26 Launchpad database remains an additional compatibility check when one is available.
+The available sandbox acceptance checks are complete. After the fresh-login check, the temporary login item and installed app were removed, the test folders were archived outside Downloads and Documents, and the original MacBook sandbox container was restored. All 37 files and links in the restored container matched the original backup. `just sandbox --keep` remains useful for repeating persistence checks; without `--keep`, the container is reset for each run. A genuine pre-macOS 26 Launchpad database remains an additional compatibility check when one is available. Distribution packaging and App Store submission remain release steps.
 
 ### 2. Privacy manifest
 
