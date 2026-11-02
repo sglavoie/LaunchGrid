@@ -208,7 +208,9 @@ final class ActionEditorModel {
         case .command:
             // One already in the layout can still be renamed and given keywords.
             guard kind.isAvailable else { return actionKind == nil ? ActionRunner.Failure.commandsUnavailable.message : nil }
-            return command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? String(localized: "Enter a command.") : nil
+            if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return String(localized: "Enter a command.") }
+            do { _ = try ActionRunner.substitutingArgument(in: command) } catch { return error.localizedDescription }
+            return nil
         case .script:
             if scriptName.isEmpty { return String(localized: "Choose a script.") }
             if runMode == .terminal && !terminalAvailable { return ActionRunner.Failure.terminalUnavailable.message }
@@ -562,8 +564,8 @@ struct ActionEditor: View {
                 .frame(minHeight: 64, maxHeight: 140)
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: .separatorColor)))
                 .accessibilityLabel(Text("Command"))
-                .accessibilityHint(Text("Run by zsh as a login shell. {query} becomes what you type after a keyword, quoted."))
-            Text("Runs with zsh -l. {query} becomes what you type after a keyword, quoted as one word; it's also in $LAUNCHGRID_QUERY.")
+                .accessibilityHint(Text("Run by zsh as a login shell. {query} becomes what you type after a keyword, as text the shell never runs."))
+            Text("Runs with zsh -l. {query} becomes what you type after a keyword, as text the shell never runs, even inside quotes; it's also in $LAUNCHGRID_QUERY.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         runModeField

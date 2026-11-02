@@ -23,6 +23,20 @@ final class ActionRunner {
             Failure(message: String(localized: "This version of LaunchGrid can't open scripts in a terminal. Run it in the background instead."))
         }
         static var noCommand: Failure { Failure(message: String(localized: "No command is entered")) }
+        // Where the shell would read what's typed after a keyword as code, or {query} can't be
+        // swapped for a reference to it.
+        static var placeholderInBackticks: Failure {
+            Failure(message: String(localized: "{query} can't go inside backticks. Use $(…) instead."))
+        }
+        static var placeholderInParameter: Failure {
+            Failure(message: String(localized: "{query} can't go inside ${…}. Use $LAUNCHGRID_QUERY there instead."))
+        }
+        static var placeholderInArithmetic: Failure {
+            Failure(message: String(localized: "{query} can't go inside $((…)) or ((…)), where the shell would run what's typed as code."))
+        }
+        static var placeholderAfterHereDocument: Failure {
+            Failure(message: String(localized: "{query} can't go in or after a here-document (<<). Use $LAUNCHGRID_QUERY there instead."))
+        }
         static var noScript: Failure { Failure(message: String(localized: "No script is chosen")) }
         static func scriptNotFound(_ name: String) -> Failure {
             Failure(message: String(localized: "Script not found: \(name)"))
@@ -165,7 +179,7 @@ final class ActionRunner {
             #else
             guard commandsAvailable else { throw Failure.commandsUnavailable }
             guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.noCommand }
-            return .code(CodeJob(program: .shell(substitutingQuoted(command, argument: argument)), argument: argument,
+            return .code(CodeJob(program: .shell(try substitutingArgument(in: command)), argument: argument,
                                  workingDirectory: workingDirectory.flatMap { $0.isEmpty ? nil : $0 },
                                  timeout: CodeJob.timeout(timeoutSeconds), mode: runMode))
             #endif
@@ -187,10 +201,142 @@ final class ActionRunner {
         #endif
     }
 
-    /// `command` with each `{query}` replaced by the argument as one single-quoted shell word,
-    /// so nothing in it (quotes, `;`, `$(…)`, newlines) is read as shell syntax.
-    nonisolated static func substitutingQuoted(_ command: String, argument: String?) -> String {
-        command.replacingOccurrences(of: ActionKind.argumentPlaceholder, with: shellQuoted(argument ?? ""))
+    /// `command` with each `{query}` replaced by a reference to `$LAUNCHGRID_QUERY`, which both
+    /// background and terminal runs set to the argument. The argument itself never becomes part
+    /// of the command's text, so nothing in it (quotes, `;`, `$(…)`, newlines) is read as shell
+    /// syntax: a parameter's value isn't parsed again. The reference fits where `{query}` is:
+    /// unquoted, inside '…', "…" or $'…' it stays one piece of text, as typed; in a comment it is
+    /// left alone. Throws for places where the shell would read the value as code or the
+    /// reference can't fit: backticks, `${…}`, arithmetic and here-documents.
+    nonisolated static func substitutingArgument(in command: String) throws -> String {
+        enum Context: Equatable {
+            case top, substitution(depth: Int), backtick, parameter(depth: Int), arithmetic(depth: Int)
+            case single, double, ansiSingle, comment
+
+            /// Where a `#` starting a word starts a comment.
+            var startsCommands: Bool {
+                switch self {
+                case .top, .substitution: true
+                default: false
+                }
+            }
+        }
+        let placeholder = Array(ActionKind.argumentPlaceholder.unicodeScalars)
+        let text = Array(command.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var stack: [Context] = [.top]
+        var afterHereDocument = false
+        var i = 0
+        func at(_ offset: Int) -> Unicode.Scalar? { i + offset < text.count ? text[i + offset] : nil }
+        func copy(_ n: Int) {
+            out.append(contentsOf: text[i..<min(i + n, text.count)])
+            i += n
+        }
+        func startsWord() -> Bool {
+            guard i > 0 else { return true }
+            let previous = text[i - 1]
+            return previous.properties.isWhitespace || ";&|()<>".unicodeScalars.contains(previous)
+        }
+        /// `$(`, `$((`, `${` and backticks, which can start in any context that expands.
+        func openExpansion() -> Bool {
+            switch (at(0), at(1), at(2)) {
+            case ("$", "(", "("): stack.append(.arithmetic(depth: 0)); copy(3)
+            case ("$", "(", _): stack.append(.substitution(depth: 0)); copy(2)
+            case ("$", "{", _): stack.append(.parameter(depth: 0)); copy(2)
+            case ("`", _, _): stack.append(.backtick); copy(1)
+            default: return false
+            }
+            return true
+        }
+        /// Quotes, escapes, expansions and comments outside quotes.
+        func unquoted(_ context: Context) {
+            if openExpansion() { return }
+            switch text[i] {
+            case "\\": copy(2)
+            case "'": stack.append(.single); copy(1)
+            case "\"": stack.append(.double); copy(1)
+            case "$" where at(1) == "'": stack.append(.ansiSingle); copy(2)
+            case "#" where context.startsCommands && startsWord(): stack.append(.comment); copy(1)
+            case "(" where at(1) == "(" && startsWord(): stack.append(.arithmetic(depth: 0)); copy(2)
+            default: copy(1)
+            }
+        }
+        while i < text.count {
+            let context = stack.last ?? .top
+            if text[i] == placeholder[0], i + placeholder.count <= text.count,
+               Array(text[i..<i + placeholder.count]) == placeholder {
+                if context == .comment { copy(placeholder.count); continue }
+                if afterHereDocument { throw Failure.placeholderAfterHereDocument }
+                let reference: String
+                switch context {
+                case .comment: continue
+                case .backtick: throw Failure.placeholderInBackticks
+                case .parameter: throw Failure.placeholderInParameter
+                case .arithmetic: throw Failure.placeholderInArithmetic
+                case .top, .substitution: reference = #""${LAUNCHGRID_QUERY}""#
+                case .double: reference = "${LAUNCHGRID_QUERY}"
+                case .single: reference = #"'"${LAUNCHGRID_QUERY}"'"#
+                case .ansiSingle: reference = #"'"${LAUNCHGRID_QUERY}"$'"#
+                }
+                out.append(contentsOf: reference.unicodeScalars)
+                i += placeholder.count
+                continue
+            }
+            // `<<` but not `<<<`, outside quotes: a here-document, whose body the shell expands.
+            if [.single, .double, .ansiSingle, .comment].contains(context) == false,
+               text[i] == "<", at(1) == "<", at(2) != "<", i == 0 || text[i - 1] != "<" {
+                afterHereDocument = true
+                copy(2)
+                continue
+            }
+            switch context {
+            case .top:
+                unquoted(context)
+            case .substitution(let depth):
+                switch text[i] {
+                case "(" where at(1) != "(" || !startsWord(): stack[stack.count - 1] = .substitution(depth: depth + 1); copy(1)
+                case ")" where depth == 0: stack.removeLast(); copy(1)
+                case ")": stack[stack.count - 1] = .substitution(depth: depth - 1); copy(1)
+                default: unquoted(context)
+                }
+            case .backtick:
+                if text[i] == "`" { stack.removeLast(); copy(1) } else { unquoted(context) }
+            case .parameter(let depth):
+                switch text[i] {
+                case "{": stack[stack.count - 1] = .parameter(depth: depth + 1); copy(1)
+                case "}" where depth == 0: stack.removeLast(); copy(1)
+                case "}": stack[stack.count - 1] = .parameter(depth: depth - 1); copy(1)
+                default: unquoted(context)
+                }
+            case .arithmetic(let depth):
+                switch text[i] {
+                case "(": stack[stack.count - 1] = .arithmetic(depth: depth + 1); copy(1)
+                case ")" where depth == 0 && at(1) == ")": stack.removeLast(); copy(2)
+                case ")": stack[stack.count - 1] = .arithmetic(depth: max(depth - 1, 0)); copy(1)
+                default: unquoted(context)
+                }
+            case .single:
+                if text[i] == "'" { stack.removeLast() }
+                copy(1)
+            case .ansiSingle:
+                switch text[i] {
+                case "\\": copy(2)
+                case "'": stack.removeLast(); copy(1)
+                default: copy(1)
+                }
+            case .double:
+                if openExpansion() { continue }
+                switch text[i] {
+                case "\\": copy(2)
+                case "\"": stack.removeLast(); copy(1)
+                default: copy(1)
+                }
+            case .comment:
+                if text[i] == "\n" { stack.removeLast() }
+                copy(1)
+            }
+        }
+        return String(out)
     }
 
     /// `text` as a single-quoted shell word: `it's` becomes `'it'\''s'`.
@@ -222,7 +368,8 @@ final class ActionRunner {
 /// its keyword.
 struct CodeJob: Equatable, Sendable {
     enum Program: Equatable, Sendable {
-        /// Run with `/bin/zsh -l -c`, the argument already quoted in.
+        /// Run with `/bin/zsh -l -c`, `{query}` already replaced by a reference to
+        /// `$LAUNCHGRID_QUERY` (see `ActionRunner.substitutingArgument(in:)`).
         case shell(String)
         /// A file in the Application Scripts folder, with its arguments.
         case script(fileName: String, arguments: [String])

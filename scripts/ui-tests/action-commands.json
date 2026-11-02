@@ -9,7 +9,7 @@
     "actions": [
       {"name": "Long", "kind": {"type": "shell", "command": "sleep 30"}},
       {"name": "Write File", "keywords": ["wf"],
-       "kind": {"type": "shell", "command": "printf '%s' {query} > '${FILES}/out.txt' && cat '${FILES}/out.txt'"}},
+       "kind": {"type": "shell", "command": "printf '%s|%s|%s' {query} \"{query}\" '{query}' > '${FILES}/out.txt' && cat '${FILES}/out.txt'"}},
       {"name": "Fails", "kind": {"type": "shell", "command": "echo 'boom: no such thing' >&2; exit 3"}}
     ]
   },
@@ -20,7 +20,7 @@
     {"expect": {"searchResults": ["Write File"], "searchArguments": ["it's $(x) && echo pwned"]}},
     {"run": "keys:36"},
     {"expect": {"shown": true, "running": [], "lastRuns": {"Write File": "exit:0"},
-                "lastOutput": {"Write File": "it's $(x) && echo pwned"}, "toast": "Write File finished"}},
+                "lastOutput": {"Write File": "it's $(x) && echo pwned|it's $(x) && echo pwned|it's $(x) && echo pwned"}, "toast": "Write File finished"}},
     {"run": "search:"},
     {"expect": {"query": "", "pagerReady": true}},
     {"run": "click:3"},

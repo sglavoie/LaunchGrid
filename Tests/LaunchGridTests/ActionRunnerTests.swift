@@ -57,7 +57,7 @@ import Testing
     #else
     @Test func commandsRunWithTheirArgumentQuoted() throws {
         let plan = try ActionRunner.plan(shell("echo {query}", timeout: 9000, directory: "", mode: .terminal), argument: "a b")
-        #expect(plan == .code(CodeJob(program: .shell("echo 'a b'"), argument: "a b", workingDirectory: nil, timeout: 3600, mode: .terminal)))
+        #expect(plan == .code(CodeJob(program: .shell(#"echo "${LAUNCHGRID_QUERY}""#), argument: "a b", workingDirectory: nil, timeout: 3600, mode: .terminal)))
         #expect(throws: ActionRunner.Failure.noCommand) { try ActionRunner.plan(shell("  \n"), argument: nil) }
     }
 
@@ -74,9 +74,106 @@ import Testing
         #expect(result.output == "\(argument)|0")
     }
 
-    @Test func quotingEscapesEmbeddedQuotes() {
+    @Test func quotingEscapesEmbeddedQuotes() throws {
         #expect(ActionRunner.shellQuoted("it's") == #"'it'\''s'"#)
-        #expect(ActionRunner.substitutingQuoted("open {query} {query}", argument: nil) == "open '' ''")
+        #expect(try ActionRunner.substitutingArgument(in: "open {query} {query}") == #"open "${LAUNCHGRID_QUERY}" "${LAUNCHGRID_QUERY}""#)
+    }
+
+    /// `{query}` inside '…', "…" or $'…' still delivers the argument as text, never as shell
+    /// syntax, in the background and in a terminal; where it can't, the command is refused
+    /// before it runs, in the editor too.
+    @Test func quotedCommandPlaceholdersCannotExecuteArgumentSyntax() async throws {
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("ran")
+        let m = ActionRunner.shellQuoted(marker.path)
+        let arguments = ["$(touch \(m))", "`touch \(m)`", "x; touch \(m)", "it's \"quoted\" 'twice'",
+                         "a'; touch \(m); echo '", "a\"; touch \(m); echo \"", "two\nlines; touch \(m)",
+                         "  spaced  out ", "$HOME ${HOME} \\$(touch \(m))", "*", ""]
+        // Each prints [what {query} became], which must be the argument exactly.
+        let templates = [
+            "printf '[%s]' {query}",
+            "printf '[%s]' '{query}'",
+            "printf '[%s]' \"{query}\"",
+            "printf '[%s]' $'{query}'",
+            "printf '[%s]' x{query}y | cut -c1-1 >/dev/null; printf '[%s]' \"$(printf '%s' {query})\"",
+            "printf '[%s]' \"$(printf '%s' \"{query}\")\"",
+            "printf '[%s]' '<{query}>' | tr -d '<>'",
+            "printf '[%s]' \"<{query}>\" | tr -d '<>'",
+            "printf '[' # {query}\nprintf '%s]' {query}",
+        ]
+        let runner = ActionRunner()
+        for template in templates {
+            for argument in arguments {
+                // What the shell sees doesn't depend on the argument at all.
+                let plan = try ActionRunner.plan(shell(template), argument: argument)
+                guard case .code(let job) = plan, case .shell(let command) = job.program else {
+                    Issue.record("not a command: \(template)"); continue
+                }
+                #expect(!command.contains("{query}") || template.contains("# {query}"), "\(command)")
+                #expect(argument.isEmpty || !command.contains(argument), "the argument is in the command: \(command)")
+                let expected = template.contains("<") ? "[\(argument.filter { !"<>".contains($0) })]" : "[\(argument)]"
+                let background = await runner.runToEnd(job)
+                #expect(background.ending == .exited(0), "\(template) \(argument): \(background.errorOutput)")
+                #expect(background.output == expected, "\(template) with \(argument)")
+                #expect(!FileManager.default.fileExists(atPath: marker.path), "\(template) ran \(argument)")
+
+                // The terminal runs the same command from a file that exports the argument first.
+                let terminalPlan = try ActionRunner.plan(shell(template, mode: .terminal), argument: argument)
+                guard case .code(let terminalJob) = terminalPlan, case .shell(let terminalCommand) = terminalJob.program else {
+                    Issue.record("not a command: \(template)"); continue
+                }
+                #expect(terminalCommand == command)
+                let file = try ActionRunner.writeCommandFile(terminalCommand, directory: dir.path, argument: argument)
+                let terminal = try runZsh(file)
+                #expect(terminal.status == 0, "\(template) \(argument) in a terminal")
+                #expect(terminal.output == expected, "\(template) with \(argument) in a terminal")
+                #expect(!FileManager.default.fileExists(atPath: file.path), "the command file stayed")
+                #expect(!FileManager.default.fileExists(atPath: marker.path), "\(template) ran \(argument) in a terminal")
+            }
+        }
+
+        // Where the shell would read the value as code, or the reference can't fit, nothing runs.
+        let refused: [(String, ActionRunner.Failure)] = [
+            ("echo `printf %s {query}`", .placeholderInBackticks),
+            ("echo \"`printf %s {query}`\"", .placeholderInBackticks),
+            ("echo ${x:-{query}}", .placeholderInParameter),
+            ("echo \"${x:-{query}}\"", .placeholderInParameter),
+            ("echo $(( {query} + 1 ))", .placeholderInArithmetic),
+            ("(( {query} > 1 )) && echo big", .placeholderInArithmetic),
+            ("cat <<EOF\n{query}\nEOF", .placeholderAfterHereDocument),
+            ("cat <<'EOF'\n'{query}'\nEOF", .placeholderAfterHereDocument),
+        ]
+        for (template, failure) in refused {
+            for mode in [RunMode.background, .terminal] {
+                #expect(throws: failure, "\(template)") { try ActionRunner.plan(shell(template, mode: mode), argument: "$(touch \(m))") }
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [failure.message], "\(template)")
+        }
+        // Here-strings, escaped braces, comments and a `#` inside a word are not refused.
+        #expect(try ActionRunner.substitutingArgument(in: "cat <<< {query}") == #"cat <<< "${LAUNCHGRID_QUERY}""#)
+        #expect(try ActionRunner.substitutingArgument(in: "echo a#{query}") == #"echo a#"${LAUNCHGRID_QUERY}""#)
+        #expect(try ActionRunner.substitutingArgument(in: #"echo \{query} # {query}"#) == #"echo \{query} # {query}"#)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    /// Runs a terminal command file the way the terminal would, through zsh.
+    private func runZsh(_ file: URL) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-l", file.path]
+        process.environment = ActionRunner.environment(argument: nil).filter { $0.key != "LAUNCHGRID_QUERY" }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardInput = FileHandle.nullDevice
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 
     // MARK: Running
