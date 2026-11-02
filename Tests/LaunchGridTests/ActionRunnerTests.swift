@@ -256,6 +256,9 @@ import Testing
             ("a=(0); echo $(\\\n( \"{query}\" ))", .placeholderInArithmetic),
             ("a=(0); echo \"$(\\\n( {query} ))\"", .placeholderInArithmetic),
             ("a=(0); echo $\\\n[ {query} ]", .placeholderInArithmetic),
+            ("a=(0); [[ 1 -l\\\nt {query} ]] && echo less", .placeholderInNumericTest),
+            ("a=(0); [[ 1 -\\\ne\\\nq {query} ]]", .placeholderInNumericTest),
+            ("a=(0); a\\\n[\"{query}\"]=1", .placeholderInArithmetic),
         ]
         for (template, failure) in refused {
             #expect(template.contains("\\\n"))
@@ -292,6 +295,7 @@ import Testing
                 #expect(background.ending == .exited(0), "\(template) \(argument): \(background.output)")
                 #expect(background.output == expected, "\(template) with \(argument)")
                 #expect(!background.output.replacingOccurrences(of: expected, with: "").contains("INJECTED"))
+                #expect(!background.errorOutput.contains("INJECTED"))
 
                 let terminalPlan = try ActionRunner.plan(shell(template, mode: .terminal), argument: argument)
                 guard case .code(let terminalJob) = terminalPlan, case .shell(let terminalCommand) = terminalJob.program else {
