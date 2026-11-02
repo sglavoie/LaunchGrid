@@ -2061,3 +2061,73 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.grid.allApps.count == Set(r.grid.allApps.map(\.path)).count)
     }
 }
+
+@Suite struct ReconcilerActionTests {
+    let shown = action("Shown")
+    let between = action("Between", kind: .shell(command: "ls", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+    let hidden = action("Hidden", showsOnGrid: false)
+
+    func grid() -> Grid {
+        Grid(rows: 2, columns: 3, pages: [
+            Page(items: [.action(shown), .app(installed("A").makeRef()), .action(between), .app(installed("B").makeRef())]),
+            Page(items: [.folder(Folder(name: "F", apps: [installed("C").makeRef(), installed("D").makeRef()]))]),
+        ], hiddenActions: [hidden])
+    }
+
+    func actionSlots(_ g: Grid) -> [[String?]] {
+        g.pages.map { $0.items.map { $0.action?.name } }
+    }
+
+    @Test func pruningRestoringAndAutoAddLeaveActionsInPlace() {
+        var g = grid()
+        let apps = ["A", "B", "C", "D"].map { installed($0) }
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        // A and C vanish (an update), a new app arrives.
+        let during = [apps[1], apps[3], installed("New")]
+        _ = Reconciler.reconcile(&g, installed: during, autoAdd: true,
+                                pathExists: { path in during.contains { $0.path == path } }, now: now)
+        #expect(g.pages.map { $0.items.map(\.title) } == [["Shown", "Between", "B"], ["F", "New"]])
+        #expect(g.hiddenActions == [hidden])
+        #expect(g.allActions == [shown, between, hidden])
+        #expect(!g.allApps.contains { $0.name == "Shown" || $0.name == "Between" })
+        #expect(g.recentlyPruned.count == 2)
+
+        // They come back to their old slots, around the untouched actions.
+        _ = Reconciler.reconcile(&g, installed: apps + [installed("New")], autoAdd: true, now: now + 5)
+        #expect(g.pages.map { $0.items.map(\.title) } == [["Shown", "A", "Between", "B"], ["F", "New"]])
+        #expect(g.folder(g.pages[1].items[0].id)?.apps.map(\.name) == ["C", "D"])
+        #expect(g.allActions == [shown, between, hidden])
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
+    @Test func removingEveryAppLeavesTheActions() {
+        var g = grid()
+        _ = Reconciler.reconcile(&g, installed: [installed("Other")], autoAdd: false, pathExists: { _ in false })
+        #expect(g.allApps.isEmpty)
+        #expect(g.allActions == [shown, between, hidden])
+        #expect(g.pages.flatMap(\.items).map(\.title) == ["Shown", "Between"])
+    }
+
+    @Test func followingMovesLeavesActionsAlone() {
+        var g = grid()
+        let before = actionSlots(g)
+        let moved = installed("A", path: "/Applications/Moved/A.app")
+        _ = Reconciler.reconcile(&g, installed: [moved] + ["B", "C", "D"].map { installed($0) }, autoAdd: false,
+                                pathExists: { $0 != "/Applications/A.app" })
+        #expect(g.allApps.first { $0.name == "A" }?.path == moved.path)
+        g.followMoves(["/Applications": "/Volumes/Apps"])
+        #expect(actionSlots(g) == before)
+        #expect(g.allActions == [shown, between, hidden])
+    }
+
+    @Test func aSecondReconcileOfAGridWithActionsChangesNothing() {
+        var g = grid()
+        let original = g
+        let apps = ["A", "B", "C", "D"].map { installed($0) }
+        _ = Reconciler.reconcile(&g, installed: apps, autoAdd: true, pathExists: { _ in true })
+        #expect(g == original)
+        let once = g
+        _ = Reconciler.reconcile(&g, installed: apps, autoAdd: true, pathExists: { _ in true })
+        #expect(g == once)
+    }
+}

@@ -506,9 +506,9 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 
     @Test func aNewerVersionWrittenAsTextIsStillNewer() {
         #expect {
-            try GridStore.decode(Data(#"{"version": "2", "rows": 5, "columns": 7, "pages": []}"#.utf8))
+            try GridStore.decode(Data(#"{"version": "\#(Grid.currentVersion + 1)", "rows": 5, "columns": 7, "pages": []}"#.utf8))
         } throws: { error in
-            if case GridFileError.unsupportedVersion(2) = error { true } else { false }
+            if case GridFileError.unsupportedVersion(Grid.currentVersion + 1) = error { true } else { false }
         }
     }
 
@@ -517,10 +517,10 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
             let json = #"{"version": \#(version), "rows": 5, "columns": 7, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app"}}]}]}"#
             do { _ = try GridStore.decode(Data(json.utf8)); return nil } catch { return error as? GridFileError }
         }
-        for newer in [#""2.1""#, "1.5", "1e40"] {
+        for newer in [#""2.1""#, "2.5", "1e40"] {
             guard case .unsupportedVersion = error(newer) else { Issue.record("\(newer) isn't newer"); continue }
         }
-        for broken in [#"{"major": 2}"#, #""one""#, "0.5", "[1]"] {
+        for broken in [#"{"major": 2}"#, #""one""#, "0.5", "1.5", "[1]"] {
             guard case .invalid = error(broken) else { Issue.record("\(broken) isn't invalid"); continue }
         }
         #expect(error("null") == nil, "an empty version is version 1")
@@ -915,7 +915,7 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
     @Test func missingVersionDecodesAsV1AndNormalizes() throws {
         let json = #"{"rows": 1, "columns": 1, "pages": [{"id": "8F0E4C1B-5B0B-4E5E-8D7B-1D2E3F4A5B6C", "items": [{"type": "app", "app": {"id": "1F0E4C1B-5B0B-4E5E-8D7B-1D2E3F4A5B6C", "path": "/Applications/A.app", "name": "A"}}, {"type": "app", "app": {"id": "2F0E4C1B-5B0B-4E5E-8D7B-1D2E3F4A5B6C", "path": "/Applications/B.app", "name": "B"}}]}], "removedBundleIDs": []}"#
         let g = try GridStore.decode(json.data(using: .utf8)!)
-        #expect(g.version == 1)
+        #expect(g.version == Grid.currentVersion, "read as version 1, saved as the current one")
         #expect(g.pages.count == 2) // overflow spilled
     }
 }
@@ -1125,5 +1125,229 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         g.removingEmptiedPages { $0.move([b], toPage: 0, at: 1) }
         #expect(g.pages.count == 2) // the user-made empty page survives
         #expect(titles(g.pages[0]) == ["A", "B"])
+    }
+}
+
+func action(_ name: String, showsOnGrid: Bool = true, kind: ActionKind? = nil) -> Action {
+    Action(name: name, kind: kind ?? .openURL(template: "https://example.com/\(name.lowercased())"), showsOnGrid: showsOnGrid)
+}
+
+@Suite struct ActionTests {
+    static let kinds: [ActionKind] = [
+        .openURL(template: "https://github.com/search?q={query}"),
+        .openFile(path: "/Users/x/notes.md", appPath: "/Applications/TextEdit.app"),
+        .openFile(path: "/Users/x", appPath: nil),
+        .shortcut(name: "Make GIF", input: "clipboard"),
+        .shortcut(name: "Plain", input: nil),
+        .shell(command: "make -C ~/src", runMode: .terminal, workingDirectory: "/tmp", timeoutSeconds: 30),
+        .shell(command: "true", runMode: .background, workingDirectory: nil, timeoutSeconds: nil),
+        .userScript(fileName: "sync.sh", arguments: ["--fast", "{query}"], runMode: .background),
+    ]
+
+    @Test func keywordsAreTrimmedLowercasedAndDeduplicated() {
+        var a = Action(name: "GitHub", keywords: [" GH ", "gh", "", "Git"], kind: Self.kinds[0])
+        #expect(a.keywords == ["gh", "git"])
+        a.keywords = ["Hub", "hub ", "  "]
+        #expect(a.keywords == ["hub"])
+    }
+
+    @Test func eachKindHasItsDefaultSymbol() {
+        #expect(Self.kinds.map { Action(name: "x", kind: $0).icon } == [
+            .symbol("link"), .symbol("doc"), .symbol("doc"), .symbol("square.stack.3d.up"),
+            .symbol("square.stack.3d.up"), .symbol("terminal"), .symbol("terminal"), .symbol("scroll"),
+        ])
+    }
+
+    @Test func everyKindAndIconRoundTripsThroughGridStore() throws {
+        let icons: [ActionIcon?] = [nil, .symbol("star"), .emoji("🚀"), .image(path: "/Users/x/i.png")]
+        let actions = Self.kinds.enumerated().map { i, kind in
+            Action(name: "A\(i)", keywords: ["k\(i)"], icon: icons[i % icons.count], kind: kind)
+        }
+        let hidden = Action(name: "Hidden", kind: Self.kinds[3], showsOnGrid: false)
+        let grid = Grid(rows: 3, columns: 4, pages: [Page(items: [.app(app("A"))] + actions.map(GridItem.action))],
+                        hiddenActions: [hidden])
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        try store.save(grid)
+        let loaded = try store.load()
+        #expect(loaded.pages.map(\.items) == grid.pages.map(\.items))
+        #expect(loaded.hiddenActions == [hidden])
+        #expect(loaded.allApps.map(\.name) == ["A"])
+        let json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: store.url)) as? [String: Any])
+        #expect(json["version"] as? Int == 2)
+    }
+
+    @Test func aLayoutWithoutActionsOmitsHiddenActionsButSavesAsVersion2() throws {
+        let data = try GridStore.encode(Grid(pages: [Page(items: [.app(app("A"))])]))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["hiddenActions"] == nil)
+        #expect(json["version"] as? Int == 2)
+    }
+
+    @Test func aVersion1FileStillLoads() throws {
+        let json = #"{"version": 1, "rows": 2, "columns": 2, "pages": [{"items": [{"type": "app", "app": {"path": "/Applications/A.app"}}, {"type": "folder", "folder": {"name": "F", "apps": [{"path": "/Applications/B.app"}]}}]}]}"#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(skipped == 0)
+        #expect(grid.allApps.map(\.name) == ["A", "B"])
+        #expect(grid.allActions.isEmpty)
+        #expect(grid.version == 2, "saving writes the current format")
+    }
+
+    @Test func aBuildThatOnlyKnowsVersion1RejectsALayoutWithActions() throws {
+        let data = try GridStore.encode(Grid(pages: [Page(items: [.action(action("GitHub"))])]))
+        #expect(throws: GridFileError.self) { try GridStore.decodeCountingSkipped(data, knownVersion: 1) }
+        do {
+            _ = try GridStore.decodeCountingSkipped(data, knownVersion: 1)
+        } catch GridFileError.unsupportedVersion(let v) {
+            #expect(v == 2)
+        }
+        #expect(try GridStore.decodeCountingSkipped(data).grid.allActions.map(\.name) == ["GitHub"])
+    }
+
+    @Test func lenientDecodingFillsDefaultsAndSkipsUnknownKinds() throws {
+        let json = #"""
+        {"version": 2, "pages": [{"items": [
+            {"type": "action", "action": {"name": "Min", "kind": {"type": "shell", "command": "ls"}}},
+            {"type": "action", "action": {"name": "Future", "kind": {"type": "teleport", "where": "moon"}}},
+            {"type": "action", "action": {"name": "BadIcon", "icon": {"type": "hologram"}, "keywords": [" A ", "a"], "kind": {"type": "shortcut", "name": "S"}}},
+            {"type": "app", "app": {"path": "/Applications/A.app"}}
+        ]}], "hiddenActions": [
+            {"name": "H", "showsOnGrid": false, "kind": {"type": "openURL", "template": "x://"}},
+            {"name": "NoKind"}
+        ]}
+        """#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(skipped == 2)
+        let actions = grid.allActions
+        #expect(actions.map(\.name) == ["Min", "BadIcon", "H"])
+        #expect(actions[0].keywords == [])
+        #expect(actions[0].showsOnGrid)
+        #expect(actions[0].icon == .symbol("terminal"))
+        #expect(actions[0].kind == .shell(command: "ls", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        #expect(actions[1].icon == .symbol("square.stack.3d.up"))
+        #expect(actions[1].keywords == ["a"])
+        #expect(grid.hiddenActions.map(\.name) == ["H"])
+    }
+
+    @Test func anActionsOnlyFileWithOneBadEntryStillLoads() throws {
+        let json = #"{"version": 2, "pages": [{"items": [{"type": "action", "action": {"name": "Ok", "kind": {"type": "openURL", "template": "x://"}}}, {"type": "action", "action": {"name": "Bad"}}]}]}"#
+        let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(skipped == 1)
+        #expect(grid.allActions.map(\.name) == ["Ok"])
+    }
+
+    @Test func repeatedActionIDsAreFreshened() throws {
+        let a = action("A")
+        var b = action("B", showsOnGrid: false)
+        b.id = a.id
+        let data = try GridStore.encode(Grid(pages: [Page(items: [.action(a), .action(a)])], hiddenActions: [b]))
+        let grid = try GridStore.decode(data)
+        let ids = grid.allActions.map(\.id)
+        #expect(ids.count == 3)
+        #expect(Set(ids).count == 3)
+    }
+
+    @Test func lookupCoversActionsOnPagesAndHidden() {
+        let shown = action("Shown"), hidden = action("Hidden", showsOnGrid: false)
+        let g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A")), .action(shown)])], hiddenActions: [hidden])
+        #expect(g.locate(shown.id) == ItemLocation(page: 0, index: 1))
+        #expect(g.locate(hidden.id) == nil, "locate only finds items on a page")
+        #expect(g.locateAction(shown.id) == .page(ItemLocation(page: 0, index: 1)))
+        #expect(g.locateAction(hidden.id) == .hidden(index: 0))
+        #expect(g.locateAction(g.allApps[0].id) == nil)
+        #expect(g.item(shown.id) == .action(shown))
+        #expect(g.item(hidden.id) == .action(hidden))
+        #expect(g.allActions == [shown, hidden])
+        #expect(g.allApps.map(\.name) == ["A"])
+        #expect(GridItem.action(shown).apps.isEmpty)
+        #expect(GridItem.action(shown).title == "Shown")
+    }
+
+    @Test func searchItemsCoverAppsFolderContentsAndActions() {
+        let shown = action("Shown"), hidden = action("Hidden", showsOnGrid: false)
+        let g = Grid(rows: 1, columns: 4, pages: [
+            Page(items: [.app(app("A")), .folder(Folder(name: "F", apps: [app("B"), app("C")])), .action(shown)]),
+        ], hiddenActions: [hidden])
+        #expect(g.allSearchItems.map(\.title) == ["A", "B", "C", "Shown", "Hidden"])
+    }
+
+    @Test func renameSetsAnActionsName() {
+        let shown = action("Shown"), hidden = action("Hidden", showsOnGrid: false)
+        var g = Grid(pages: [Page(items: [.action(shown)])], hiddenActions: [hidden])
+        g.rename(shown.id, to: "  Renamed ")
+        g.rename(hidden.id, to: "Secret")
+        g.rename(hidden.id, to: "   ")
+        #expect(g.allActions.map(\.name) == ["Renamed", "Secret"])
+    }
+
+    @Test func removingActionsLeavesExclusionsAlone() {
+        let shown = action("Shown"), hidden = action("Hidden", showsOnGrid: false)
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A")), .action(shown)])], hiddenActions: [hidden])
+        g.remove([shown.id, hidden.id])
+        #expect(g.allActions.isEmpty)
+        #expect(g.removedBundleIDs.isEmpty)
+        #expect(g.allApps.map(\.name) == ["A"])
+    }
+
+    @Test func updateActionReplacesInPlaceAndMovesBetweenPageAndHidden() {
+        let a = action("A")
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("X")), .action(a)]), Page(items: [.app(app("Y"))])])
+        var edited = a
+        edited.name = "Edited"
+        edited.keywords = ["e"]
+        g.updateAction(edited)
+        #expect(g.pages[0].items[1] == .action(edited))
+
+        edited.showsOnGrid = false
+        g.updateAction(edited)
+        #expect(g.pages.map(titles) == [["X"], ["Y"]])
+        #expect(g.hiddenActions == [edited])
+
+        g.updateAction(edited) // unchanged, stays hidden
+        #expect(g.hiddenActions == [edited])
+
+        edited.showsOnGrid = true
+        g.updateAction(edited)
+        #expect(g.hiddenActions.isEmpty)
+        #expect(g.pages.map(titles) == [["X", "Edited"], ["Y"]], "back in the first free slot")
+
+        let before = g
+        g.updateAction(action("Unknown"))
+        #expect(g == before)
+    }
+
+    @Test(arguments: FolderPlacement.allCases)
+    func sortingOrdersActionsByTitleAmongApps(placement: FolderPlacement) {
+        var g = Grid(rows: 1, columns: 5, pages: [Page(items: [
+            .app(app("D")), .action(action("B")), .folder(Folder(name: "C", apps: [app("Z")])), .app(app("A")), .action(action("E")),
+        ])])
+        var page = g
+        page.sortPage(0, folders: placement)
+        g.sortEverything(folders: placement)
+        let expected: [String] = switch placement {
+        case .first: ["C", "A", "B", "D", "E"]
+        case .last: ["A", "B", "D", "E", "C"]
+        case .mixed: ["A", "B", "C", "D", "E"]
+        }
+        #expect(titles(page.pages[0]) == expected)
+        #expect(titles(g.pages[0]) == expected)
+    }
+
+    @Test func groupingAndAddingToAFolderLeaveActionsInPlace() throws {
+        let act = action("Act")
+        var g = Grid(rows: 1, columns: 5, pages: [Page(items: [
+            .app(app("A")), .action(act), .app(app("B")), .folder(Folder(name: "F", apps: [app("C")])),
+        ])])
+        let ids = g.pages[0].items.map(\.id)
+        // Anchored on the action: the folder goes where the first app was.
+        let grouped = g.group([ids[1], ids[0], ids[2]], name: "G", anchor: ids[1])
+        let folderID = try #require(grouped)
+        #expect(titles(g.pages[0]) == ["G", "Act", "F"])
+        #expect(g.folder(folderID)?.apps.map(\.name) == ["A", "B"])
+        #expect(g.group([act.id], name: "Only") == nil)
+        g.addToFolder([act.id], folder: ids[3])
+        #expect(titles(g.pages[0]) == ["G", "Act", "F"])
+        #expect(g.folder(ids[3])?.apps.map(\.name) == ["C"])
     }
 }

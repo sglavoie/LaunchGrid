@@ -498,6 +498,8 @@ extension AppState {
                 let apps = [a] + ids.compactMap { grid.item($0)?.app }
                 let name = GridBuilder.folderName(for: apps.map { installedApp(for: $0) })
                 apply { g in g.removingEmptiedPages { $0.group([target] + ids, name: name, anchor: target) } }
+            case .action:
+                break // Actions don't go in folders yet.
             }
         } else if case .folder(let fid) = drag.source, openFolderID == fid {
             let gap = drag.pendingGap ?? drag.gap ?? remainingFolderApps().count

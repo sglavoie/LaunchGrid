@@ -13,6 +13,12 @@ public struct ItemLocation: Equatable, Sendable {
     }
 }
 
+/// Where an action is: on a page like any other item, or search-only in `Grid.hiddenActions`.
+public enum ActionLocation: Equatable, Sendable {
+    case page(ItemLocation)
+    case hidden(index: Int)
+}
+
 public enum FolderPlacement: String, Codable, CaseIterable, Sendable {
     case first, last, mixed
 }
@@ -32,9 +38,19 @@ extension Grid {
         return nil
     }
 
-    /// The item with `id`; an app inside a folder is returned as `.app`.
+    /// Where the action with `id` is, also when it is search-only. `locate(_:)` only finds
+    /// items on a page, so its callers can index `pages` with whatever it returns.
+    public func locateAction(_ id: UUID) -> ActionLocation? {
+        if let loc = locate(id), loc.folderIndex == nil, pages[loc.page].items[loc.index].action != nil {
+            return .page(loc)
+        }
+        return hiddenActions.firstIndex { $0.id == id }.map { .hidden(index: $0) }
+    }
+
+    /// The item with `id`; an app inside a folder is returned as `.app`, a search-only
+    /// action as `.action`.
     public func item(_ id: UUID) -> GridItem? {
-        guard let loc = locate(id) else { return nil }
+        guard let loc = locate(id) else { return hiddenActions.first { $0.id == id }.map(GridItem.action) }
         let top = pages[loc.page].items[loc.index]
         if let fi = loc.folderIndex, case .folder(let f) = top { return .app(f.apps[fi]) }
         return top
@@ -47,6 +63,22 @@ extension Grid {
     /// All apps, in visual order, including those inside folders.
     public var allApps: [AppRef] {
         pages.flatMap { $0.items.flatMap(\.apps) }
+    }
+
+    /// All actions: those on pages in visual order, then the search-only ones.
+    public var allActions: [Action] {
+        pages.flatMap { $0.items.compactMap(\.action) } + hiddenActions
+    }
+
+    /// Everything search can find: apps (folder contents too) and actions, in visual order,
+    /// then the search-only actions. Folders themselves are left out.
+    public var allSearchItems: [GridItem] {
+        pages.flatMap { page in
+            page.items.flatMap { item -> [GridItem] in
+                if case .folder(let f) = item { return f.apps.map(GridItem.app) }
+                return [item]
+            }
+        } + hiddenActions.map(GridItem.action)
     }
 
     public var appKeys: Set<String> {
@@ -192,10 +224,12 @@ extension Grid {
     /// Removes items; their bundle IDs (or paths) are remembered so scans don't re-add them.
     /// A copy sharing its bundle ID with another in `installed` or on the grid is remembered
     /// by path, so the other copy can stay.
+    /// Actions are simply dropped, search-only ones too; they never touch the exclusions.
     public mutating func remove(_ ids: [UUID], installed: [InstalledApp] = []) {
         let taken = detach(ids)
         let folders = Set(taken.compactMap(\.folder).map(\.id))
         let wanted = Set(ids)
+        hiddenActions.removeAll { wanted.contains($0.id) }
         // A folder's temporarily missing apps leave with it, or the next scan would restore
         // them outside the removed folder. Keep the other records as known copies too:
         // removing a visible copy must not exclude its sibling while that one is updating.
@@ -213,9 +247,12 @@ extension Grid {
     // MARK: Folders
 
     /// Groups items into a new folder placed where `anchor` (or the first item) was.
-    /// Folders among the items are flattened, since folders cannot nest.
+    /// Folders among the items are flattened, since folders cannot nest. Actions can't go
+    /// in folders yet: they stay where they are.
     @discardableResult
     public mutating func group(_ ids: [UUID], name: String, anchor: UUID? = nil) -> UUID? {
+        let ids = withoutActions(ids)
+        let anchor = anchor.flatMap { isAction($0) ? nil : $0 }
         guard let anchorID = anchor ?? ids.first, let loc = locate(anchorID) else { return nil }
         let target = loc.folderIndex == nil ? loc : ItemLocation(page: loc.page, index: loc.index)
         // Count items before the anchor on its page that will be detached, to keep its slot.
@@ -232,9 +269,10 @@ extension Grid {
         return folder.id
     }
 
-    /// Adds items to an existing folder; folders among them are flattened into it.
+    /// Adds items to an existing folder; folders among them are flattened into it. Actions
+    /// can't go in folders yet: they stay where they are.
     public mutating func addToFolder(_ ids: [UUID], folder folderID: UUID, at index: Int? = nil) {
-        let moving = ids.filter { $0 != folderID }
+        let moving = withoutActions(ids).filter { $0 != folderID }
         let taken = detach(moving)
         let apps = taken.flatMap(\.apps)
         guard let loc = locate(folderID), loc.folderIndex == nil,
@@ -249,6 +287,12 @@ extension Grid {
         pages[loc.page].items[loc.index] = .folder(f)
         normalize()
         movePrunedContents(of: taken, to: folderID, at: i)
+    }
+
+    private func isAction(_ id: UUID) -> Bool { locateAction(id) != nil }
+
+    private func withoutActions(_ ids: [UUID]) -> [UUID] {
+        ids.filter { !isAction($0) }
     }
 
     /// Flattening a folder also moves the apps an updater temporarily took out of it.
@@ -314,8 +358,12 @@ extension Grid {
     // MARK: Renaming
 
     public mutating func rename(_ id: UUID, to newName: String) {
-        guard let loc = locate(id) else { return }
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if case .hidden(let k) = locateAction(id) {
+            if !trimmed.isEmpty { hiddenActions[k].name = trimmed }
+            return
+        }
+        guard let loc = locate(id) else { return }
         func renamed(_ a: AppRef) -> AppRef {
             var a = a
             a.displayName = (trimmed.isEmpty || trimmed == a.name) ? nil : trimmed
@@ -336,6 +384,30 @@ extension Grid {
                 }
             }
             pages[loc.page].items[loc.index] = .folder(f)
+        case .action(var a):
+            guard !trimmed.isEmpty else { return }
+            a.name = trimmed
+            pages[loc.page].items[loc.index] = .action(a)
+        }
+    }
+
+    /// Replaces the action with `action.id`. One whose `showsOnGrid` changed moves between
+    /// its page and `hiddenActions`; one becoming visible goes to the first free slot.
+    public mutating func updateAction(_ action: Action) {
+        switch locateAction(action.id) {
+        case nil:
+            return
+        case .page(let loc) where action.showsOnGrid:
+            pages[loc.page].items[loc.index] = .action(action)
+        case .page:
+            detach([action.id])
+            hiddenActions.append(action)
+            normalize()
+        case .hidden(let k) where action.showsOnGrid:
+            hiddenActions.remove(at: k)
+            appendToFirstFree([.action(action)])
+        case .hidden(let k):
+            hiddenActions[k] = action
         }
     }
 
@@ -366,6 +438,8 @@ extension Grid {
                 case .folder(var f):
                     f.apps = f.apps.map(moved)
                     pages[p].items[i] = .folder(f)
+                case .action:
+                    break
                 }
             }
         }
@@ -511,6 +585,7 @@ extension Grid {
 
     // MARK: Sorting
 
+    /// Actions sort by title among the apps; `folders` places only folders.
     static func sorted(_ items: [GridItem], folders: FolderPlacement) -> [GridItem] {
         let byTitle: (GridItem, GridItem) -> Bool = {
             $0.title.localizedStandardCompare($1.title) == .orderedAscending

@@ -252,6 +252,9 @@ public enum Reconciler {
                     } else {
                         kept = .folder(f)
                     }
+                case .action:
+                    // Not a bundle on disk: nothing to prune, refresh or follow.
+                    kept = item
                 }
                 if kept == nil { removedSlots[pageID, default: []].append(i) }
                 return kept

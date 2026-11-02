@@ -254,7 +254,7 @@ final class AppState {
         }
         // Older files have no setup marker. Apps or restoration records still identify
         // their existing layout, and the next edit saves the marker even if it empties it.
-        let hasLayout = loaded.map { $0.hasCreatedLayout || !$0.allApps.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
+        let hasLayout = loaded.map { $0.hasCreatedLayout || !$0.allApps.isEmpty || !$0.allActions.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
         hasGridFile = hasLayout
         if hasLayout { loaded?.hasCreatedLayout = true }
         grid = loaded ?? Grid()
@@ -1235,6 +1235,7 @@ final class AppState {
         switch item {
         case .app(let a): launch(a)
         case .folder(let f): openFolder(f.id)
+        case .action: break // Running actions comes in a later version.
         }
     }
 

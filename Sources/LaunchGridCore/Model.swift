@@ -2,7 +2,7 @@ import Foundation
 
 /// The whole layout. A value type, so any state can be snapshotted for undo/redo.
 public struct Grid: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int = Grid.currentVersion
     /// Setup was completed, even if the user later removes every app. False also covers
@@ -18,14 +18,17 @@ public struct Grid: Codable, Equatable, Sendable {
     /// Apps the reconciler pruned lately, so one that comes back (an updater deletes, then
     /// re-copies the bundle) returns to its old slot instead of the end of the grid.
     public var recentlyPruned: [PrunedApp] = []
+    /// Search-only actions (`showsOnGrid == false`): kept in the layout, but on no page.
+    public var hiddenActions: [Action] = []
 
     public init(rows: Int = 5, columns: Int = 7, pages: [Page] = [Page()], removedBundleIDs: Set<String> = [],
-                recentlyPruned: [PrunedApp] = []) {
+                recentlyPruned: [PrunedApp] = [], hiddenActions: [Action] = []) {
         self.rows = max(1, rows)
         self.columns = max(1, columns)
         self.pages = pages.isEmpty ? [Page()] : pages
         self.removedBundleIDs = removedBundleIDs
         self.recentlyPruned = recentlyPruned
+        self.hiddenActions = hiddenActions
     }
 
     public var capacity: Int { rows * columns }
@@ -46,11 +49,13 @@ public struct Page: Codable, Equatable, Identifiable, Sendable {
 public enum GridItem: Equatable, Identifiable, Sendable {
     case app(AppRef)
     case folder(Folder)
+    case action(Action)
 
     public var id: UUID {
         switch self {
         case .app(let a): a.id
         case .folder(let f): f.id
+        case .action(let a): a.id
         }
     }
 
@@ -64,26 +69,34 @@ public enum GridItem: Equatable, Identifiable, Sendable {
         return nil
     }
 
+    public var action: Action? {
+        if case .action(let a) = self { return a }
+        return nil
+    }
+
     /// Name used for sorting and display.
     public var title: String {
         switch self {
         case .app(let a): a.title
         case .folder(let f): f.name
+        case .action(let a): a.name
         }
     }
 
-    /// Every app this item represents (one for an app, all contents for a folder).
+    /// Every app this item represents (one for an app, all contents for a folder, none for
+    /// an action).
     public var apps: [AppRef] {
         switch self {
         case .app(let a): [a]
         case .folder(let f): f.apps
+        case .action: []
         }
     }
 }
 
 extension GridItem: Codable {
-    private enum CodingKeys: String, CodingKey { case type, app, folder }
-    private enum Kind: String, Codable { case app, folder }
+    private enum CodingKeys: String, CodingKey { case type, app, folder, action }
+    private enum Kind: String, Codable { case app, folder, action }
 
     /// An unknown `type` fails the item, which is skipped like any other unreadable entry, so a
     /// new item kind needs a `Grid.currentVersion` bump: older builds then say the file is from
@@ -93,6 +106,7 @@ extension GridItem: Codable {
         switch try c.decode(Kind.self, forKey: .type) {
         case .app: self = .app(try c.decode(AppRef.self, forKey: .app))
         case .folder: self = .folder(try c.decode(Folder.self, forKey: .folder))
+        case .action: self = .action(try c.decode(Action.self, forKey: .action))
         }
     }
 
@@ -105,6 +119,9 @@ extension GridItem: Codable {
         case .folder(let f):
             try c.encode(Kind.folder, forKey: .type)
             try c.encode(f, forKey: .folder)
+        case .action(let a):
+            try c.encode(Kind.action, forKey: .type)
+            try c.encode(a, forKey: .action)
         }
     }
 }
@@ -198,6 +215,158 @@ public struct Folder: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// A user-defined grid item that does something other than open an app: open a URL or a
+/// file, run a Shortcut, a shell command or a user script. Not an `AppRef`, so the reconciler,
+/// bookmarks and icon scanning, which deal in bundles on disk, never see one.
+public struct Action: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    /// Exact-match search keywords, kept trimmed, lowercased and without repeats or blanks.
+    public var keywords: [String] { didSet { keywords = Action.normalizedKeywords(keywords) } }
+    public var icon: ActionIcon
+    public var kind: ActionKind
+    /// False for a search-only action, which lives in `Grid.hiddenActions` instead of on a page.
+    public var showsOnGrid: Bool
+
+    public init(id: UUID = UUID(), name: String, keywords: [String] = [], icon: ActionIcon? = nil,
+                kind: ActionKind, showsOnGrid: Bool = true) {
+        self.id = id
+        self.name = name
+        self.keywords = Action.normalizedKeywords(keywords)
+        self.icon = icon ?? kind.defaultIcon
+        self.kind = kind
+        self.showsOnGrid = showsOnGrid
+    }
+
+    public var title: String { name }
+
+    static func normalizedKeywords(_ keywords: [String]) -> [String] {
+        var seen = Set<String>()
+        return keywords.compactMap { word in
+            let w = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return !w.isEmpty && seen.insert(w).inserted ? w : nil
+        }
+    }
+}
+
+public enum ActionIcon: Codable, Equatable, Sendable {
+    /// An SF Symbol name.
+    case symbol(String)
+    case emoji(String)
+    case image(path: String)
+
+    private enum CodingKeys: String, CodingKey { case type, name, value, path }
+    private enum Kind: String, Codable { case symbol, emoji, image }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(Kind.self, forKey: .type) {
+        case .symbol: self = .symbol(try c.decode(String.self, forKey: .name))
+        case .emoji: self = .emoji(try c.decode(String.self, forKey: .value))
+        case .image: self = .image(path: try c.decode(String.self, forKey: .path))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .symbol(let name):
+            try c.encode(Kind.symbol, forKey: .type)
+            try c.encode(name, forKey: .name)
+        case .emoji(let value):
+            try c.encode(Kind.emoji, forKey: .type)
+            try c.encode(value, forKey: .value)
+        case .image(let path):
+            try c.encode(Kind.image, forKey: .type)
+            try c.encode(path, forKey: .path)
+        }
+    }
+}
+
+public enum RunMode: String, Codable, CaseIterable, Sendable {
+    case background, terminal
+}
+
+public enum ActionKind: Equatable, Sendable {
+    /// `template` may contain `{query}`, replaced by the search argument.
+    case openURL(template: String)
+    /// `appPath` nil opens the file with its default app.
+    case openFile(path: String, appPath: String?)
+    case shortcut(name: String, input: String?)
+    case shell(command: String, runMode: RunMode, workingDirectory: String?, timeoutSeconds: Int?)
+    /// A script in the app's Application Scripts folder.
+    case userScript(fileName: String, arguments: [String], runMode: RunMode)
+
+    public var defaultIcon: ActionIcon {
+        switch self {
+        case .openURL: .symbol("link")
+        case .openFile: .symbol("doc")
+        case .shortcut: .symbol("square.stack.3d.up")
+        case .shell: .symbol("terminal")
+        case .userScript: .symbol("scroll")
+        }
+    }
+}
+
+extension ActionKind: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, template, path, appPath, name, input, command, runMode, workingDirectory, timeoutSeconds, fileName, arguments
+    }
+    private enum Kind: String, Codable { case openURL, openFile, shortcut, shell, userScript }
+
+    /// An unknown `type` fails the kind, and with it only its action, which is skipped.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let runMode = { (try? c.decodeIfPresent(RunMode.self, forKey: .runMode)) ?? .background }
+        switch try c.decode(Kind.self, forKey: .type) {
+        case .openURL:
+            self = .openURL(template: try c.decode(String.self, forKey: .template))
+        case .openFile:
+            self = .openFile(path: try c.decode(String.self, forKey: .path),
+                             appPath: try? c.decodeIfPresent(String.self, forKey: .appPath))
+        case .shortcut:
+            self = .shortcut(name: try c.decode(String.self, forKey: .name),
+                             input: try? c.decodeIfPresent(String.self, forKey: .input))
+        case .shell:
+            self = .shell(command: try c.decode(String.self, forKey: .command), runMode: runMode(),
+                          workingDirectory: try? c.decodeIfPresent(String.self, forKey: .workingDirectory),
+                          timeoutSeconds: try? c.decodeIfPresent(Int.self, forKey: .timeoutSeconds))
+        case .userScript:
+            self = .userScript(fileName: try c.decode(String.self, forKey: .fileName),
+                               arguments: (try? c.decodeIfPresent([String].self, forKey: .arguments)) ?? [],
+                               runMode: runMode())
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .openURL(let template):
+            try c.encode(Kind.openURL, forKey: .type)
+            try c.encode(template, forKey: .template)
+        case .openFile(let path, let appPath):
+            try c.encode(Kind.openFile, forKey: .type)
+            try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(appPath, forKey: .appPath)
+        case .shortcut(let name, let input):
+            try c.encode(Kind.shortcut, forKey: .type)
+            try c.encode(name, forKey: .name)
+            try c.encodeIfPresent(input, forKey: .input)
+        case .shell(let command, let runMode, let workingDirectory, let timeoutSeconds):
+            try c.encode(Kind.shell, forKey: .type)
+            try c.encode(command, forKey: .command)
+            try c.encode(runMode, forKey: .runMode)
+            try c.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
+            try c.encodeIfPresent(timeoutSeconds, forKey: .timeoutSeconds)
+        case .userScript(let fileName, let arguments, let runMode):
+            try c.encode(Kind.userScript, forKey: .type)
+            try c.encode(fileName, forKey: .fileName)
+            try c.encode(arguments, forKey: .arguments)
+            try c.encode(runMode, forKey: .runMode)
+        }
+    }
+}
+
 /// An application found on disk by `AppCatalog`.
 public struct InstalledApp: Equatable, Hashable, Sendable {
     public var bundleID: String?
@@ -224,7 +393,7 @@ public struct InstalledApp: Equatable, Hashable, Sendable {
 // title) fall back to defaults so hand-edited or older files still load, and an entry that can't
 // be read (an app without a path) is skipped, not the whole file.
 extension Grid {
-    private enum CodingKeys: String, CodingKey { case version, hasCreatedLayout, rows, columns, pages, removedBundleIDs, recentlyPruned }
+    private enum CodingKeys: String, CodingKey { case version, hasCreatedLayout, rows, columns, pages, removedBundleIDs, recentlyPruned, hiddenActions }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -240,7 +409,8 @@ extension Grid {
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
             removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs, countingLayoutEntries: false) ?? []),
             // Keep readable restoration records even when another one is damaged.
-            recentlyPruned: try c.decodeLossily(PrunedApp.self, forKey: .recentlyPruned, allowNull: true) ?? []
+            recentlyPruned: try c.decodeLossily(PrunedApp.self, forKey: .recentlyPruned, allowNull: true) ?? [],
+            hiddenActions: try c.decodeLossily(Action.self, forKey: .hiddenActions, allowNull: true) ?? []
         )
         // GridStore reads the version first, also when written as text, and rejects bad ones.
         version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? 1
@@ -257,6 +427,7 @@ extension Grid {
         // Sorted, so saving the same grid twice writes the same bytes.
         try c.encode(removedBundleIDs.sorted(), forKey: .removedBundleIDs)
         try c.encode(recentlyPruned, forKey: .recentlyPruned)
+        if !hiddenActions.isEmpty { try c.encode(hiddenActions, forKey: .hiddenActions) }
     }
 }
 
@@ -297,6 +468,24 @@ extension Folder {
             id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
             name: (try? c.decodeIfPresent(String.self, forKey: .name)) ?? String(localized: "Folder"),
             apps: try c.decodeLossily(AppRef.self, forKey: .apps) ?? []
+        )
+    }
+}
+
+extension Action {
+    private enum CodingKeys: String, CodingKey { case id, name, keywords, icon, kind, showsOnGrid }
+
+    /// Only `kind` is required; a kind this build doesn't know fails the action alone.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(ActionKind.self, forKey: .kind)
+        self.init(
+            id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
+            name: (try? c.decodeIfPresent(String.self, forKey: .name)) ?? String(localized: "Action"),
+            keywords: ((try? c.decodeIfPresent([String?].self, forKey: .keywords)) ?? []).compactMap { $0 },
+            icon: try? c.decodeIfPresent(ActionIcon.self, forKey: .icon),
+            kind: kind,
+            showsOnGrid: (try? c.decodeIfPresent(Bool.self, forKey: .showsOnGrid)) ?? true
         )
     }
 }

@@ -633,6 +633,7 @@ struct ItemView: View {
         switch item {
         case .app(let a): AppIcon(path: a.path, size: iconSize)
         case .folder(let f): FolderIcon(folder: f, size: iconSize, open: mergeTarget)
+        case .action(let a): ActionIconPlaceholder(action: a, size: iconSize)
         }
     }
 }
@@ -751,6 +752,7 @@ struct DragGhost: View {
                 switch item {
                 case .app(let a): AppIcon(path: a.path, size: size)
                 case .folder(let f): FolderIcon(folder: f, size: size)
+                case .action(let a): ActionIconPlaceholder(action: a, size: size)
                 }
             }
             .scaleEffect(1.1)
@@ -1294,4 +1296,24 @@ struct BackgroundMenu: View {
     @Environment(AppState.self) private var state
 
     var body: some View { MenuEntries(entries: MenuEntry.page(state: state)) }
+}
+
+/// Stand-in icon so a layout holding actions still draws; the real action tile comes later.
+struct ActionIconPlaceholder: View {
+    let action: Action
+    let size: CGFloat
+
+    var body: some View {
+        let symbol: String = {
+            if case .symbol(let name) = action.icon { return name }
+            if case .symbol(let name) = action.kind.defaultIcon { return name }
+            return "questionmark.square"
+        }()
+        Image(systemName: symbol)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size * 0.6, height: size * 0.6)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
 }

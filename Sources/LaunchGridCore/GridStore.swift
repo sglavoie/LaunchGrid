@@ -280,6 +280,12 @@ public struct GridStore: Sendable {
 
     /// `decode(_:)`, also telling how many entries couldn't be read and were left out.
     public static func decodeCountingSkipped(_ data: Data) throws -> (grid: Grid, skipped: Int) {
+        try decodeCountingSkipped(data, knownVersion: Grid.currentVersion)
+    }
+
+    /// `knownVersion` stands for the newest format this build reads; tests lower it to play
+    /// an older build opening a newer file.
+    static func decodeCountingSkipped(_ data: Data, knownVersion: Int) throws -> (grid: Grid, skipped: Int) {
         /// The version, also when written as text ("2"), so a newer file is told apart from a broken one.
         struct Header: Decodable {
             var version: Int?
@@ -299,13 +305,13 @@ public struct GridStore: Sendable {
         let header = try? JSONDecoder().decode(Header.self, from: data)
         // Treated as version 1 it would be saved over as one, losing what a newer version wrote.
         if let unreadable = header?.unreadable {
-            if let v = unreadable, v.isFinite, v > Double(Grid.currentVersion) {
+            if let v = unreadable, v.isFinite, v > Double(knownVersion) {
                 throw GridFileError.unsupportedVersion(Int(min(v, 1_000_000)))
             }
             throw GridFileError.invalid("its format version isn't a whole number")
         }
         let version = header?.version ?? 1
-        guard version <= Grid.currentVersion else { throw GridFileError.unsupportedVersion(version) }
+        guard version <= knownVersion else { throw GridFileError.unsupportedVersion(version) }
         guard version >= 1 else { throw GridFileError.invalid("version \(version) is not a format version") }
         // Future migrations go here, keyed on `version`.
         var grid: Grid
@@ -318,7 +324,7 @@ public struct GridStore: Sendable {
             throw GridFileError.invalid(error.localizedDescription)
         }
         // A few bad entries are dropped; with nothing left, the file is broken, not empty.
-        if skipped.layoutCount > 0 && grid.allApps.isEmpty && grid.recentlyPruned.isEmpty {
+        if skipped.layoutCount > 0 && grid.allApps.isEmpty && grid.allActions.isEmpty && grid.recentlyPruned.isEmpty {
             throw GridFileError.invalid("none of its \(skipped.layoutCount) entries could be read")
         }
         guard (1...50).contains(grid.rows), (1...50).contains(grid.columns) else {
@@ -330,9 +336,10 @@ public struct GridStore: Sendable {
         return (grid, skipped.count)
     }
 
-    /// Gives a fresh ID to each page and item (app or folder, inside folders too) whose ID an
-    /// earlier one already has, including apps waiting for restoration, so a hand-edited or
-    /// merged file can't make `locate` and `detach` disagree about which item an ID means.
+    /// Gives a fresh ID to each page and item (app, folder or action, inside folders and
+    /// among search-only actions too) whose ID an earlier one already has, including apps
+    /// waiting for restoration, so a hand-edited or merged file can't make `locate` and
+    /// `detach` disagree about which item an ID means.
     static func freshenRepeatedIDs(in grid: inout Grid) {
         var seen = Set<UUID>()
         func fresh(_ id: inout UUID) {
@@ -349,9 +356,13 @@ public struct GridStore: Sendable {
                     fresh(&f.id)
                     for k in f.apps.indices { fresh(&f.apps[k].id) }
                     grid.pages[p].items[i] = .folder(f)
+                case .action(var a):
+                    fresh(&a.id)
+                    grid.pages[p].items[i] = .action(a)
                 }
             }
         }
+        for k in grid.hiddenActions.indices { fresh(&grid.hiddenActions[k].id) }
         // Restored containers become ordinary pages and folders without another decode.
         // Reuse a live container only of the right kind; otherwise reserve one fresh ID
         // per remembered container, shared by every app waiting to return to it.
