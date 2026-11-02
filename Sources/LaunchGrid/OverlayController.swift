@@ -461,7 +461,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if !state.query.isEmpty {
                 editSearch { home ? $0.moveToStart() : $0.moveToEnd() }
             } else {
-                let pages = state.openFolder.map { FolderLayout.pageCount(apps: $0.apps.count, grid: state.grid) }
+                let pages = state.openFolder.map { FolderLayout.pageCount(apps: $0.items.count, grid: state.grid) }
                     ?? state.grid.pages.count
                 state.flipPage(home ? -pages : pages)
             }
@@ -534,7 +534,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// The item with keyboard focus on the page or in the open folder (not search results).
     private var focusedID: UUID? {
         guard state.query.isEmpty, let i = state.focusIndex else { return nil }
-        if let f = state.openFolder { return f.apps[safe: i]?.id }
+        if let f = state.openFolder { return f.items[safe: i]?.id }
         return state.currentItems[safe: i]?.id
     }
 
@@ -592,7 +592,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Clears the search from the keyboard, back to the folder it was started in, if still there.
     private var focusableCount: Int {
         if !state.query.isEmpty { return state.searchResults.count }
-        if let f = state.openFolder { return f.apps.count }
+        if let f = state.openFolder { return f.items.count }
         return state.currentItems.count
     }
 
@@ -657,7 +657,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func moveFocusedItem(_ code: Int) {
         guard let i = state.focusIndex, let id = focusedID else { return }
         let folder = state.openFolder
-        let pool = folder?.apps.map(\.id) ?? state.currentItems.map(\.id)
+        let pool = folder?.itemIDs ?? state.currentItems.map(\.id)
         // Selected items elsewhere stay put: only the ones here move, in their order.
         let ids = state.targets(for: id).filter(pool.contains)
         let lead = ids.firstIndex(of: id) ?? 0
@@ -716,8 +716,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let c = state.pageLayout.center(i), f = state.drag.pagerFrame
             center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
         } else if let folder = state.openFolder {
-            guard let app = folder.apps[safe: i] else { return }
-            item = .app(app)
+            guard let member = folder.items[safe: i] else { return }
+            item = member.gridItem
             let c = state.iconCenter(i - state.folderPage * FolderLayout.perPage(state.grid), inFolder: true)
             let f = state.drag.folderGridFrame
             center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
@@ -755,7 +755,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         guard let i = state.focusIndex else { return }
         if let f = state.openFolder {
-            if let app = f.apps[safe: i] { state.launch(app) }
+            if let member = f.items[safe: i] { state.activate(member.gridItem) }
         } else if let item = state.currentItems[safe: i] {
             state.activate(item)
         }
@@ -764,7 +764,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Like ⌘-click, without entering edit mode: clicks still open apps.
     private func selectAll() {
         if let f = state.openFolder {
-            state.selection = Set(f.apps.map(\.id))
+            state.selection = Set(f.items.map(\.id))
         } else {
             state.selection = Set(state.currentItems.map(\.id))
         }

@@ -3,7 +3,8 @@ import Foundation
 public struct ItemLocation: Equatable, Sendable {
     public var page: Int
     public var index: Int
-    /// Set when the item is an app inside the folder at `(page, index)`.
+    /// Set when the item is an app or action inside the folder at `(page, index)`: its
+    /// position among the folder's members.
     public var folderIndex: Int?
 
     public init(page: Int, index: Int, folderIndex: Int? = nil) {
@@ -30,7 +31,7 @@ extension Grid {
         for (p, page) in pages.enumerated() {
             for (i, item) in page.items.enumerated() {
                 if item.id == id { return ItemLocation(page: p, index: i) }
-                if case .folder(let f) = item, let fi = f.apps.firstIndex(where: { $0.id == id }) {
+                if case .folder(let f) = item, let fi = f.items.firstIndex(where: { $0.id == id }) {
                     return ItemLocation(page: p, index: i, folderIndex: fi)
                 }
             }
@@ -39,21 +40,35 @@ extension Grid {
     }
 
     /// Where the action with `id` is, also when it is search-only. `locate(_:)` only finds
-    /// items on a page, so its callers can index `pages` with whatever it returns.
+    /// items on a page, so its callers can index `pages` with whatever it returns. One in a
+    /// folder is on a page, with `folderIndex` set.
     public func locateAction(_ id: UUID) -> ActionLocation? {
-        if let loc = locate(id), loc.folderIndex == nil, pages[loc.page].items[loc.index].action != nil {
-            return .page(loc)
+        if let loc = locate(id) {
+            return item(at: loc)?.action != nil ? .page(loc) : nil
         }
         return hiddenActions.firstIndex { $0.id == id }.map { .hidden(index: $0) }
     }
 
-    /// The item with `id`; an app inside a folder is returned as `.app`, a search-only
-    /// action as `.action`.
+    /// The item with `id`; an app or action inside a folder is returned as `.app` or
+    /// `.action`, a search-only action as `.action`.
     public func item(_ id: UUID) -> GridItem? {
         guard let loc = locate(id) else { return hiddenActions.first { $0.id == id }.map(GridItem.action) }
+        return item(at: loc)
+    }
+
+    /// The item at `loc`, a folder member as itself.
+    public func item(at loc: ItemLocation) -> GridItem? {
+        guard pages.indices.contains(loc.page), pages[loc.page].items.indices.contains(loc.index) else { return nil }
         let top = pages[loc.page].items[loc.index]
-        if let fi = loc.folderIndex, case .folder(let f) = top { return .app(f.apps[fi]) }
-        return top
+        guard let fi = loc.folderIndex else { return top }
+        guard case .folder(let f) = top, f.items.indices.contains(fi) else { return nil }
+        return f.items[fi].gridItem
+    }
+
+    /// The folder holding the item with `id`, if it is in one.
+    public func folder(containing id: UUID) -> Folder? {
+        guard let loc = locate(id), loc.folderIndex != nil else { return nil }
+        return pages[loc.page].items[loc.index].folder
     }
 
     public func folder(_ id: UUID) -> Folder? {
@@ -65,17 +80,17 @@ extension Grid {
         pages.flatMap { $0.items.flatMap(\.apps) }
     }
 
-    /// All actions: those on pages in visual order, then the search-only ones.
+    /// All actions: those on pages (folders too) in visual order, then the search-only ones.
     public var allActions: [Action] {
-        pages.flatMap { $0.items.compactMap(\.action) } + hiddenActions
+        pages.flatMap { $0.items.flatMap { item in item.folder?.actions ?? item.action.map { [$0] } ?? [] } } + hiddenActions
     }
 
-    /// Everything search can find: apps (folder contents too) and actions, in visual order,
+    /// Everything search can find: apps and actions (folder contents too), in visual order,
     /// then the search-only actions. Folders themselves are left out.
     public var allSearchItems: [GridItem] {
         pages.flatMap { page in
             page.items.flatMap { item -> [GridItem] in
-                if case .folder(let f) = item { return f.apps.map(GridItem.app) }
+                if case .folder(let f) = item { return f.items.map(\.gridItem) }
                 return [item]
             }
         } + hiddenActions.map(GridItem.action)
@@ -87,10 +102,11 @@ extension Grid {
 
     // MARK: Structural invariants
 
-    /// Drops empty folders, spills overflowing pages and guarantees at least one page.
+    /// Drops empty folders (no apps and no actions), spills overflowing pages and guarantees
+    /// at least one page.
     public mutating func normalize() {
         for p in pages.indices {
-            pages[p].items.removeAll { if case .folder(let f) = $0 { return f.apps.isEmpty } else { return false } }
+            pages[p].items.removeAll { if case .folder(let f) = $0 { return f.items.isEmpty } else { return false } }
         }
         if pages.isEmpty { pages = [Page()] }
         spill(from: 0)
@@ -139,9 +155,9 @@ extension Grid {
                     taken.append(item)
                     continue
                 }
-                if case .folder(var f) = item, f.apps.contains(where: { wanted.contains($0.id) }) {
-                    taken.append(contentsOf: f.apps.filter { wanted.contains($0.id) }.map(GridItem.app))
-                    f.apps.removeAll { wanted.contains($0.id) }
+                if case .folder(var f) = item, f.items.contains(where: { wanted.contains($0.id) }) {
+                    taken.append(contentsOf: f.items.filter { wanted.contains($0.id) }.map(\.gridItem))
+                    f.items.removeAll { wanted.contains($0.id) }
                     kept.append(.folder(f))
                     continue
                 }
@@ -176,7 +192,7 @@ extension Grid {
         // The displayed gap counts folders the move just emptied. Translate it to a slot
         // among the remaining items before reserving room on the destination page.
         let target = min(max(0, page), pages.count)
-        func isEmptyFolder(_ item: GridItem) -> Bool { item.folder?.apps.isEmpty == true }
+        func isEmptyFolder(_ item: GridItem) -> Bool { item.folder?.items.isEmpty == true }
         let emptiedBefore = target < pages.count
             ? pages[target].items.prefix(max(0, index)).count(where: isEmptyFolder) : 0
         for p in pages.indices { pages[p].items.removeAll(where: isEmptyFolder) }
@@ -246,22 +262,22 @@ extension Grid {
 
     // MARK: Folders
 
-    /// Groups items into a new folder placed where `anchor` (or the first item) was.
-    /// Folders among the items are flattened, since folders cannot nest. Actions can't go
-    /// in folders yet: they stay where they are.
+    /// Groups items (apps, actions, folders) into a new folder placed where `anchor` (or the
+    /// first item) was. Folders among the items are flattened, since folders cannot nest.
+    /// Search-only actions have no slot and stay where they are.
     @discardableResult
     public mutating func group(_ ids: [UUID], name: String, anchor: UUID? = nil) -> UUID? {
-        let ids = withoutActions(ids)
-        let anchor = anchor.flatMap { isAction($0) ? nil : $0 }
+        let ids = onPages(ids)
+        let anchor = anchor.flatMap { locate($0) == nil ? nil : $0 }
         guard let anchorID = anchor ?? ids.first, let loc = locate(anchorID) else { return nil }
         let target = loc.folderIndex == nil ? loc : ItemLocation(page: loc.page, index: loc.index)
         // Count items before the anchor on its page that will be detached, to keep its slot.
         let wanted = Set(ids)
         let shift = pages[target.page].items[..<target.index].filter { wanted.contains($0.id) }.count
         let taken = detach(ids)
-        let apps = taken.flatMap(\.apps)
-        guard !apps.isEmpty else { return nil }
-        let folder = Folder(name: name, apps: apps)
+        let members = taken.flatMap(\.members)
+        guard !members.isEmpty else { return nil }
+        let folder = Folder(name: name, items: members)
         let index = min(target.index - shift, pages[target.page].items.count)
         pages[target.page].items.insert(.folder(folder), at: max(0, index))
         normalize()
@@ -269,30 +285,29 @@ extension Grid {
         return folder.id
     }
 
-    /// Adds items to an existing folder; folders among them are flattened into it. Actions
-    /// can't go in folders yet: they stay where they are.
+    /// Adds items (apps, actions, folders) to an existing folder at member position `index`;
+    /// folders among them are flattened into it. Search-only actions stay where they are.
     public mutating func addToFolder(_ ids: [UUID], folder folderID: UUID, at index: Int? = nil) {
-        let moving = withoutActions(ids).filter { $0 != folderID }
+        let moving = onPages(ids).filter { $0 != folderID }
         let taken = detach(moving)
-        let apps = taken.flatMap(\.apps)
+        let members = taken.flatMap(\.members)
         guard let loc = locate(folderID), loc.folderIndex == nil,
               case .folder(var f) = pages[loc.page].items[loc.index] else {
-            // Folder vanished (or the ID isn't a folder); put the apps back somewhere visible.
-            appendToFirstFree(apps.map(GridItem.app))
+            // Folder vanished (or the ID isn't a folder); put the items back somewhere visible.
+            appendToFirstFree(members.map(\.gridItem))
             normalize()
             return
         }
-        let i = min(max(0, index ?? f.apps.count), f.apps.count)
-        f.apps.insert(contentsOf: apps, at: i)
+        let i = min(max(0, index ?? f.items.count), f.items.count)
+        f.items.insert(contentsOf: members, at: i)
         pages[loc.page].items[loc.index] = .folder(f)
         normalize()
         movePrunedContents(of: taken, to: folderID, at: i)
     }
 
-    private func isAction(_ id: UUID) -> Bool { locateAction(id) != nil }
-
-    private func withoutActions(_ ids: [UUID]) -> [UUID] {
-        ids.filter { !isAction($0) }
+    /// The IDs of items on a page (folder members too): search-only actions have no slot.
+    private func onPages(_ ids: [UUID]) -> [UUID] {
+        ids.filter { locate($0) != nil }
     }
 
     /// Flattening a folder also moves the apps an updater temporarily took out of it.
@@ -303,13 +318,13 @@ extension Grid {
               let destination = folder(folderID) else { return }
         var offset = index
         for item in items {
-            defer { offset += item.apps.count }
+            defer { offset += item.members.count }
             guard let source = item.folder else { continue }
-            let prefix = destination.apps.prefix(offset).map(\.id)
+            let prefix = destination.itemIDs.prefix(offset)
             for k in recentlyPruned.indices where recentlyPruned[k].folderID == source.id {
                 var entry = recentlyPruned[k]
-                let slot = min(max(0, entry.folderIndex ?? source.apps.count), source.apps.count)
-                entry.folderBefore = prefix + (entry.folderBefore ?? source.apps.prefix(slot).map(\.id))
+                let slot = min(max(0, entry.folderIndex ?? source.items.count), source.items.count)
+                entry.folderBefore = prefix + (entry.folderBefore ?? Array(source.itemIDs.prefix(slot)))
                 entry.folderIndex = offset + slot
                 entry.folderID = folderID
                 entry.folderName = destination.name
@@ -326,11 +341,11 @@ extension Grid {
         }
     }
 
-    /// Replaces a folder by its apps, in place.
+    /// Replaces a folder by its apps and actions, in place.
     public mutating func ungroup(_ folderID: UUID) {
         guard let loc = locate(folderID), loc.folderIndex == nil,
               case .folder(let f) = pages[loc.page].items[loc.index] else { return }
-        pages[loc.page].items.replaceSubrange(loc.index...loc.index, with: f.apps.map(GridItem.app))
+        pages[loc.page].items.replaceSubrange(loc.index...loc.index, with: f.items.map(\.gridItem))
         spill(from: loc.page)
         // An updater may have taken some apps out before the folder was moved or
         // ungrouped. Their fallback slots now belong among its expanded contents;
@@ -338,14 +353,14 @@ extension Grid {
         for k in recentlyPruned.indices where recentlyPruned[k].folderID == folderID {
             var entry = recentlyPruned[k]
             let slot = min(max(0, Self.slot(after: entry.folderBefore,
-                fallback: entry.folderIndex ?? f.apps.count, in: f.apps.map(\.id))), f.apps.count)
+                fallback: entry.folderIndex ?? f.items.count, in: f.itemIDs)), f.items.count)
             let absolute = loc.index + slot
             let page = min(loc.page + absolute / capacity, pages.count - 1)
             let index = min(absolute - (page - loc.page) * capacity, pages[page].items.count)
             entry.pageID = pages[page].id
             entry.index = index
             entry.before = pages[page].items.prefix(index).map(\.id)
-            entry.folderBefore = entry.folderBefore ?? f.apps.prefix(slot).map(\.id)
+            entry.folderBefore = entry.folderBefore ?? Array(f.itemIDs.prefix(slot))
             entry.folderEmptied = false
             entry.pageEmptied = false
             entry.pageIndex = nil
@@ -374,7 +389,14 @@ extension Grid {
             pages[loc.page].items[loc.index] = .app(renamed(a))
         case .folder(var f):
             if let fi = loc.folderIndex {
-                f.apps[fi] = renamed(f.apps[fi])
+                switch f.items[fi] {
+                case .app(let a):
+                    f.items[fi] = .app(renamed(a))
+                case .action(var a):
+                    guard !trimmed.isEmpty else { return }
+                    a.name = trimmed
+                    f.items[fi] = .action(a)
+                }
             } else if !trimmed.isEmpty {
                 f.name = trimmed
                 // If the remaining apps also disappear during an update, the first one
@@ -411,7 +433,12 @@ extension Grid {
         case nil:
             return
         case .page(let loc) where action.showsOnGrid:
-            pages[loc.page].items[loc.index] = .action(action)
+            if let fi = loc.folderIndex, case .folder(var f) = pages[loc.page].items[loc.index] {
+                f.items[fi] = .action(action)
+                pages[loc.page].items[loc.index] = .folder(f)
+            } else {
+                pages[loc.page].items[loc.index] = .action(action)
+            }
         case .page:
             detach([action.id])
             hiddenActions.append(action)
@@ -457,7 +484,12 @@ extension Grid {
                 case .app(let a):
                     pages[p].items[i] = .app(moved(a))
                 case .folder(var f):
-                    f.apps = f.apps.map(moved)
+                    f.items = f.items.map { member in
+                        switch member {
+                        case .app(let a): .app(moved(a))
+                        case .action(let a): .action(moved(a))
+                        }
+                    }
                     pages[p].items[i] = .folder(f)
                 case .action(let a):
                     pages[p].items[i] = .action(moved(a))
@@ -560,7 +592,7 @@ extension Grid {
         self.columns = columns
         // Drops empty folders; spilling now would fill the empty pages kept below.
         for p in pages.indices {
-            pages[p].items.removeAll { if case .folder(let f) = $0 { return f.apps.isEmpty } else { return false } }
+            pages[p].items.removeAll { if case .folder(let f) = $0 { return f.items.isEmpty } else { return false } }
         }
         // Each run of pages between empty ones re-flows on its own, keeping its pages' IDs.
         var result: [Page] = []

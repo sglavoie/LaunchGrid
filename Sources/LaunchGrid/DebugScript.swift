@@ -64,7 +64,7 @@ enum DebugScript {
                     state.selection.insert(state.currentItems[i].id)
                 }
                 case "fselect": for i in (arg.split(separator: ",").compactMap { Int($0) }) {
-                    if let app = state.openFolder?.apps[safe: i] { state.selection.insert(app.id) }
+                    if let app = state.openFolder?.items[safe: i] { state.selection.insert(app.id) }
                 }
                 case "group": state.groupSelection()
                 case "folder":
@@ -304,7 +304,7 @@ enum DebugScript {
                 case "state":
                     print("state: page=\(state.currentPage) query='\(state.searchLine.beforeCaret)|\(state.searchLine.afterCaret)' focus=\(String(describing: state.focusIndex)) folder=\(state.openFolder?.name ?? "-") folderPage=\(state.folderPage) shown=\(state.isShown) editing=\(state.editing) pages=\(state.grid.pages.count) selected=\(state.selection.count) dragging=\(state.drag.active) swipe=\(Int(state.swipeOffset)) fswipe=\(Int(state.folderSwipeOffset))")
                     if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
-                    if let f = state.openFolder { print("folder: \(f.apps.count) apps, first \(f.apps.prefix(3).map(\.title)), last \(f.apps.suffix(3).map(\.title))") }
+                    if let f = state.openFolder { print("folder: \(f.items.count) apps, first \(f.items.prefix(3).map(\.title)), last \(f.items.suffix(3).map(\.title))") }
                     fflush(stdout)
                 case "wclick":
                     // Clicks at x,y (points from the top left) in the window titled `title`: "wclick:title,x,y";
@@ -391,10 +391,10 @@ enum DebugScript {
                                                         activeCombo: HotkeyService.shared.activeCombo)
                     print("hotkey: recorded=\(arg) ok=\(ok) saved=\(prefs.hotkeyKeyCode),\(prefs.hotkeyModifiers) active=\(String(describing: HotkeyService.shared.activeCombo)) problem=\(state.hotkeyProblem ?? "-")")
                     fflush(stdout)
-                case "press", "click", "fpress":
+                case "press", "click", "fpress", "fclick":
                     // Long-press (or click) item N on the current page, or in the open folder.
                     guard let window = overlay.window else { break }
-                    let folder = parts[0] == "fpress"
+                    let folder = parts[0] == "fpress" || parts[0] == "fclick"
                     let c = (folder ? state.folderLayout : state.pageLayout).center(Int(arg) ?? 0)
                     let o = folder ? state.drag.folderGridFrame.origin : state.drag.pagerFrame.origin
                     let (r, h) = (state.drag.rootOrigin, window.contentView?.bounds.height ?? 0)
@@ -405,7 +405,7 @@ enum DebugScript {
                                                       pressure: type == .leftMouseUp ? 0 : 1) {
                             NSApp.postEvent(e, atStart: false)
                         }
-                        if type == .leftMouseDown { try? await Task.sleep(for: .seconds(parts[0] == "click" ? 0.05 : 1)) }
+                        if type == .leftMouseDown { try? await Task.sleep(for: .seconds(parts[0].hasSuffix("click") ? 0.05 : 1)) }
                     }
                 case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold":
                     // An optional third number grabs the icon that many points right of its centre.

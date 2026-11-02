@@ -354,7 +354,16 @@ public struct GridStore: Sendable {
                     grid.pages[p].items[i] = .app(a)
                 case .folder(var f):
                     fresh(&f.id)
-                    for k in f.apps.indices { fresh(&f.apps[k].id) }
+                    for k in f.items.indices {
+                        switch f.items[k] {
+                        case .app(var a):
+                            fresh(&a.id)
+                            f.items[k] = .app(a)
+                        case .action(var a):
+                            fresh(&a.id)
+                            f.items[k] = .action(a)
+                        }
+                    }
                     grid.pages[p].items[i] = .folder(f)
                 case .action(var a):
                     fresh(&a.id)

@@ -180,7 +180,7 @@ extension AppState {
 
     var folderLayout: GridLayout {
         GridLayout(size: drag.folderGridFrame.size,
-                   rows: FolderLayout.rows(apps: openFolder?.apps.count ?? 0, grid: grid),
+                   rows: FolderLayout.rows(apps: openFolder?.items.count ?? 0, grid: grid),
                    columns: FolderLayout.columns(grid))
     }
 
@@ -191,9 +191,10 @@ extension AppState {
         return drag.active ? items.filter { !drag.ids.contains($0.id) } : items
     }
 
-    func remainingFolderApps() -> [AppRef] {
+    /// Members of the open folder as displayed during a drag: dragged ones removed.
+    func remainingFolderItems() -> [FolderMember] {
         guard let f = openFolder else { return [] }
-        return drag.active ? f.apps.filter { !drag.ids.contains($0.id) } : f.apps
+        return drag.active ? f.items.filter { !drag.ids.contains($0.id) } : f.items
     }
 
     /// Whether the pager shows an extra empty page to drop onto.
@@ -286,8 +287,8 @@ extension AppState {
             guard frame.contains(start), let cell = folderLayout.cellIndex(at: local) else { return false }
             let index = folderPage * FolderLayout.perPage(grid) + cell
             let c = iconCenter(cell, inFolder: true)
-            guard folder.apps.indices.contains(index), onIcon(local, c) else { return false }
-            hit = folder.apps[index].id
+            guard folder.items.indices.contains(index), onIcon(local, c) else { return false }
+            hit = folder.items[index].id
             source = .folder(folder.id)
             center = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
         } else {
@@ -303,7 +304,7 @@ extension AppState {
         guard let hit, let item = grid.item(hit) else { return false }
         // From an open folder only its own selected apps come along: the drop puts them back
         // in it, and items selected on the page would be pulled in (a folder dissolved).
-        let pool = openFolder.map { Set($0.apps.map(\.id)) }
+        let pool = openFolder.map { Set($0.items.map(\.id)) }
         let ids = targets(for: hit).filter { pool?.contains($0) ?? true }
         drag.ids = ids
         drag.primary = item
@@ -314,7 +315,7 @@ extension AppState {
         drag.candidate = nil
         drag.mergeTarget = nil
         // The gap starts where the primary item was, among the remaining items.
-        let siblings: [UUID] = openFolder.map { $0.apps.map(\.id) } ?? currentItems.map(\.id)
+        let siblings: [UUID] = openFolder?.itemIDs ?? currentItems.map(\.id)
         let before = siblings.prefix { $0 != hit }.filter { !ids.contains($0) }.count
         drag.gap = before
         withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.8))) { drag.active = true }
@@ -325,8 +326,8 @@ extension AppState {
     }
 
     private var mergeAllowed: Bool {
-        // Folders cannot go inside folders, and actions not in any yet.
-        !drag.ids.contains { grid.item($0)?.folder != nil || grid.item($0)?.action != nil }
+        // Folders cannot go inside folders; apps and actions can.
+        !drag.ids.contains { grid.item($0)?.folder != nil }
     }
 
     private func updateTargets() {
@@ -363,7 +364,7 @@ extension AppState {
             drag.edgeSide = 0
             return
         }
-        let index = min(folderPage * FolderLayout.perPage(grid) + cell, remainingFolderApps().count)
+        let index = min(folderPage * FolderLayout.perPage(grid) + cell, remainingFolderItems().count)
         if index == drag.gap {
             drag.pendingGap = nil
         } else if immediately {
@@ -404,7 +405,7 @@ extension AppState {
         let center = iconCenter(cell, inFolder: false)
         let radius = pageIconSize * 0.42
         let nearCenter = hypot(local.x - center.x, local.y - center.y) < radius
-        if let shown, nearCenter, mergeAllowed, shown.action == nil {
+        if let shown, nearCenter, mergeAllowed {
             drag.pendingGap = nil
             if drag.candidate != shown.id {
                 drag.candidate = shown.id
@@ -444,7 +445,7 @@ extension AppState {
         if let folder = openFolder {
             guard case .folder(folder.id) = drag.source, now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell else { return }
             drag.edgeSince = now
-            let pages = FolderLayout.pageCount(apps: folder.apps.count, grid: grid)
+            let pages = FolderLayout.pageCount(apps: folder.items.count, grid: grid)
             let target = folderPage + drag.edgeSide
             guard target >= 0, target < pages else { return }
             // As with a page-dot click, keyboard focus must follow the page now shown.
@@ -494,15 +495,15 @@ extension AppState {
             case .folder(let f):
                 apply { g in g.removingEmptiedPages { $0.addToFolder(ids, folder: f.id) } }
                 showToast(String(localized: "Added to \(f.name)"))
-            case .app(let a):
-                let apps = [a] + ids.compactMap { grid.item($0)?.app }
+            case .app, .action:
+                // An app or action dropped on an app or action: a new folder, named for the
+                // apps' category ("New Folder" when there are none or they differ).
+                let apps = ([target] + ids).compactMap { grid.item($0)?.app }
                 let name = GridBuilder.folderName(for: apps.map { installedApp(for: $0) })
                 apply { g in g.removingEmptiedPages { $0.group([target] + ids, name: name, anchor: target) } }
-            case .action:
-                break // Actions don't go in folders yet.
             }
         } else if case .folder(let fid) = drag.source, openFolderID == fid {
-            let gap = drag.pendingGap ?? drag.gap ?? remainingFolderApps().count
+            let gap = drag.pendingGap ?? drag.gap ?? remainingFolderItems().count
             apply { $0.addToFolder(ids, folder: fid, at: gap) }
         } else {
             // A drop right after moving counts, even if the pointer hadn't settled yet.

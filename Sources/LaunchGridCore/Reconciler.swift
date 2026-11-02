@@ -220,7 +220,10 @@ public enum Reconciler {
                     kept = refresh(a) { PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i, before: before()) }
                         .map(GridItem.app)
                 case .folder(var f):
-                    let (apps, folderID, folderName) = (f.apps, f.id, f.name)
+                    // Positions count every member: actions stay, and an app returning
+                    // goes back after the right neighbour, app or action.
+                    let (members, folderID, folderName) = (f.items, f.id, f.name)
+                    let memberIDs = members.map(\.id)
                     // The user may have moved this folder since an earlier app vanished.
                     // If this pass removes its last app, every waiting app must recreate
                     // it here, regardless of which one returns first. Capture the live
@@ -235,17 +238,19 @@ public enum Reconciler {
                         returning[k].pageTitle = nil
                         returning[k].pageBefore = nil
                     }
-                    f.apps = apps.enumerated().compactMap { fi, a in
+                    f.items = members.enumerated().compactMap { fi, member in
+                        // Not a bundle on disk: an action stays where it is.
+                        guard case .app(let a) = member else { return member }
                         let app = refresh(a) {
                             PrunedApp(app: a, prunedAt: now, pageID: pageID, index: i,
                                       folderID: folderID, folderName: folderName, folderIndex: fi,
                                       before: before(),
-                                      folderBefore: neighbours(apps.map(\.id), before: fi) { e in e.folderID == folderID ? e.folderIndex.map { ($0, e.app.id, e.folderBefore) } : nil })
+                                      folderBefore: neighbours(memberIDs, before: fi) { e in e.folderID == folderID ? e.folderIndex.map { ($0, e.app.id, e.folderBefore) } : nil })
                         }
                         if app == nil { removedFolderSlots[folderID, default: []].append(fi) }
-                        return app
+                        return app.map(FolderMember.app)
                     }
-                    if f.apps.isEmpty {
+                    if f.items.isEmpty {
                         for k in pruned.indices where pruned[k].folderID == f.id { pruned[k].folderEmptied = true }
                         emptiedFolders.insert(f.id)
                         kept = nil
@@ -504,8 +509,8 @@ extension Grid {
     mutating func restore(_ entry: PrunedApp) {
         if let folderID = entry.folderID {
             if let loc = locate(folderID), loc.folderIndex == nil, case .folder(var f) = pages[loc.page].items[loc.index] {
-                let at = Self.slot(after: entry.folderBefore, fallback: entry.folderIndex ?? f.apps.count, in: f.apps.map(\.id))
-                f.apps.insert(entry.app, at: min(max(0, at), f.apps.count))
+                let at = Self.slot(after: entry.folderBefore, fallback: entry.folderIndex ?? f.items.count, in: f.itemIDs)
+                f.items.insert(.app(entry.app), at: min(max(0, at), f.items.count))
                 pages[loc.page].items[loc.index] = .folder(f)
                 return
             }

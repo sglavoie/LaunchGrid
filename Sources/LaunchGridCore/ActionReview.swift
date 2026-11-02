@@ -104,13 +104,24 @@ extension Grid {
         return grid
     }
 
-    /// Changes every action, on pages and search-only, in place.
+    /// Changes every action, on pages, in folders and search-only, in place.
     mutating func mapActions(_ change: (inout Action) -> Void) {
         for p in pages.indices {
             for i in pages[p].items.indices {
-                guard case .action(var a) = pages[p].items[i] else { continue }
-                change(&a)
-                pages[p].items[i] = .action(a)
+                switch pages[p].items[i] {
+                case .action(var a):
+                    change(&a)
+                    pages[p].items[i] = .action(a)
+                case .folder(var f) where f.items.contains(where: { $0.action != nil }):
+                    for k in f.items.indices {
+                        guard case .action(var a) = f.items[k] else { continue }
+                        change(&a)
+                        f.items[k] = .action(a)
+                    }
+                    pages[p].items[i] = .folder(f)
+                default:
+                    continue
+                }
             }
         }
         for k in hiddenActions.indices { change(&hiddenActions[k]) }

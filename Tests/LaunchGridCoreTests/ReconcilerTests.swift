@@ -2120,6 +2120,64 @@ func tempDir(_ prefix: String) -> URL {
         #expect(g.allActions == [shown, between, hidden])
     }
 
+    func mixedGrid() -> (Grid, Folder) {
+        let folder = Folder(name: "Dev", items: [
+            .app(installed("A").makeRef()), .action(shown), .app(installed("B").makeRef()), .action(between), .app(installed("C").makeRef()),
+        ])
+        return (Grid(rows: 2, columns: 3, pages: [Page(items: [.app(installed("X").makeRef()), .folder(folder)])]), folder)
+    }
+
+    @Test func pruningEveryAppOfAMixedFolderKeepsTheFolderWithItsActions() throws {
+        var (g, folder) = mixedGrid()
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let during = [installed("X")]
+        _ = Reconciler.reconcile(&g, installed: during, autoAdd: false,
+                                pathExists: { path in during.contains { $0.path == path } }, now: now)
+        #expect(g.pages[0].items.map(\.title) == ["X", "Dev"])
+        #expect(g.folder(folder.id)?.items == [.action(shown), .action(between)], "the folder stays, with its actions")
+        #expect(g.recentlyPruned.count == 3)
+        #expect(g.recentlyPruned.allSatisfy { $0.folderEmptied != true })
+        // Positions count every member, actions too.
+        #expect(g.recentlyPruned.map(\.folderIndex) == [0, 1, 2])
+
+        // Back in their places among the actions, whatever order they return in.
+        let b = [installed("X"), installed("B")]
+        _ = Reconciler.reconcile(&g, installed: b, autoAdd: false,
+                                pathExists: { path in b.contains { $0.path == path } }, now: now + 5)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["Shown", "B", "Between"])
+        _ = Reconciler.reconcile(&g, installed: ["X", "A", "B", "C"].map { installed($0) }, autoAdd: false, now: now + 10)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["A", "Shown", "B", "Between", "C"])
+        #expect(g.folder(folder.id)?.items.map(\.id) == folder.itemIDs)
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
+    @Test func anAppReturnsAfterTheActionBeforeItEvenWhenTheActionMoved() throws {
+        var (g, folder) = mixedGrid()
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        // B (after Shown, before Between) vanishes.
+        let during = ["X", "A", "C"].map { installed($0) }
+        _ = Reconciler.reconcile(&g, installed: during, autoAdd: false,
+                                pathExists: { path in during.contains { $0.path == path } }, now: now)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["A", "Shown", "Between", "C"])
+        // Meanwhile the user drags Shown to the end of the folder: B follows it there.
+        g.addToFolder([shown.id], folder: folder.id, at: 3)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["A", "Between", "C", "Shown"])
+        _ = Reconciler.reconcile(&g, installed: ["X", "A", "B", "C"].map { installed($0) }, autoAdd: false, now: now + 5)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["A", "Between", "C", "Shown", "B"])
+    }
+
+    @Test func undoingPruningOfAMixedFolderIsASnapshot() {
+        // Undo restores the grid as a value; a pruned mixed folder compares equal to its original after restore.
+        var (g, _) = mixedGrid()
+        let original = g
+        let during = [installed("X")]
+        _ = Reconciler.reconcile(&g, installed: during, autoAdd: false,
+                                pathExists: { path in during.contains { $0.path == path } })
+        #expect(g != original)
+        _ = Reconciler.reconcile(&g, installed: ["X", "A", "B", "C"].map { installed($0) }, autoAdd: false)
+        #expect(g.pages == original.pages)
+    }
+
     @Test func aSecondReconcileOfAGridWithActionsChangesNothing() {
         var g = grid()
         let original = g

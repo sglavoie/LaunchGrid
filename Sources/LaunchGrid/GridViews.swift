@@ -650,7 +650,7 @@ struct ItemView: View {
 
     private var accessibilityValue: Text {
         switch item {
-        case .folder(let f): Text("\(f.apps.count) apps")
+        case .folder(let f): f.sizeText
         case .action(let a):
             switch runStatus(a) {
             case .running: Text("Action, running")
@@ -731,8 +731,11 @@ struct FolderIcon: View {
                 }
                 .frame(width: size * 0.92, height: size * 0.92)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(mini), spacing: size * 0.04), count: 3), spacing: size * 0.04) {
-                ForEach(folder.apps.prefix(9)) { app in
-                    AppIcon(path: app.path, size: mini)
+                ForEach(folder.items.prefix(9)) { member in
+                    switch member {
+                    case .app(let app): AppIcon(path: app.path, size: mini)
+                    case .action(let action): ActionTile(action: action, size: mini)
+                    }
                 }
             }
             .frame(width: inner, height: inner)
@@ -945,8 +948,8 @@ struct FolderPanel: View {
             let grid = state.grid
             let pager = state.drag.pagerSize
             let cols = FolderLayout.columns(grid)
-            let rows = FolderLayout.rows(apps: folder.apps.count, grid: grid)
-            let pages = FolderLayout.pageCount(apps: folder.apps.count, grid: grid)
+            let rows = FolderLayout.rows(apps: folder.items.count, grid: grid)
+            let pages = FolderLayout.pageCount(apps: folder.items.count, grid: grid)
             // The page's cells, but never more than the overlay has room for once the panel's
             // padding, name and dots are around them (a small window with many rows).
             let room = CGSize(width: geo.size.width - 64, height: geo.size.height - (pages > 1 ? 150 : 125))
@@ -966,7 +969,7 @@ struct FolderPanel: View {
                     // VoiceOver lands here when the folder opens (the panel is modal): with the
                     // count, it says how much is in it. An announcement at low priority went
                     // unspoken, and a value is read before the name.
-                    .accessibilityLabel(Text(verbatim: "\(folder.name), ") + Text("\(folder.apps.count) apps"))
+                    .accessibilityLabel(Text(verbatim: "\(folder.name), ") + folder.sizeText)
                     .accessibilityHint("Renames the folder")
                     .accessibilityAction { state.beginRename(folder.id) }
                 ZStack(alignment: .topLeading) {
@@ -1021,11 +1024,11 @@ struct FolderPageContent: View {
     let size: CGSize
 
     var body: some View {
-        let layout = GridLayout(size: size, rows: FolderLayout.rows(apps: folder.apps.count, grid: state.grid),
+        let layout = GridLayout(size: size, rows: FolderLayout.rows(apps: folder.items.count, grid: state.grid),
                                 columns: FolderLayout.columns(state.grid))
         let icon = state.folderIconSize(layout)
         let perPage = FolderLayout.perPage(state.grid)
-        var entries: [(id: UUID, app: AppRef?)] = state.remainingFolderApps().map { ($0.id, $0) }
+        var entries: [(id: UUID, member: FolderMember?)] = state.remainingFolderItems().map { ($0.id, $0) }
         if state.drag.active, case .folder(let fid) = state.drag.source, fid == folder.id, let gap = state.drag.gap {
             entries.insert((PageView.gapID, nil), at: min(gap, entries.count))
         }
@@ -1036,9 +1039,9 @@ struct FolderPageContent: View {
         let editing = state.editing
         return ZStack(alignment: .topLeading) {
             ForEach(visible, id: \.element.id) { offset, entry in
-                if let app = entry.app {
-                    FolderItemCell(app: app, iconSize: icon, selected: selection.contains(app.id), focused: focus == offset, editing: editing)
-                        .accessibilityFocused($voiceOverFocus, equals: app.id)
+                if let member = entry.member {
+                    FolderItemCell(member: member, iconSize: icon, selected: selection.contains(member.id), focused: focus == offset, editing: editing)
+                        .accessibilityFocused($voiceOverFocus, equals: member.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(offset - start))
                 }
@@ -1048,7 +1051,7 @@ struct FolderPageContent: View {
         .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         // VoiceOver follows the keyboard focus, also into a folder opened with focus in it.
         .onChange(of: focus, initial: true) { _, i in
-            if let i, entries.indices.contains(i), let app = entries[i].app { voiceOverFocus = app.id }
+            if let i, entries.indices.contains(i), let member = entries[i].member { voiceOverFocus = member.id }
         }
         .onChange(of: voiceOverFocus) { _, id in
             guard let id, state.openFolderID == folder.id, !state.drag.active,
@@ -1058,9 +1061,10 @@ struct FolderPageContent: View {
     }
 }
 
+/// An app or action in the open folder, with its interactions.
 struct FolderItemCell: View {
     @Environment(AppState.self) private var state
-    let app: AppRef
+    let member: FolderMember
     let iconSize: CGFloat
     let selected: Bool
     let focused: Bool
@@ -1069,18 +1073,20 @@ struct FolderItemCell: View {
     @State private var swallowTap = false
 
     var body: some View {
-        ItemView(item: .app(app), iconSize: iconSize, selected: selected, focused: focused,
-                 editing: editing, onDelete: { state.remove([app.id]) })
+        let item = member.gridItem
+        ItemView(item: item, iconSize: iconSize, selected: selected, focused: focused,
+                 editing: editing, onDelete: { state.remove([member.id]) })
             .onTapGesture {
                 if swallowTap { swallowTap = false; return }
                 let mods = NSEvent.modifierFlags
-                if mods.contains(.command) { state.toggleSelection(app.id) }
-                else if mods.contains(.shift) { state.extendSelection(to: app.id) }
+                if mods.contains(.command) { state.toggleSelection(member.id) }
+                else if mods.contains(.shift) { state.extendSelection(to: member.id) }
                 // Edit mode never launches: a click selects.
-                else if state.editing { state.toggleSelection(app.id) }
-                else { state.launch(app) }
+                else if state.editing { state.toggleSelection(member.id) }
+                // Launches the app, or runs the action, as on a page.
+                else { state.activate(item) }
             }
-            .modifier(ItemAccessibilityActions(id: app.id, selected: selected, open: { state.launch(app) }))
+            .modifier(ItemAccessibilityActions(id: member.id, selected: selected, open: { state.activate(item) }))
             .simultaneousGesture(
                 // As on a page: a long press enters edit mode.
                 LongPressGesture(minimumDuration: 0.7).onEnded { _ in
@@ -1094,7 +1100,14 @@ struct FolderItemCell: View {
                     }
                 }
             )
-            .contextMenu { ItemMenu(item: .app(app)) }
+            .contextMenu { ItemMenu(item: item) }
+    }
+}
+
+extension Folder {
+    /// How much it holds, as VoiceOver reads it: "3 apps", or "3 items" once it holds actions.
+    var sizeText: Text {
+        actions.isEmpty ? Text("\(items.count) apps") : Text("\(items.count) items")
     }
 }
 

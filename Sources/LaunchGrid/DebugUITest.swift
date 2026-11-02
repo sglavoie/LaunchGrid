@@ -37,7 +37,8 @@ enum DebugUITest {
             let names = items + folders.values.flatMap { $0 } + actions.filter { !$0.showsOnGrid }.map(\.name)
             guard Set(names).count == names.count, names.allSatisfy({ !$0.isEmpty }),
                   Set(folders.keys).isSubset(of: Set(items)), shown.count == actions.filter(\.showsOnGrid).count,
-                  Set(shown.keys).isSubset(of: Set(items)), Set(shown.keys).isDisjoint(with: folders.keys) else {
+                  Set(shown.keys).isSubset(of: Set(items + folders.values.flatMap { $0 })),
+                  Set(shown.keys).isDisjoint(with: folders.keys) else {
                 throw Failure("Fixture names must be unique and every folder and shown action must be on a page")
             }
             func app(_ name: String) -> AppRef {
@@ -45,7 +46,8 @@ enum DebugUITest {
             }
             var grid = Grid(rows: rows, columns: columns, pages: zip(pages, pageTitles).map { items, title in
                 Page(title: title, items: items.map { name in
-                    folders[name].map { .folder(Folder(name: name, apps: $0.map(app))) }
+                    // A folder member named like a shown action is that action.
+                    folders[name].map { .folder(Folder(name: name, items: $0.map { shown[$0].map(FolderMember.action) ?? .app(app($0)) })) }
                         ?? shown[name].map(GridItem.action) ?? .app(app(name))
                 })
             })
@@ -93,7 +95,7 @@ enum DebugUITest {
 
     // Regression scenarios use this subset of the demo driver's commands.
     private static let commands: Set<String> = [
-        "show", "hide", "keys", "click", "fpress", "press", "drag", "merge", "edge",
+        "show", "hide", "keys", "click", "fclick", "fpress", "press", "drag", "merge", "edge",
         "fdrag", "finside", "fhold", "hold", "release", "page", "folder", "focus",
         "edit", "select", "fselect", "search", "type", "group", "undo", "redo",
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
@@ -121,7 +123,7 @@ enum DebugUITest {
         let focus: String
         if let i = state.focusIndex {
             if !state.query.isEmpty { focus = state.searchResults[safe: i]?.title ?? "<invalid:\(i)>" }
-            else if let folder = state.openFolder { focus = folder.apps[safe: i]?.title ?? "<invalid:\(i)>" }
+            else if let folder = state.openFolder { focus = folder.items[safe: i]?.title ?? "<invalid:\(i)>" }
             else { focus = state.currentItems[safe: i]?.title ?? "<invalid:\(i)>" }
         } else { focus = "" }
         let editing: String
@@ -134,7 +136,7 @@ enum DebugUITest {
             "pages": .array(state.grid.pages.map { .strings($0.items.map(\.title)) }),
             "pageTitles": .strings(state.grid.pages.map { $0.title ?? "" }),
             "folders": .object(Dictionary(uniqueKeysWithValues: state.grid.pages.flatMap(\.items).compactMap {
-                $0.folder.map { ($0.name, Value.strings($0.apps.map(\.title))) }
+                $0.folder.map { ($0.name, Value.strings($0.items.map(\.title))) }
             })),
             "apps": .strings(state.grid.allApps.map(\.title).sorted()),
             "selection": .strings(state.selection.map(name).sorted()),

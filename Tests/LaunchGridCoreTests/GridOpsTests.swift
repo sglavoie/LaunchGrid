@@ -1368,20 +1368,190 @@ func action(_ name: String, showsOnGrid: Bool = true, kind: ActionKind? = nil) -
         #expect(titles(g.pages[0]) == expected)
     }
 
-    @Test func groupingAndAddingToAFolderLeaveActionsInPlace() throws {
-        let act = action("Act")
-        var g = Grid(rows: 1, columns: 5, pages: [Page(items: [
-            .app(app("A")), .action(act), .app(app("B")), .folder(Folder(name: "F", apps: [app("C")])),
-        ])])
+    @Test func groupingAndAddingToAFolderTakeActionsAlong() throws {
+        let act = action("Act"), other = action("Other"), hidden = action("Hidden", showsOnGrid: false)
+        var g = Grid(rows: 1, columns: 6, pages: [Page(items: [
+            .app(app("A")), .action(act), .app(app("B")), .folder(Folder(name: "F", apps: [app("C")])), .action(other),
+        ])], hiddenActions: [hidden])
         let ids = g.pages[0].items.map(\.id)
-        // Anchored on the action: the folder goes where the first app was.
-        let grouped = g.group([ids[1], ids[0], ids[2]], name: "G", anchor: ids[1])
+        // Anchored on the action: the folder goes where it was, with the members in visual order.
+        let grouped = g.group([ids[1], ids[0], ids[2], hidden.id], name: "G", anchor: ids[1])
         let folderID = try #require(grouped)
-        #expect(titles(g.pages[0]) == ["G", "Act", "F"])
-        #expect(g.folder(folderID)?.apps.map(\.name) == ["A", "B"])
-        #expect(g.group([act.id], name: "Only") == nil)
-        g.addToFolder([act.id], folder: ids[3])
-        #expect(titles(g.pages[0]) == ["G", "Act", "F"])
-        #expect(g.folder(ids[3])?.apps.map(\.name) == ["C"])
+        #expect(titles(g.pages[0]) == ["G", "F", "Other"])
+        #expect(g.folder(folderID)?.items.map(\.title) == ["A", "Act", "B"])
+        #expect(g.folder(folderID)?.apps.map(\.name) == ["A", "B"], "apps keep their app-only meaning")
+        #expect(g.hiddenActions == [hidden], "a search-only action has no slot to group")
+        #expect(g.allApps.map(\.name) == ["A", "B", "C"])
+
+        // An action alone makes a folder too, as dropping one action on another does.
+        g.addToFolder([other.id], folder: ids[3], at: 0)
+        #expect(titles(g.pages[0]) == ["G", "F"])
+        #expect(g.folder(ids[3])?.items.map(\.title) == ["Other", "C"])
+
+        // Found where it is, as itself.
+        let loc = try #require(g.locate(act.id))
+        #expect(loc == ItemLocation(page: 0, index: 0, folderIndex: 1))
+        #expect(g.item(act.id) == .action(act))
+        #expect(g.locateAction(act.id) == .page(loc))
+        #expect(g.folder(containing: act.id)?.id == folderID)
+        #expect(g.allActions.map(\.name) == ["Act", "Other", "Hidden"])
+        #expect(g.allSearchItems.map(\.title) == ["A", "Act", "B", "Other", "C", "Hidden"])
+    }
+
+    @Test func groupingOnlyActionsMakesAFolder() throws {
+        let a = action("A"), b = action("B")
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("X")), .action(a), .action(b)])])
+        let grouped = g.group([b.id, a.id], name: "Links", anchor: b.id)
+        let id = try #require(grouped)
+        #expect(titles(g.pages[0]) == ["X", "Links"])
+        #expect(g.folder(id)?.items == [.action(a), .action(b)])
+        #expect(g.folder(id)?.apps.isEmpty == true)
+    }
+
+    @Test func ungroupingAMixedFolderPutsEveryMemberBackInOrder() throws {
+        let act = action("Act")
+        let folder = Folder(name: "F", items: [.app(app("A")), .action(act), .app(app("B"))])
+        var g = Grid(rows: 1, columns: 4, pages: [Page(items: [.app(app("X")), .folder(folder), .app(app("Y"))])])
+        g.ungroup(folder.id)
+        #expect(titles(g.pages[0]) == ["X", "A", "Act", "B"])
+        #expect(titles(g.pages[1]) == ["Y"], "what no longer fits spills onward")
+        #expect(g.pages[0].items[2] == .action(act))
+    }
+
+    @Test func aFolderWithOnlyActionsLeftStaysAndAnEmptyOneGoes() {
+        let act = action("Act")
+        let folder = Folder(name: "F", items: [.app(app("A")), .action(act)])
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.folder(folder), .app(app("X"))])])
+        let a = folder.apps[0].id
+        g.removingEmptiedPages { $0.move([a], toPage: 0, at: 2) }
+        #expect(titles(g.pages[0]) == ["F", "X", "A"])
+        #expect(g.folder(folder.id)?.items == [.action(act)])
+        // Dragging the action out of its folder empties it, and the folder goes.
+        g.removingEmptiedPages { $0.move([act.id], toPage: 0, at: 0) }
+        #expect(titles(g.pages[0]) == ["Act", "X", "A"])
+        #expect(g.folder(folder.id) == nil)
+    }
+
+    @Test func movingAnActionWithinItsFolderReordersIt() {
+        let act = action("Act")
+        let folder = Folder(name: "F", items: [.app(app("A")), .app(app("B")), .action(act)])
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.folder(folder)])])
+        // As a drop at a gap in the open folder does: the gap counts the remaining members.
+        g.addToFolder([act.id], folder: folder.id, at: 0)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["Act", "A", "B"])
+        g.addToFolder([folder.apps[0].id], folder: folder.id, at: 2)
+        #expect(g.folder(folder.id)?.items.map(\.title) == ["Act", "B", "A"])
+    }
+
+    @Test func renamingUpdatingAndRemovingAnActionInAFolder() {
+        let act = action("Act")
+        let folder = Folder(name: "F", items: [.app(app("A")), .action(act)])
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.folder(folder)])])
+        g.rename(act.id, to: "  Renamed ")
+        #expect(g.item(act.id)?.title == "Renamed")
+        g.rename(act.id, to: " ")
+        #expect(g.item(act.id)?.title == "Renamed", "an action's name can't be blank")
+        g.rename(folder.id, to: "Dev")
+        #expect(g.folder(folder.id)?.name == "Dev")
+
+        var edited = act
+        edited.name = "Edited"
+        edited.keywords = ["ed"]
+        g.updateAction(edited)
+        #expect(g.folder(folder.id)?.items == [.app(folder.apps[0]), .action(edited)], "edited where it is")
+
+        // Made search-only, it leaves the folder for hiddenActions.
+        edited.showsOnGrid = false
+        g.updateAction(edited)
+        #expect(g.folder(folder.id)?.items == [.app(folder.apps[0])])
+        #expect(g.hiddenActions == [edited])
+
+        g.addToFolder([edited.id], folder: folder.id)
+        #expect(g.hiddenActions == [edited], "a search-only action stays search-only")
+        g.remove([folder.id])
+        #expect(g.allActions == [edited])
+        #expect(g.pages.flatMap(\.items).isEmpty)
+    }
+
+    @Test func followingMovesReachesFileActionsInFolders() {
+        let file = action("Notes", kind: .openFile(path: "/Users/me/Notes.txt", appPath: "/Applications/Ed.app"))
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.folder(Folder(name: "F", items: [.app(app("A")), .action(file)]))])])
+        g.followMoves(["/Users/me/Notes.txt": "/Users/me/Docs/Notes.txt", "/Applications/Ed.app": "/Applications/Editor.app"])
+        #expect(g.allActions.first?.kind == .openFile(path: "/Users/me/Docs/Notes.txt", appPath: "/Applications/Editor.app"))
+    }
+
+    @Test func reviewFlagsAndCommandRemovalReachActionsInFolders() {
+        let cmd = action("Cmd", kind: .shell(command: "rm -rf ~/x", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        let g = Grid(rows: 1, columns: 2, pages: [Page(items: [.folder(Folder(name: "F", items: [.app(app("A")), .action(cmd)]))])])
+        #expect(g.hasCommands)
+        #expect(g.actionReview.map(\.action.id) == [cmd.id])
+        let stripped = g.removingCommands()
+        #expect(stripped.allActions.first?.kind == .shell(command: "", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        #expect(stripped.allActions.first?.needsReview == true)
+        #expect(g.applyingReview(.keepForReview).allActions.allSatisfy { $0.needsReview })
+        #expect(g.applyingReview(.removeRunnable).allActions.isEmpty)
+        #expect(g.applyingReview(.removeRunnable).allApps.map(\.name) == ["A"])
+    }
+}
+
+@Suite struct FolderCodingTests {
+    let act = action("Act")
+
+    func folderJSON(_ folder: Folder) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(folder)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    @Test func anAppOnlyFolderAlsoWritesTheOlderAppsKey() throws {
+        let folder = Folder(name: "F", apps: [app("A"), app("B")])
+        let json = try folderJSON(folder)
+        #expect((json["apps"] as? [Any])?.count == 2)
+        #expect((json["items"] as? [Any])?.count == 2)
+        let data = try JSONEncoder().encode(folder)
+        #expect(try JSONDecoder().decode(Folder.self, from: data) == folder)
+    }
+
+    @Test func aMixedFolderWritesOnlyItems() throws {
+        let folder = Folder(name: "F", items: [.app(app("A")), .action(act)])
+        let json = try folderJSON(folder)
+        #expect(json["apps"] == nil)
+        let items = try #require(json["items"] as? [[String: Any]])
+        #expect(items.map { $0["type"] as? String } == ["app", "action"])
+        let decoded = try JSONDecoder().decode(Folder.self, from: JSONEncoder().encode(folder))
+        #expect(decoded == folder)
+    }
+
+    @Test func anOlderFolderWithOnlyAppsStillDecodes() throws {
+        let a = app("A")
+        let json = """
+        {"id": "\(UUID().uuidString)", "name": "Old", "apps": [{"id": "\(a.id.uuidString)", "path": "\(a.path)", "bundleID": "com.a"}]}
+        """
+        let folder = try JSONDecoder().decode(Folder.self, from: Data(json.utf8))
+        #expect(folder.name == "Old")
+        #expect(folder.items.map(\.id) == [a.id])
+        #expect(folder.apps.map(\.path) == [a.path])
+    }
+
+    @Test func itemsWinOverAppsAndOneBadMemberIsSkipped() throws {
+        let a = app("A")
+        let json = """
+        {"name": "F", "apps": [], "items": [
+          {"type": "app", "app": {"path": "\(a.path)"}},
+          {"type": "folder", "folder": {"name": "Nested", "items": []}},
+          {"type": "action", "action": {"name": "Link", "kind": {"type": "openURL", "template": "https://x"}}},
+          {"type": "app", "app": {"name": "no path"}}
+        ]}
+        """
+        let folder = try JSONDecoder().decode(Folder.self, from: Data(json.utf8))
+        #expect(folder.items.map(\.title) == ["A", "Link"])
+    }
+
+    @Test func aGridWithAMixedFolderRoundTripsAtVersionTwo() throws {
+        var g = Grid(rows: 1, columns: 3, pages: [Page(items: [.folder(Folder(name: "F", items: [.action(act), .app(app("A"))]))])])
+        g.hasCreatedLayout = true
+        let data = try GridStore.encode(g)
+        let decoded = try GridStore.decode(data)
+        #expect(decoded == g)
+        #expect(decoded.version == 2)
     }
 }

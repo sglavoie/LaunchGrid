@@ -1,0 +1,42 @@
+{
+  "name": "An action dropped on an app makes a folder, runs from inside it, is revealed there by search and drags back out",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Alpha", "Beta", "Echo Hi"]],
+    "pageTitles": [""],
+    "folders": {},
+    "actions": [
+      {"name": "Echo Hi", "keywords": ["eh"], "kind": {"type": "shell", "command": "echo hi"}}
+    ]
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "keys:cmd+e@14"},
+    {"expect": {"editing": true}},
+    {"run": "merge:2,0"},
+    {"expect": {"dragging": false, "pages": [["New Folder", "Beta"]],
+                "folders": {"New Folder": ["Alpha", "Echo Hi"]}, "apps": ["Alpha", "Beta"]}},
+    {"run": "keys:cmd+e@14"},
+    {"expect": {"editing": false}},
+    {"run": "click:0"},
+    {"expect": {"folder": "New Folder", "folderReady": true}},
+    {"run": "fclick:1"},
+    {"expect": {"shown": true, "folder": "New Folder", "lastRuns": {"Echo Hi": "exit:0"},
+                "lastOutput": {"Echo Hi": "hi\n"}, "toast": "Echo Hi finished"}},
+    {"run": "keys:53"},
+    {"expect": {"folder": ""}},
+    {"run": "keys:cmd+e@14"},
+    {"run": "search:eh"},
+    {"expect": {"searchResults": ["Echo Hi"], "editing": true}},
+    {"run": "keys:36"},
+    {"expect": {"query": "", "folder": "New Folder", "folderReady": true, "focus": "Echo Hi"}},
+    {"run": "fdrag:1,1"},
+    {"expect": {"folder": "", "dragging": false, "pages": [["New Folder", "Echo Hi", "Beta"]],
+                "folders": {"New Folder": ["Alpha"]}}},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {"pages": [["New Folder", "Beta"]], "folders": {"New Folder": ["Alpha", "Echo Hi"]}}},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {"pages": [["Alpha", "Beta", "Echo Hi"]], "folders": {}}}
+  ]
+}

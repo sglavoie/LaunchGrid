@@ -120,8 +120,8 @@ final class AppState {
                 // A reveal or page jump can end a search without reopening its folder.
                 // As when closing it directly, don't leave its apps selected out of sight.
                 if let folder = folderBeforeSearch, openFolderID != folder.id,
-                   let apps = grid.folder(folder.id)?.apps {
-                    selection.subtract(apps.map(\.id))
+                   let members = grid.folder(folder.id)?.itemIDs {
+                    selection.subtract(members)
                 }
                 folderBeforeSearch = nil
             }
@@ -417,7 +417,7 @@ final class AppState {
                 ids = Search.results(in: old.allSearchItems, query: query)
                     .dropFirst(searchPage * old.capacity).prefix(old.capacity).map(\.id)
             } else if let id = openFolderID, let folder = old.folder(id) {
-                ids = folder.apps.map(\.id)
+                ids = folder.items.map(\.id)
             } else {
                 ids = old.pages.indices.contains(currentPage) ? old.pages[currentPage].items.map(\.id) : []
             }
@@ -449,7 +449,7 @@ final class AppState {
         }
         // A folder that lost its last page's apps shrinks; don't leave the view on a page it no longer has.
         if let f = openFolder {
-            folderPage = max(0, min(folderPage, FolderLayout.pageCount(apps: f.apps.count, grid: grid) - 1))
+            folderPage = max(0, min(folderPage, FolderLayout.pageCount(apps: f.items.count, grid: grid) - 1))
         }
         if !query.isEmpty {
             searchPage = min(searchPage, searchPageCount - 1)
@@ -459,7 +459,7 @@ final class AppState {
             }
         }
         if let i = focusIndex {
-            let ids = !query.isEmpty ? searchResults.map(\.id) : openFolder?.apps.map(\.id) ?? currentItems.map(\.id)
+            let ids = !query.isEmpty ? searchResults.map(\.id) : openFolder?.items.map(\.id) ?? currentItems.map(\.id)
             // Keep the same item when it is still in this view. If it left, focus the
             // item taking its slot, or the last item when the view became shorter.
             focusIndex = ids.isEmpty ? nil : focusedID.flatMap { ids.firstIndex(of: $0) } ?? min(i, ids.count - 1)
@@ -1112,7 +1112,7 @@ final class AppState {
             // Reopen before clearing the query, so its visible selection stays selected.
             // A rescan meanwhile can have moved it to another page number.
             openFolder(folder.id)
-            let pages = FolderLayout.pageCount(apps: openFolder?.apps.count ?? 0, grid: grid)
+            let pages = FolderLayout.pageCount(apps: openFolder?.items.count ?? 0, grid: grid)
             folderPage = min(folder.page, pages - 1)
         }
         query = ""
@@ -1468,7 +1468,7 @@ final class AppState {
         let cell = restoringFocus ? openFolderID.flatMap { id in currentItems.firstIndex { $0.id == id } } : nil
         // Apps selected inside it would stay selected out of sight, for ⌫ or Group to act on
         // unseen. Not while they're being dragged out of it.
-        if !drag.active, let folder = openFolder { selection.subtract(folder.apps.map(\.id)) }
+        if !drag.active, let folder = openFolder { selection.subtract(folder.items.map(\.id)) }
         openFolderID = nil // animated by the folder layer, as opening is
         focusIndex = cell
     }
@@ -1482,7 +1482,7 @@ final class AppState {
 
     /// Keeps keyboard focus on an item shown: of the open folder, else of the page.
     func clampFocus() {
-        let count = openFolder?.apps.count ?? currentItems.count
+        let count = openFolder?.items.count ?? currentItems.count
         focusIndex = focusIndex.map { min($0, max(0, count - 1)) }
     }
 
@@ -1490,13 +1490,13 @@ final class AppState {
         if !query.isEmpty {
             goToSearchPage(searchPage + delta)
         } else if let f = openFolder {
-            let pages = FolderLayout.pageCount(apps: f.apps.count, grid: grid)
+            let pages = FolderLayout.pageCount(apps: f.items.count, grid: grid)
             let p = max(0, min(folderPage + delta, pages - 1))
             withAnimationIfShown { folderPage = p }
             // Keep keyboard focus on the page being shown, in the same slot where there is one.
             let perPage = FolderLayout.perPage(grid)
             if let i = focusIndex, i / perPage != p {
-                focusIndex = min(p * perPage + i % perPage, f.apps.count - 1)
+                focusIndex = min(p * perPage + i % perPage, f.items.count - 1)
             }
         } else {
             goToPage(currentPage + delta)
@@ -1510,7 +1510,7 @@ final class AppState {
     /// past either end.
     func swipeOffset(for dx: CGFloat, width: CGFloat) -> CGFloat {
         let width = max(width, 1)
-        let (page, count) = openFolder.map { (folderPage, FolderLayout.pageCount(apps: $0.apps.count, grid: grid)) }
+        let (page, count) = openFolder.map { (folderPage, FolderLayout.pageCount(apps: $0.items.count, grid: grid)) }
             ?? (currentPage, grid.pages.count)
         let pastEnd = (dx > 0 && page == 0) || (dx < 0 && page >= count - 1)
         guard pastEnd else { return max(-width * 0.6, min(width * 0.6, dx)) }
@@ -1528,7 +1528,7 @@ final class AppState {
     /// Shift-click: select the range on the current page from the anchor (the item last
     /// clicked), replacing the range the previous shift-click added.
     func extendSelection(to id: UUID) {
-        let ids = (openFolder?.apps.map(\.id)) ?? currentItems.map(\.id)
+        let ids = (openFolder?.items.map(\.id)) ?? currentItems.map(\.id)
         guard let end = ids.firstIndex(of: id) else { return }
         let anchor = selectionAnchor.flatMap { selection.contains($0) ? ids.firstIndex(of: $0) : nil }
         // A new anchor starts a new range. The old page's range stays selected,
@@ -1558,31 +1558,33 @@ final class AppState {
     /// How many selected items aren't in view: on other pages (a selection can span them).
     var selectionOutOfView: Int {
         let perPage = FolderLayout.perPage(grid)
-        let folderApps = openFolder?.apps.dropFirst(folderPage * perPage).prefix(perPage).map(\.id) ?? []
+        let folderApps = openFolder?.items.dropFirst(folderPage * perPage).prefix(perPage).map(\.id) ?? []
         let shown = Set(folderApps + currentItems.map(\.id))
         return selection.subtracting(shown).count
     }
 
     var orderedSelection: [UUID] {
         // A folder's own apps follow it, so ones selected inside an open folder count too.
-        grid.pages.flatMap { $0.items.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) } }.filter { selection.contains($0) }
+        grid.pages.flatMap { $0.items.flatMap { [$0.id] + ($0.folder?.itemIDs ?? []) } }.filter { selection.contains($0) }
     }
 
     func remove(_ ids: [UUID]) {
         let count = ids.count
         // Named when it's one, so it's clear which went (VoiceOver reads it out too).
         let name = count == 1 ? grid.item(ids[0])?.title : nil
-        // A folder takes all its apps with it: say how many, as they leave the grid too.
+        // A folder takes all it holds with it: say how many, as they leave the grid too.
         let folders = ids.compactMap { grid.item($0)?.folder }
-        // Apps also selected inside a selected folder are among its apps already.
-        let inFolders = Set(folders.flatMap { $0.apps.map(\.id) })
+        // Items also selected inside a selected folder are among its members already.
+        let inFolders = Set(folders.flatMap(\.itemIDs))
         let loose = ids.filter { grid.item($0)?.folder == nil && !inFolders.contains($0) }.count
-        let apps = folders.reduce(loose) { $0 + $1.apps.count }
+        let apps = folders.reduce(loose) { $0 + $1.items.count }
+        let withActions = folders.contains { !$0.actions.isEmpty }
         let installed = self.installed
         apply { g in g.removingEmptiedPages { $0.remove(ids, installed: installed) } }
         selection.subtract(ids)
         if !folders.isEmpty {
-            showToast(String(localized: "Removed \(apps) apps — ⌘Z to undo"))
+            showToast(withActions ? String(localized: "Removed \(apps) items — ⌘Z to undo")
+                      : String(localized: "Removed \(apps) apps — ⌘Z to undo"))
         } else {
             showToast(count > 1 ? String(localized: "Removed \(count) items — ⌘Z to undo")
                       : name.map { String(localized: "Removed \($0) — ⌘Z to undo") } ?? String(localized: "Removed — ⌘Z to undo"))
@@ -1616,18 +1618,19 @@ final class AppState {
     /// Groups the selection into a folder where `anchor` is; without one, where the focused
     /// item is, if selected, else the first selected item on the page shown, so the folder
     /// opens where the person is looking.
-    /// Whether `ids` can make a folder: actions can't go in one yet.
+    /// Whether `ids` can make a folder: apps, actions and folders on the grid all can.
+    /// Search-only actions have no slot, so none of them can.
     func canGroup(_ ids: [UUID]) -> Bool {
-        !ids.contains { grid.item($0)?.action != nil }
+        ids.allSatisfy { grid.locate($0) != nil }
     }
 
     func groupSelection(anchor: UUID? = nil) {
         let ids = orderedSelection
         guard selectionActionable, ids.count > 1, canGroup(ids) else { return }
         let name = GridBuilder.folderName(for: ids.compactMap { grid.item($0)?.app }.map { installedApp(for: $0) })
-        let shown = openFolder.map { $0.apps.map(\.id) } ?? currentItems.map(\.id)
+        let shown = openFolder?.itemIDs ?? currentItems.map(\.id)
         let focused = focusIndex.flatMap { shown.indices.contains($0) ? shown[$0] : nil }
-        let onPage = currentItems.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) }
+        let onPage = currentItems.flatMap { [$0.id] + ($0.folder?.itemIDs ?? []) }
         let anchor = anchor ?? focused.flatMap { selection.contains($0) ? $0 : nil } ?? onPage.first(where: selection.contains)
         var newID: UUID?
         // Grouping can take the last item off another page; that page goes, as with a drag.

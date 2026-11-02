@@ -600,6 +600,64 @@ func installed(_ name: String) -> InstalledApp {
         #expect(Set(state.grid.allApps.map(\.name)) == ["A", "B", "C"])
     }
 
+    @Test(arguments: [false, true])
+    func anActionDroppedOnAnAppOrActionMakesAFolder(ontoAction: Bool) throws {
+        let state = makeState(["A", "B"])
+        let link = Action(name: "Docs", kind: .openURL(template: "https://example.com"))
+        let other = Action(name: "Other", kind: .openURL(template: "https://example.org"))
+        state.apply { $0.pages[0].items.insert(.action(link), at: 0) }
+        if ontoAction { state.apply { $0.pages[0].items.insert(.action(other), at: 1) } }
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        let release = state.iconCenter(1, inFolder: false)
+        let target = state.grid.pages[0].items[1].id
+        state.dragChanged(start: start, location: release)
+        #expect(state.drag.candidate == target, "an action can merge, and be merged onto")
+        state.drag.mergeTarget = target
+        let before = state.grid
+        state.dragEnded(start: start, location: release, predicted: release)
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        #expect(folder.items.map(\.title) == (ontoAction ? ["Docs", "Other"] : ["Docs", "A"]), "in the order they were on the page")
+        #expect(folder.name == "New Folder")
+        state.undo()
+        #expect(state.grid == before)
+    }
+
+    @Test func anActionDroppedOnAFolderJoinsItAndDragsBackOut() throws {
+        let state = makeState(["A", "B", "C"])
+        let apps = state.grid.allApps
+        state.apply { _ = $0.group([apps[0].id, apps[1].id], name: "Work") }
+        let link = Action(name: "Docs", kind: .openURL(template: "https://example.com"))
+        state.apply { $0.pages[0].items.append(.action(link)) }
+        #expect(state.grid.pages[0].items.map(\.title) == ["Work", "C", "Docs"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(2, inFolder: false)
+        let release = state.iconCenter(0, inFolder: false)
+        let folderID = state.grid.pages[0].items[0].id
+        state.dragChanged(start: start, location: release)
+        #expect(state.drag.candidate == folderID)
+        state.drag.mergeTarget = folderID
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.toast == "Added to Work")
+        #expect(state.grid.folder(folderID)?.items.map(\.title) == ["A", "B", "Docs"])
+
+        // Out again: from the open folder onto the page.
+        state.openFolder(folderID)
+        state.drag.folderGridFrame = CGRect(x: 100, y: 100, width: 500, height: 200)
+        state.drag.folderPanelFrame = CGRect(x: 80, y: 80, width: 540, height: 240)
+        let center = state.iconCenter(2, inFolder: true)
+        let inner = CGPoint(x: 100 + center.x, y: 100 + center.y)
+        let outside = CGPoint(x: 650, y: 450)
+        state.dragChanged(start: inner, location: outside)
+        #expect(state.drag.ids == [link.id])
+        #expect(state.openFolderID == nil, "dragging it out closes the folder")
+        state.dragEnded(start: inner, location: outside, predicted: outside)
+        #expect(state.grid.locate(link.id)?.folderIndex == nil)
+        #expect(state.grid.folder(folderID)?.items.map(\.title) == ["A", "B"])
+        state.undo()
+        #expect(state.grid.folder(folderID)?.items.map(\.title) == ["A", "B", "Docs"])
+    }
+
     @Test func aDropUsesTheReleasePosition() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
@@ -3799,21 +3857,79 @@ func installed(_ name: String) -> InstalledApp {
         #expect(titles(.action(link)) == ["Open", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
         #expect(titles(.action(file)) == ["Open", "Show in Finder", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
 
-        // With an app selected too, everything but grouping.
+        // With an app selected too, grouping as well.
         state.selection = [link.id, state.grid.allApps[0].id]
-        #expect(!titles(.action(link)).contains { $0.hasPrefix("Group") })
+        #expect(titles(.action(link)).contains("Group 2 Items"))
         #expect(titles(.action(link)).contains("Move 2 Items to Page"))
     }
 
-    @Test func aSelectionWithAnActionDoesNotGroup() {
+    @Test func aSelectionWithAnActionGroupsIntoAFolderAndUndoes() throws {
         let opener = FakeOpener()
         let state = state(with: [link], opener: opener)
         state.apply { $0.pages[0].items.append(.app(AppRef(bundleID: "com.test.B", path: "/Applications/B.app", name: "B"))) }
         state.selection = Set(state.currentItems.map(\.id))
-        #expect(!state.canGroup(state.orderedSelection))
+        #expect(state.canGroup(state.orderedSelection))
         let before = state.grid
         state.groupSelection()
+        let folder = try #require(state.openFolder)
+        #expect(folder.items.map(\.title) == ["A", "Docs", "B"])
+        #expect(state.grid.pages[0].items.count == 1)
+        state.undo()
         #expect(state.grid == before)
+        state.redo()
+        #expect(state.grid.folder(folder.id)?.items.map(\.title) == ["A", "Docs", "B"])
+
+        // A search-only action has no slot to group.
+        let hidden = Action(name: "Hidden", kind: .openURL(template: "https://example.com"), showsOnGrid: false)
+        state.apply { $0.addAction(hidden) }
+        #expect(!state.canGroup([hidden.id, folder.id]))
+    }
+
+    @Test func anActionInAFolderRunsFromItAndIsFoundBySearch() async throws {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        let a = state.grid.allApps[0]
+        state.apply { _ = $0.group([a.id, link.id], name: "Dev") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        #expect(folder.items.map(\.id) == [a.id, link.id])
+        state.openFolder(folder.id)
+
+        // Clicked (or Return) inside the open folder: it runs, as on a page.
+        state.activate(folder.items[1].gridItem)
+        try await opener.waitForOpens(1)
+        #expect(opener.opened == [URL(string: "https://example.com/docs")!])
+
+        // Search finds it inside the folder; revealing it opens the folder with focus on it.
+        state.closeFolder()
+        state.isShown = true
+        state.query = "docs"
+        #expect(state.searchResults.map(\.id) == [link.id])
+        state.reveal(.action(link))
+        #expect(state.query.isEmpty)
+        #expect(state.openFolderID == folder.id)
+        #expect(state.focusIndex == 1)
+
+        // Removing the folder says how many items went, actions included.
+        state.closeFolder()
+        state.remove([folder.id])
+        #expect(state.toast == "Removed 2 items — ⌘Z to undo")
+        #expect(state.grid.allActions.isEmpty)
+        state.undo()
+        #expect(state.grid.folder(folder.id)?.items.map(\.id) == [a.id, link.id])
+    }
+
+    @Test func editingAnActionInAFolderKeepsItThereAndUndoes() throws {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        let a = state.grid.allApps[0]
+        state.apply { _ = $0.group([a.id, link.id], name: "Dev") }
+        let folderID = try #require(state.grid.pages[0].items.first?.id)
+        var edited = link
+        edited.name = "Docs 2"
+        state.saveAction(edited, pageID: nil)
+        #expect(state.grid.folder(folderID)?.items.map(\.title) == ["A", "Docs 2"])
+        state.undo()
+        #expect(state.grid.folder(folderID)?.items.map(\.title) == ["A", "Docs"])
     }
 
     @Test func renamingAnActionSaysSoAndIsUndoable() {

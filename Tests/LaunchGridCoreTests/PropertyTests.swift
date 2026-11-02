@@ -39,7 +39,7 @@ struct SeededRandom: RandomNumberGenerator {
     }
 
     /// Nothing lost or doubled, no page over capacity, no empty folder, no repeated ID; each
-    /// action where its `showsOnGrid` says, none of them inside a folder or among the apps.
+    /// action where its `showsOnGrid` says (one in a folder is on the grid), never among the apps.
     func checkInvariants(_ g: Grid, apps expected: [String], actions: [UUID]? = nil, seed: UInt64, step: String) {
         let paths = g.allApps.map(\.path).sorted()
         #expect(paths == expected.sorted(), "seed \(seed), after \(step): apps lost or doubled")
@@ -48,11 +48,13 @@ struct SeededRandom: RandomNumberGenerator {
                     "seed \(seed), after \(step): actions lost or doubled")
         }
         #expect(g.pages.allSatisfy { $0.items.allSatisfy { $0.action?.showsOnGrid != false } }, "seed \(seed), after \(step): a search-only action on a page")
+        #expect(g.pages.allSatisfy { $0.items.allSatisfy { $0.folder?.actions.allSatisfy(\.showsOnGrid) != false } },
+                "seed \(seed), after \(step): a search-only action in a folder")
         #expect(g.hiddenActions.allSatisfy { !$0.showsOnGrid }, "seed \(seed), after \(step): a visible action hidden")
         let capacity = g.rows * g.columns
         #expect(g.pages.allSatisfy { $0.items.count <= capacity }, "seed \(seed), after \(step): a page over capacity")
-        #expect(!g.pages.contains { $0.items.contains { $0.folder?.apps.isEmpty == true } }, "seed \(seed), after \(step): an empty folder")
-        let ids = g.pages.flatMap { [$0.id] + $0.items.flatMap { [$0.id] + ($0.folder?.apps.map(\.id) ?? []) } } + g.hiddenActions.map(\.id)
+        #expect(!g.pages.contains { $0.items.contains { $0.folder?.items.isEmpty == true } }, "seed \(seed), after \(step): an empty folder")
+        let ids = g.pages.flatMap { [$0.id] + $0.items.flatMap { [$0.id] + ($0.folder?.itemIDs ?? []) } } + g.hiddenActions.map(\.id)
         #expect(Set(ids).count == ids.count, "seed \(seed), after \(step): a repeated ID")
     }
 
@@ -66,7 +68,9 @@ struct SeededRandom: RandomNumberGenerator {
                 let items = g.pages.flatMap(\.items)
                 let apps = g.allApps
                 guard let any = items.randomElement(using: &rng) else { break }
-                let step: String
+                var step = ""
+                // Mixed-folder edits draw from their own generator, so the older steps' seeds
+                // still produce the same sequences.
                 switch Int.random(in: 0..<11, using: &rng) {
                 case 0:
                     let page = Int.random(in: 0..<g.pages.count, using: &rng)
@@ -103,12 +107,42 @@ struct SeededRandom: RandomNumberGenerator {
                     g.sortEverything(folders: FolderPlacement.allCases.randomElement(using: &rng)!)
                     step = "sortEverything"
                 case 8:
-                    // Actions picked with apps stay out of the folder, where they were.
+                    // Actions on the grid go in the folder with the apps; search-only ones
+                    // stay search-only, and no action changes.
                     let picked = Array((apps.map(\.id) + g.allActions.map(\.id)).shuffled(using: &rng).prefix(Int.random(in: 2...4, using: &rng)))
-                    let before = g.allActions
-                    g.removingEmptiedPages { _ = $0.group(picked, name: "F", anchor: picked.first) }
-                    #expect(g.allActions == before, "seed \(seed): grouping changed an action")
+                    let before = Dictionary(uniqueKeysWithValues: g.allActions.map { ($0.id, $0) })
+                    let hidden = g.hiddenActions.map(\.id)
+                    var folderID: UUID?
+                    g.removingEmptiedPages { folderID = $0.group(picked, name: "F", anchor: picked.first) }
+                    #expect(Dictionary(uniqueKeysWithValues: g.allActions.map { ($0.id, $0) }) == before, "seed \(seed): grouping changed an action")
+                    #expect(g.hiddenActions.map(\.id) == hidden, "seed \(seed): grouping moved a search-only action")
+                    if let folderID, let folder = g.folder(folderID) {
+                        let grouped = Set(picked).subtracting(hidden)
+                        #expect(Set(folder.itemIDs) == grouped, "seed \(seed): the folder holds what was grouped")
+                    }
                     step = "groupWithActions"
+                    var mixedRNG = SeededRandom(state: rng.state ^ 0x0F01_DE25)
+                    // Then an action dragged into, around or out of a folder.
+                    let current = g.pages.flatMap(\.items)
+                    guard let action = g.allActions.filter(\.showsOnGrid).randomElement(using: &mixedRNG) else { break }
+                    switch Int.random(in: 0..<3, using: &mixedRNG) {
+                    case 0:
+                        guard let folder = current.compactMap(\.folder).randomElement(using: &mixedRNG) else { break }
+                        let at = Int.random(in: 0...folder.items.count, using: &mixedRNG)
+                        g.removingEmptiedPages { $0.addToFolder([action.id], folder: folder.id, at: at) }
+                        #expect(g.folder(containing: action.id)?.id == folder.id, "seed \(seed): the action went in the folder")
+                        step += "+addActionToFolder"
+                    case 1:
+                        guard g.locate(action.id)?.folderIndex != nil else { break }
+                        let page = Int.random(in: 0..<g.pages.count, using: &mixedRNG)
+                        g.removingEmptiedPages { $0.move([action.id], toPage: page, at: 0) }
+                        #expect(g.locate(action.id)?.folderIndex == nil, "seed \(seed): the action left its folder")
+                        step += "+moveActionOutOfFolder"
+                    default:
+                        guard let target = current.filter({ $0.id != action.id && $0.folder == nil }).randomElement(using: &mixedRNG) else { break }
+                        g.removingEmptiedPages { _ = $0.group([target.id, action.id], name: "F", anchor: target.id) }
+                        step += "+groupActionWithItem"
+                    }
                 case 9:
                     guard var action = g.allActions.randomElement(using: &rng) else { continue }
                     action.showsOnGrid.toggle()
@@ -135,10 +169,20 @@ struct SeededRandom: RandomNumberGenerator {
                     let picked = Array(g.allApps.shuffled(using: &rng).prefix(3))
                     if picked.count > 1 { g.removingEmptiedPages { $0.group(picked.map(\.id), name: "Folder") } }
                 }
+                // Mixed folders: some actions join them, from a generator of their own so each
+                // seed's apps vanish and return as before.
+                var mixedRNG = SeededRandom(state: seed ^ 0x0F01_DE25)
+                let folders = g.pages.flatMap(\.items).compactMap(\.folder)
+                for action in g.pages.flatMap(\.items).compactMap(\.action) where Bool.random(using: &mixedRNG) {
+                    guard let folder = folders.randomElement(using: &mixedRNG), let f = g.folder(folder.id) else { continue }
+                    let at = Int.random(in: 0...f.items.count, using: &mixedRNG)
+                    g.removingEmptiedPages { $0.addToFolder([action.id], folder: folder.id, at: at) }
+                }
             }
             let installedApps = g.allApps.map { InstalledApp(bundleID: $0.bundleID, path: $0.path, name: $0.name) }
             let original = g.pages.map { $0.items.map(\.title) }
             let originalApps = g.allApps.map(\.id)
+            let originalMembers = g.pages.flatMap(\.items).compactMap(\.folder).map(\.itemIDs)
             let originalActions = g.allActions
             var present = Set(installedApps.map(\.path))
             // A few rounds of apps going (an update, a volume) and coming back, in batches. Never
@@ -161,6 +205,8 @@ struct SeededRandom: RandomNumberGenerator {
             }
             #expect(g.pages.map { $0.items.map(\.title) } == original, "seed \(seed): the layout came back as it was")
             #expect(g.allApps.map(\.id) == originalApps, "seed \(seed): folder contents came back in order")
+            #expect(g.pages.flatMap(\.items).compactMap(\.folder).map(\.itemIDs) == originalMembers,
+                    "seed \(seed): apps came back among a folder's actions in order")
             #expect(g.allActions == originalActions, "seed \(seed): actions untouched")
         }
     }

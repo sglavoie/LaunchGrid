@@ -38,8 +38,9 @@ Each file needs a name, fixture and sequence of steps:
 ```
 
 An optional `actions` array holds actions in the layout's JSON form (`name`, `keywords`,
-`kind`, `showsOnGrid`). One shown on the grid is placed where its name appears in `pages`;
-a search-only one (`"showsOnGrid": false`) is kept off every page.
+`kind`, `showsOnGrid`). One shown on the grid is placed where its name appears in `pages`,
+or in a folder's list in `folders`; a search-only one (`"showsOnGrid": false`) is kept off
+every page.
 
 An optional `files` object maps plain file names to text. They are written into a `files`
 folder in the scenario's artifacts before the first step, and `${FILES}` anywhere in the
@@ -60,7 +61,7 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | `show`, `hide` | Show/hide the overlay |
 | `windowsize:718,534` | Resize the overlay window in points to cover compact layouts |
 | `keys:cmd+e@14`, `keys:125`, `keys: @49` | Post keyboard events: edit mode, Down, Space |
-| `click:0`, `press:0`, `fpress:0` | Click or long-press a page/folder cell |
+| `click:0`, `press:0`, `fclick:0`, `fpress:0` | Click or long-press a page cell, or a cell of the open folder |
 | `drag:0,2`, `fdrag:1,1`, `finside:0,2`, `merge:0,1`, `edge:0,0` | Send mouse events through the gesture path |
 | `hold:0,2`, `fhold:1,1`, `release` | Hold/release a mouse drag; Escape can cancel it |
 | `page:1`, `folder`, `focus:0`, `edit`, `select:0,1`, `fselect:0` | Set up a specific interaction context |

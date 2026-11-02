@@ -92,6 +92,15 @@ public enum GridItem: Equatable, Identifiable, Sendable {
         case .action: []
         }
     }
+
+    /// What this item adds to a folder: itself, or a folder's members (folders don't nest).
+    public var members: [FolderMember] {
+        switch self {
+        case .app(let a): [.app(a)]
+        case .folder(let f): f.items
+        case .action(let a): [.action(a)]
+        }
+    }
 }
 
 extension GridItem: Codable {
@@ -206,12 +215,101 @@ public struct PrunedApp: Codable, Equatable, Sendable {
 public struct Folder: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
-    public var apps: [AppRef]
+    /// What the folder holds, in order: apps and actions. Positions in a folder
+    /// (`ItemLocation.folderIndex`, `PrunedApp.folderIndex`) count every member.
+    public var items: [FolderMember]
 
-    public init(id: UUID = UUID(), name: String, apps: [AppRef] = []) {
+    public init(id: UUID = UUID(), name: String, items: [FolderMember]) {
         self.id = id
         self.name = name
-        self.apps = apps
+        self.items = items
+    }
+
+    public init(id: UUID = UUID(), name: String, apps: [AppRef] = []) {
+        self.init(id: id, name: name, items: apps.map(FolderMember.app))
+    }
+
+    /// Only the apps, in order: what the reconciler, importers and `Grid.allApps` deal in.
+    public var apps: [AppRef] { items.compactMap(\.app) }
+
+    /// Only the actions, in order.
+    public var actions: [Action] { items.compactMap(\.action) }
+
+    /// The member IDs, in order.
+    public var itemIDs: [UUID] { items.map(\.id) }
+}
+
+/// Something inside a folder: an app or an action. Folders don't nest.
+public enum FolderMember: Equatable, Identifiable, Sendable {
+    case app(AppRef)
+    case action(Action)
+
+    public var id: UUID {
+        switch self {
+        case .app(let a): a.id
+        case .action(let a): a.id
+        }
+    }
+
+    public var app: AppRef? {
+        if case .app(let a) = self { return a }
+        return nil
+    }
+
+    public var action: Action? {
+        if case .action(let a) = self { return a }
+        return nil
+    }
+
+    public var title: String {
+        switch self {
+        case .app(let a): a.title
+        case .action(let a): a.name
+        }
+    }
+
+    /// The member as a grid item, as it is shown, searched and dragged.
+    public var gridItem: GridItem {
+        switch self {
+        case .app(let a): .app(a)
+        case .action(let a): .action(a)
+        }
+    }
+
+    /// An app or an action as a folder member; nil for a folder, as folders don't nest.
+    public init?(_ item: GridItem) {
+        switch item {
+        case .app(let a): self = .app(a)
+        case .action(let a): self = .action(a)
+        case .folder: return nil
+        }
+    }
+}
+
+/// Written as a grid item is: `{"type":"app","app":{…}}` or `{"type":"action","action":{…}}`.
+extension FolderMember: Codable {
+    private enum CodingKeys: String, CodingKey { case type, app, action }
+    private enum Kind: String, Codable { case app, action }
+
+    /// An unknown `type` (a folder, or a kind from a newer build) fails this member alone.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(Kind.self, forKey: .type) {
+        case .app: self = .app(try c.decode(AppRef.self, forKey: .app))
+        case .action: self = .action(try c.decode(Action.self, forKey: .action))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .app(let a):
+            try c.encode(Kind.app, forKey: .type)
+            try c.encode(a, forKey: .app)
+        case .action(let a):
+            try c.encode(Kind.action, forKey: .type)
+            try c.encode(a, forKey: .action)
+        }
     }
 }
 
@@ -480,15 +578,31 @@ extension AppRef {
 }
 
 extension Folder {
-    private enum CodingKeys: String, CodingKey { case id, name, apps }
+    private enum CodingKeys: String, CodingKey { case id, name, apps, items }
 
+    /// `items` when present; otherwise the older `apps` list, every entry an app.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let items: [FolderMember] = if c.contains(.items) {
+            try c.decodeLossily(FolderMember.self, forKey: .items) ?? []
+        } else {
+            (try c.decodeLossily(AppRef.self, forKey: .apps) ?? []).map(FolderMember.app)
+        }
         self.init(
             id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
             name: (try? c.decodeIfPresent(String.self, forKey: .name)) ?? String(localized: "Folder"),
-            apps: try c.decodeLossily(AppRef.self, forKey: .apps) ?? []
+            items: items
         )
+    }
+
+    /// Writes `items`, and `apps` too while every member is an app, so a build that only
+    /// knows `apps` still opens app-only folders.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        if items.allSatisfy({ $0.app != nil }) { try c.encode(apps, forKey: .apps) }
+        try c.encode(items, forKey: .items)
     }
 }
 
