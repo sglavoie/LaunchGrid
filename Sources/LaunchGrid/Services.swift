@@ -306,9 +306,10 @@ final class IconProvider: @unchecked Sendable {
     }
 
     private static func fingerprint(_ url: URL) -> Int? {
-        // Mapping avoids copying an asset catalog into memory. Hashing the bytes catches an
-        // in-place replacement of the same size without using file timestamps.
-        (try? Data(contentsOf: url, options: .mappedIfSafe))?.hashValue
+        // Hashing every byte catches an in-place replacement of the same size without using file
+        // timestamps. Streamed, so an asset catalog isn't read into memory at once, and not
+        // `Data.hashValue`, which covers only the first 80 bytes on macOS 14's Foundation.
+        ImageBlurCache.contentHash(of: url)
     }
 
     /// Calls `done` with the icon: at once from the cache, else when it's drawn, by this call or

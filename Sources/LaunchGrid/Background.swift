@@ -224,8 +224,9 @@ final class ImageBlurCache: NSObject, NSCacheDelegate, @unchecked Sendable {
         return "\(url.path)|\(file)|\(values?.fileSize ?? -1)|\(hash)"
     }
 
-    /// Stream the picture so a same-size edit in its middle also changes its identity.
-    private static func contentHash(of url: URL) -> Int? {
+    /// Stream the file so a same-size edit in its middle also changes its identity. Icons use
+    /// it too. Seeded per launch, so it only compares within one.
+    static func contentHash(of url: URL) -> Int? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         let chunk = 64 * 1024

@@ -1697,6 +1697,14 @@ func installed(_ name: String) -> InstalledApp {
         #expect(icons.dropStale([app.path]).isEmpty)
         try Data("asset-two".utf8).write(to: assets)
         #expect(icons.dropStale([app.path]) == [app.path])
+
+        // A rebuilt catalog keeps its header: only bytes past the first 80 differ.
+        let header = Data(repeating: 0x41, count: 4096)
+        try (header + Data("old".utf8)).write(to: assets)
+        _ = await icons.icon(app.path)
+        #expect(icons.dropStale([app.path]).isEmpty)
+        try (header + Data("new".utf8)).write(to: assets)
+        #expect(icons.dropStale([app.path]) == [app.path])
     }
 }
 
