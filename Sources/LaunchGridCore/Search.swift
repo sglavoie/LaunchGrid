@@ -55,15 +55,72 @@ public enum Search {
 
     /// Apps matching `query`, best first, ties broken alphabetically.
     public static func results(in apps: [AppRef], query: String) -> [AppRef] {
-        apps.compactMap { app -> (AppRef, Int)? in
-            let s = [score(app.title, query: query), app.displayName == nil ? nil : score(app.name, query: query)]
-                .compactMap { $0 }.max()
-            return s.map { (app, $0) }
+        results(in: apps.map(GridItem.app), query: query).compactMap(\.item.app)
+    }
+
+    /// A search result: the item found and, for an action that takes one, the argument typed
+    /// after its keyword ("gh launchgrid" → "launchgrid").
+    public struct Match: Equatable, Identifiable, Sendable {
+        public var item: GridItem
+        public var argument: String?
+
+        public init(item: GridItem, argument: String? = nil) {
+            self.item = item
+            self.argument = argument
+        }
+
+        public var id: UUID { item.id }
+        public var title: String { item.title }
+    }
+
+    /// An exact keyword ranks above an exact name (1000).
+    static let keywordScore = 1100
+
+    /// Items matching `query`, best first, ties broken alphabetically by title. An app is
+    /// scored on its title and its bundle name, an action on its name and its keywords. A
+    /// query equal to a keyword, or one starting with a keyword and a space when the action
+    /// takes an argument, puts the action above any name match, carrying what follows.
+    /// Folders aren't matched themselves; pass their apps.
+    public static func results(in items: [GridItem], query: String) -> [Match] {
+        items.compactMap { item -> (Match, Int)? in
+            switch item {
+            case .app(let app):
+                let s = [score(app.title, query: query), app.displayName == nil ? nil : score(app.name, query: query)]
+                    .compactMap { $0 }.max()
+                return s.map { (Match(item: item), $0) }
+            case .action(let action):
+                return actionMatch(action, query: query).map { (Match(item: item, argument: $0.argument), $0.score) }
+            case .folder:
+                return nil
+            }
         }
         .sorted { a, b in
             a.1 != b.1 ? a.1 > b.1 : a.0.title.localizedStandardCompare(b.0.title) == .orderedAscending
         }
         .map(\.0)
+    }
+
+    private static func actionMatch(_ action: Action, query: String) -> (score: Int, argument: String?)? {
+        let keywords = Set(action.keywords.map(normalize))
+        if keywords.contains(normalize(query)) { return (keywordScore, nil) }
+        if action.kind.takesArgument,
+           let argument = keywordSplits(query).first(where: { keywords.contains(normalize($0.keyword)) })?.argument {
+            return (keywordScore, argument)
+        }
+        let s = ([action.name] + action.keywords).compactMap { score($0, query: query) }.max()
+        return s.map { ($0, nil) }
+    }
+
+    /// Each way to read `query` as a keyword, a space and a non-empty argument, shortest
+    /// keyword first, so a keyword with a space in it works too: "gh launch grid" gives
+    /// ("gh", "launch grid") and ("gh launch", "grid"). The argument keeps its case.
+    private static func keywordSplits(_ query: String) -> [(keyword: String, argument: String)] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return q.indices.compactMap { i in
+            guard q[i].isWhitespace, i > q.startIndex, !q[q.index(before: i)].isWhitespace else { return nil }
+            let argument = q[i...].trimmingCharacters(in: .whitespacesAndNewlines)
+            return argument.isEmpty ? nil : (String(q[..<i]), argument)
+        }
     }
 
     /// `s` with separators other than spaces dropped and each run of spaces made one:

@@ -179,7 +179,7 @@ enum DebugScript {
                     DispatchQueue.main.async { delegate.saveGridFileFromMenu() }
                 case "results":
                     // The search's matches, best first, and where each app lives.
-                    print("results: \(state.allSearchResults.map { "\($0.title) \($0.path)" })")
+                    print("results: \(state.allSearchResults.map { "\($0.title) \($0.item.app?.path ?? "action")" })")
                     fflush(stdout)
                 case "toast":
                     print("toast: \(state.toast ?? "-")")

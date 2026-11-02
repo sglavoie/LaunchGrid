@@ -564,6 +564,8 @@ struct ItemView: View {
     var focused = false
     var mergeTarget = false
     var editing = false
+    /// The argument a search result for an action carries, shown under its name.
+    var argument: String?
     var onDelete: (() -> Void)?
 
     var body: some View {
@@ -605,6 +607,16 @@ struct ItemView: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: iconSize * 1.5)
                     .modifier(Legible())
+                if let argument {
+                    Text(verbatim: argument)
+                        .font(.system(size: max(10, min(12, iconSize * 0.13))))
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.95 : 0.75))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: iconSize * 1.5)
+                        .modifier(Legible())
+                        .padding(.top, -4)
+                }
             }
         }
         .padding(6)
@@ -623,10 +635,17 @@ struct ItemView: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(item.folder != nil ? Text("Folder \(item.title)") : Text(verbatim: item.title))
+        .accessibilityLabel(accessibilityLabel)
         // VoiceOver reads a folder's size after its name.
         .accessibilityValue(item.folder.map { Text("\($0.apps.count) apps") } ?? Text(verbatim: ""))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var accessibilityLabel: Text {
+        if item.folder != nil { return Text("Folder \(item.title)") }
+        // "Search GitHub — launchgrid": what Return will run.
+        if let argument { return Text(verbatim: "\(item.title) — \(argument)") }
+        return Text(verbatim: item.title)
     }
 
     @ViewBuilder private var icon: some View {
@@ -844,12 +863,12 @@ struct SearchResultsView: View {
                         .modifier(Legible())
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
-                ForEach(Array(results.enumerated()), id: \.element.id) { i, app in
-                    ItemView(item: .app(app), iconSize: icon, focused: state.focusIndex == i)
-                        .onTapGesture { state.activateResult(app) }
-                        .accessibilityAction { state.activateResult(app) }
-                        .accessibilityFocused($voiceOverFocus, equals: app.id)
-                        .contextMenu { ItemMenu(item: .app(app)) }
+                ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
+                    ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument)
+                        .onTapGesture { state.activateResult(match) }
+                        .accessibilityAction { state.activateResult(match) }
+                        .accessibilityFocused($voiceOverFocus, equals: match.id)
+                        .contextMenu { ItemMenu(item: match.item) }
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(i))
                 }

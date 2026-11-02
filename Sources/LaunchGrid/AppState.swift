@@ -49,7 +49,7 @@ final class AppState {
     /// `gridGeneration` as of the last save (or load), so saving an unchanged grid doesn't
     /// replace the backup of the save before it with a copy of the same one.
     @ObservationIgnored private var savedGeneration = 0
-    @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [AppRef])?
+    @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [Search.Match])?
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
     /// The scan's paths in lower case: the disk ignores case, so a tile at zoom.us.app whose
@@ -397,7 +397,7 @@ final class AppState {
         let focusedID: UUID? = focusIndex.flatMap { i in
             let ids: [UUID]
             if !query.isEmpty {
-                ids = Search.results(in: old.allApps, query: query)
+                ids = Search.results(in: old.allSearchItems, query: query)
                     .dropFirst(searchPage * old.capacity).prefix(old.capacity).map(\.id)
             } else if let id = openFolderID, let folder = old.folder(id) {
                 ids = folder.apps.map(\.id)
@@ -1040,11 +1040,11 @@ final class AppState {
 
     /// Every match, best first. Cached per query and grid: several views and the key
     /// handler read it on each keystroke.
-    var allSearchResults: [AppRef] {
+    var allSearchResults: [Search.Match] {
         // Read both through observation so views still track them on a cache hit.
         let q = query, g = grid
         if let c = searchCache, c.query == q, c.generation == gridGeneration { return c.results }
-        let results = Search.results(in: g.allApps, query: q)
+        let results = Search.results(in: g.allSearchItems, query: q)
         searchCache = (q, gridGeneration, results)
         return results
     }
@@ -1054,7 +1054,7 @@ final class AppState {
     }
 
     /// The matches shown on the current search page.
-    var searchResults: [AppRef] {
+    var searchResults: [Search.Match] {
         Array(allSearchResults.dropFirst(searchPage * grid.capacity).prefix(grid.capacity))
     }
 
@@ -1210,8 +1210,11 @@ final class AppState {
     /// A search result clicked (or Return) in edit mode: rather than launching it, as edit mode
     /// never launches, shows it where it is to arrange it. The search clears, the view goes to
     /// its page (its folder open, if it's in one) and keyboard focus lands on it.
-    func reveal(_ app: AppRef) {
-        guard let loc = grid.locate(app.id) else { return }
+    func reveal(_ app: AppRef) { reveal(.app(app)) }
+
+    /// A search-only action has no slot to show, so nothing happens.
+    func reveal(_ item: GridItem) {
+        guard let loc = grid.locate(item.id) else { return }
         query = ""
         if let fi = loc.folderIndex {
             goToPage(loc.page)
@@ -1225,9 +1228,22 @@ final class AppState {
         }
     }
 
-    /// A search result clicked or chosen with Return: launched, or in edit mode revealed.
-    func activateResult(_ app: AppRef) {
-        if editing { reveal(app) } else { launch(app) }
+    /// A search result clicked or chosen with Return: launched or run, or in edit mode revealed.
+    func activateResult(_ match: Search.Match) {
+        if editing { return reveal(match.item) }
+        switch match.item {
+        case .app(let a): launch(a)
+        case .action(let a): run(a, argument: match.argument)
+        case .folder(let f): openFolder(f.id)
+        }
+    }
+
+    /// Runs an action, with the argument typed after its keyword in search.
+    func run(_ action: Action, argument: String?) {
+        // Running actions comes in a later step; until then only debug builds say so.
+        #if DEBUG
+        showToast("Actions arrive in a later step")
+        #endif
     }
 
     /// Click / Return on an item.
@@ -1235,7 +1251,7 @@ final class AppState {
         switch item {
         case .app(let a): launch(a)
         case .folder(let f): openFolder(f.id)
-        case .action: break // Running actions comes in a later version.
+        case .action(let a): run(a, argument: nil)
         }
     }
 

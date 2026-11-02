@@ -706,8 +706,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let item: GridItem
         let center: CGPoint
         if !state.query.isEmpty {
-            guard let app = state.searchResults[safe: i] else { return }
-            item = .app(app)
+            guard let match = state.searchResults[safe: i] else { return }
+            item = match.item
             let c = state.pageLayout.center(i), f = state.drag.pagerFrame
             center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
         } else if let folder = state.openFolder {
@@ -745,7 +745,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func activateFocused() {
         if !state.query.isEmpty {
             let results = state.searchResults
-            if let app = results[safe: state.focusIndex ?? 0] { state.activateResult(app) }
+            if let match = results[safe: state.focusIndex ?? 0] { state.activateResult(match) }
             return
         }
         guard let i = state.focusIndex else { return }

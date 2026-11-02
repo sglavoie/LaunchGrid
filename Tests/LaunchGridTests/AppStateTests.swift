@@ -3544,3 +3544,62 @@ func installed(_ name: String) -> InstalledApp {
         #expect(OverlayController.frame(saved: "{{1612, 100}, {1000, 700}}", on: display) == NSRect(x: 1612, y: 100, width: 1000, height: 700))
     }
 }
+
+@MainActor @Suite(.tempDir) struct ActionSearchTests {
+    let github = Action(name: "Search GitHub", keywords: ["gh"], kind: .openURL(template: "https://github.com/search?q={query}"),
+                        showsOnGrid: false)
+
+    @Test func searchOnlyActionsAreAmongTheResultsWithTheirArgument() throws {
+        let state = makeState(["GHex", "Notes"])
+        state.apply { $0.hiddenActions = [github] }
+        state.query = "gh launchgrid"
+        let first = try #require(state.searchResults.first)
+        #expect(first.id == github.id && first.argument == "launchgrid")
+        state.query = "gh"
+        #expect(state.allSearchResults.map(\.title) == ["Search GitHub", "GHex"])
+    }
+
+    @Test func revealingASearchOnlyActionInEditModeDoesNothing() throws {
+        let state = makeState(["GHex", "Notes"])
+        state.apply { $0.hiddenActions = [github] }
+        state.editing = true
+        state.query = "gh"
+        state.activateResult(try #require(state.searchResults.first))
+        #expect(state.query == "gh" && state.editing && state.toast == nil)
+    }
+
+    @Test func revealingAnActionOnAPageInEditModeShowsIt() throws {
+        let state = makeState((1...40).map { "App\($0)" })
+        state.apply { $0.normalize() } // 35 on the first page, 5 on the next
+        var shown = github
+        shown.showsOnGrid = true
+        state.apply { $0.pages[1].items.append(.action(shown)) }
+        state.editing = true
+        state.query = "gh"
+        state.activateResult(try #require(state.searchResults.first))
+        #expect(state.query.isEmpty && state.currentPage == 1)
+        #expect(state.currentItems[state.focusIndex ?? -1].id == github.id)
+    }
+
+    @Test func returnOnAnActionResultRunsIt() throws {
+        let state = makeState(["Notes"])
+        state.apply { $0.hiddenActions = [github] }
+        state.query = "gh x"
+        state.activateResult(try #require(state.searchResults.first))
+        #if DEBUG
+        #expect(state.toast == "Actions arrive in a later step")
+        #else
+        #expect(state.toast == nil)
+        #endif
+    }
+
+    @Test func focusOnAnActionResultSurvivesAGridChange() throws {
+        let state = makeState(["GHex", "Notes", "Ghost"])
+        state.apply { $0.hiddenActions = [github] }
+        state.query = "gh"
+        state.focusIndex = 0
+        let focused = try #require(state.searchResults.first)
+        state.apply { g in g.pages[0].items.insert(.app(AppRef(bundleID: "com.test.gh", path: "/Applications/gh.app", name: "gh")), at: 0) }
+        #expect(state.searchResults[try #require(state.focusIndex)].id == focused.id)
+    }
+}

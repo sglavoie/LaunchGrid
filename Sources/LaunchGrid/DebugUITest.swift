@@ -18,6 +18,9 @@ enum DebugUITest {
         var pages: [[String]]
         var pageTitles: [String]
         var folders: [String: [String]]
+        /// Actions in the layout's own JSON form. One that shows on the grid is placed where
+        /// its name appears in `pages`; a search-only one goes to the grid's hidden actions.
+        var actions: [Action]?
 
         func grid() throws -> Grid {
             guard rows > 0, columns > 0, !pages.isEmpty, pageTitles.count == pages.count,
@@ -26,19 +29,25 @@ enum DebugUITest {
                 throw Failure("Invalid fixture dimensions, titles or folders")
             }
             let items = pages.flatMap { $0 }
-            let names = items + folders.values.flatMap { $0 }
+            let actions = actions ?? []
+            let shown = Dictionary(uniqueKeysWithValues: actions.filter(\.showsOnGrid).map { ($0.name, $0) })
+            let names = items + folders.values.flatMap { $0 } + actions.filter { !$0.showsOnGrid }.map(\.name)
             guard Set(names).count == names.count, names.allSatisfy({ !$0.isEmpty }),
-                  Set(folders.keys).isSubset(of: Set(items)) else {
-                throw Failure("Fixture names must be unique and every folder must be on a page")
+                  Set(folders.keys).isSubset(of: Set(items)), shown.count == actions.filter(\.showsOnGrid).count,
+                  Set(shown.keys).isSubset(of: Set(items)), Set(shown.keys).isDisjoint(with: folders.keys) else {
+                throw Failure("Fixture names must be unique and every folder and shown action must be on a page")
             }
             func app(_ name: String) -> AppRef {
                 AppRef(bundleID: "com.example.uitest.\(name)", path: "/LaunchGridUITests/\(name).app", name: name)
             }
-            return Grid(rows: rows, columns: columns, pages: zip(pages, pageTitles).map { items, title in
+            var grid = Grid(rows: rows, columns: columns, pages: zip(pages, pageTitles).map { items, title in
                 Page(title: title, items: items.map { name in
-                    folders[name].map { .folder(Folder(name: name, apps: $0.map(app))) } ?? .app(app(name))
+                    folders[name].map { .folder(Folder(name: name, apps: $0.map(app))) }
+                        ?? shown[name].map(GridItem.action) ?? .app(app(name))
                 })
             })
+            grid.hiddenActions = actions.filter { !$0.showsOnGrid }
+            return grid
         }
     }
 
@@ -117,6 +126,9 @@ enum DebugUITest {
             "editing": .bool(state.editing), "shown": .bool(state.isShown),
             "dragging": .bool(state.drag.active), "textEdit": .string(editing),
             "searchResults": .strings(state.allSearchResults.map(\.title)),
+            // The argument each result carries, "" for none, in the same order.
+            "searchArguments": .strings(state.allSearchResults.map { $0.argument ?? "" }),
+            "toast": .string(state.toast ?? ""),
             "keyWindow": .bool(overlay.window?.isKeyWindow == true),
             "pagerReady": .bool(state.drag.pagerFrame.width > 0 && state.drag.pagerFrame.height > 0),
             "folderReady": .bool(state.openFolder != nil && state.drag.folderGridFrame.width > 0 && state.drag.folderGridFrame.height > 0),

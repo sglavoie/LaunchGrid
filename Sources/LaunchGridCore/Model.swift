@@ -297,6 +297,22 @@ public enum ActionKind: Equatable, Sendable {
     /// A script in the app's Application Scripts folder.
     case userScript(fileName: String, arguments: [String], runMode: RunMode)
 
+    /// The placeholder replaced by the argument typed after a keyword in search.
+    public static let argumentPlaceholder = "{query}"
+
+    /// Whether `{query}` appears where it is substituted, so search hands this action the
+    /// text typed after its keyword.
+    public var takesArgument: Bool {
+        let p = Self.argumentPlaceholder
+        return switch self {
+        case .openURL(let template): template.contains(p)
+        case .openFile: false
+        case .shortcut(_, let input): input?.contains(p) ?? false
+        case .shell(let command, _, _, _): command.contains(p)
+        case .userScript(_, let arguments, _): arguments.contains { $0.contains(p) }
+        }
+    }
+
     public var defaultIcon: ActionIcon {
         switch self {
         case .openURL: .symbol("link")

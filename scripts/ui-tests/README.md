@@ -37,7 +37,11 @@ Each file needs a name, fixture and sequence of steps:
 }
 ```
 
-Fixture names must be unique, including folder names and their apps. A name in `pages`
+An optional `actions` array holds actions in the layout's JSON form (`name`, `keywords`,
+`kind`, `showsOnGrid`). One shown on the grid is placed where its name appears in `pages`;
+a search-only one (`"showsOnGrid": false`) is kept off every page.
+
+Fixture names must be unique, including folder names, their apps and search-only actions. A name in `pages`
 whose key exists in `folders` represents that folder. Page titles correspond to pages in order.
 Every page must fit the specified rows and columns.
 
@@ -77,6 +81,8 @@ poll every 50 ms, require two consecutive matching samples, and fail after three
 | `focus`, `folder` | Focused item or open folder name; `""` for none |
 | `currentPage` | Zero-based page index |
 | `query`, `searchResults` | Search text and every ranked result name |
+| `searchArguments` | The argument each ranked result carries, `""` for none |
+| `toast` | The toast shown, `""` for none |
 | `editing`, `shown`, `dragging` | Booleans |
 | `textEdit` | `"item:Alpha"`, `"page:First"` or `""` |
 | `keyWindow`, `pagerReady`, `folderReady` | Window focus and measured layout readiness |

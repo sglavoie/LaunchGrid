@@ -1,0 +1,36 @@
+{
+  "name": "A keyword finds an action first and carries the argument typed after it",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Ghostty", "GitHub Home", "Delta"]],
+    "pageTitles": [""],
+    "folders": {},
+    "actions": [
+      {"name": "Search GitHub", "keywords": ["gh"], "showsOnGrid": false,
+       "kind": {"type": "openURL", "template": "https://github.com/search?q={query}"}},
+      {"name": "GitHub Home", "keywords": ["ghh"],
+       "kind": {"type": "openURL", "template": "https://github.com"}}
+    ]
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "keys:g,h"},
+    {"expect": {"query": "gh", "searchResults": ["Search GitHub", "GitHub Home", "Ghostty"], "searchArguments": ["", "", ""], "focus": "Search GitHub"}},
+    {"run": "keys: @49,l,a,u,n,c,h"},
+    {"expect": {"query": "gh launch", "searchResults": ["Search GitHub"], "searchArguments": ["launch"]}},
+    {"run": "keys:36"},
+    {"expect": {"query": "gh launch", "toast": "Actions arrive in a later step"}},
+    {"run": "search:ghh launch"},
+    {"expect": {"searchResults": []}},
+    {"run": "keys:cmd+e@14"},
+    {"run": "search:ghh"},
+    {"expect": {"editing": true, "searchResults": ["GitHub Home"]}},
+    {"run": "keys:36"},
+    {"expect": {"query": "", "editing": true, "focus": "GitHub Home"}},
+    {"run": "search:gh"},
+    {"expect": {"searchResults": ["Search GitHub", "GitHub Home", "Ghostty"]}},
+    {"run": "keys:36"},
+    {"expect": {"query": "gh", "editing": true, "currentPage": 0, "searchResults": ["Search GitHub", "GitHub Home", "Ghostty"]}}
+  ]
+}
