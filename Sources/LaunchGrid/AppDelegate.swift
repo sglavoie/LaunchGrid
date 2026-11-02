@@ -1024,12 +1024,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid, installed: state.selectableApps))
                 // Whole sentences, so a translation can order them its own way.
                 let (n, skipped, twice) = (result.imported, result.skipped.count, result.duplicates.count)
-                let message = switch (skipped > 0, twice > 0) {
+                var message = switch (skipped > 0, twice > 0) {
                 case (false, false): String(localized: "Imported \(n) apps from \(source)")
                 case (true, false): String(localized: "Imported \(n) apps from \(source); skipped \(skipped) not installed")
                 case (false, true): String(localized: "Imported \(n) apps from \(source); skipped \(twice) listed twice")
                 case (true, true): String(localized: "Imported \(n) apps from \(source); skipped \(skipped) not installed and \(twice) listed twice")
                 }
+                // Entries of a damaged database whose app record is missing.
+                if result.unreadable > 0 { message += String(localized: "; left out \(result.unreadable) unreadable entries") }
                 state.showToast(message)
                 done?(message)
                 closeFirstRunIfDone()

@@ -291,6 +291,38 @@
         }
       }
     },
+    "; left out %lld unreadable entries": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "; left out %#@n@"
+          },
+          "substitutions": {
+            "n": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg unreadable entry"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg unreadable entries"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Added %lld apps": {
       "localizations": {
         "en": {

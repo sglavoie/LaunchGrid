@@ -11,6 +11,8 @@ public enum LaunchpadImporter {
         public var skipped: [String]
         /// Titles of second entries for an app already imported.
         public var duplicates: [String] = []
+        /// App entries whose app record is missing (a damaged database): no title to name.
+        public var unreadable = 0
     }
 
     public enum ImportError: Error, LocalizedError {
@@ -153,7 +155,7 @@ public enum LaunchpadImporter {
         keeps: (String) -> Bool = { _ in true }, resolve: (String) -> String?
     ) -> Result {
         let children = Dictionary(grouping: items, by: \.parent).mapValues { $0.sorted { $0.ordering < $1.ordering } }
-        var skipped: [String] = [], duplicates: [String] = []
+        var skipped: [String] = [], duplicates: [String] = [], unreadable = 0
         var imported = 0
         var seen = Set<String>()
         func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
@@ -197,7 +199,10 @@ public enum LaunchpadImporter {
         }
 
         func makeApp(_ id: Int) -> AppRef? {
-            guard let row = apps[id] else { return nil }
+            guard let row = apps[id] else {
+                unreadable += 1
+                return nil
+            }
             let title = [row.title, row.bundleID].compactMap { $0 }.first { !$0.isEmpty } ?? "App"
             // AppGrid invents `manual_app_<hash>` IDs for apps it added by path.
             let bundleID = row.bundleID.flatMap { $0.hasPrefix("manual_app_") || $0.isEmpty ? nil : $0 }
@@ -306,7 +311,7 @@ public enum LaunchpadImporter {
             }
         }
         grid.normalize()
-        return Result(grid: grid, imported: imported, skipped: skipped, duplicates: duplicates)
+        return Result(grid: grid, imported: imported, skipped: skipped, duplicates: duplicates, unreadable: unreadable)
     }
 
     /// Copies a database and its write-ahead log as a consistent pair. A log that grew

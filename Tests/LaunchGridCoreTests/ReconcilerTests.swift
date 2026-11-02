@@ -1559,6 +1559,25 @@ func tempDir(_ prefix: String) -> URL {
         #expect(result.imported == 2)
     }
 
+    /// A damaged database can list an app entry with no app record: it is counted, so the
+    /// summary can say something was left out, though it has no title to name.
+    @Test func appEntriesWithoutARecordAreCountedAsUnreadable() {
+        typealias Row = LaunchpadImporter.Row
+        let items = [
+            Row(id: 1, type: 3, parent: 0, ordering: 0),
+            Row(id: 2, type: 4, parent: 1, ordering: 0),
+            Row(id: 3, type: 4, parent: 1, ordering: 1),
+            Row(id: 4, type: 2, parent: 1, ordering: 2),
+            Row(id: 5, type: 4, parent: 4, ordering: 0),
+        ]
+        let apps = [2: LaunchpadImporter.AppRow(title: "Mail", bundleID: "com.apple.mail")]
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:],
+                                             rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(result.grid.allApps.map(\.name) == ["Mail"])
+        #expect(result.imported == 1 && result.skipped.isEmpty)
+        #expect(result.unreadable == 2)
+    }
+
     /// Builds a Launchpad-style DB: root(1) → pages → apps and a folder (type 2) with its own page.
     func makeFixture() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("lp-\(UUID().uuidString).db")
