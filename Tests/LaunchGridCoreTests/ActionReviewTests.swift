@@ -29,6 +29,36 @@ import Testing
         #expect(ActionKind.openURL(template: "httpx://example.com").isRunnableCode)
     }
 
+    /// Opening some files runs something: an app, a Terminal command, an executable, or any
+    /// file opened with a terminal. Those ask too, and Remove Them leaves them out.
+    @Test func filesThatRunSomethingWhenOpenedAsk() throws {
+        for path in ["/Users/x/Notes.command", "/Users/x/Tool.APP", "/Users/x/setup.pkg", "/Users/x/run.tool",
+                     "/Users/x/Profile.terminal", "/Users/x/link.webloc", "/Users/x/x.jar"] {
+            #expect(ActionKind.openFile(path: path, appPath: nil).isRunnableCode, "\(path)")
+        }
+        #expect(ActionKind.openFile(path: "/Users/x/notes.txt", appPath: "/System/Applications/Utilities/Terminal.app").isRunnableCode)
+        #expect(ActionKind.openFile(path: "/Users/x/notes.txt", appPath: "/Applications/iTerm.app").isRunnableCode)
+        #expect(!ActionKind.openFile(path: "/Users/x/notes.txt", appPath: "/System/Applications/TextEdit.app").isRunnableCode)
+        #expect(!ActionKind.openFile(path: "/Users/x/Documents", appPath: nil).isRunnableCode)
+
+        // An executable without an extension opens in Terminal; a plain file doesn't.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("review-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tool = dir.appendingPathComponent("tool"), plain = dir.appendingPathComponent("README")
+        try Data("#!/bin/sh\n".utf8).write(to: tool)
+        try Data("hi".utf8).write(to: plain)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        #expect(ActionKind.openFile(path: tool.path, appPath: nil).isRunnableCode)
+        #expect(!ActionKind.openFile(path: plain.path, appPath: nil).isRunnableCode)
+        #expect(!ActionKind.openFile(path: dir.path, appPath: nil).isRunnableCode, "a folder is searchable, not run")
+
+        let script = Action(name: "Script", kind: .openFile(path: "/Users/x/Notes.command", appPath: nil))
+        let shared = Grid(rows: 3, columns: 4, pages: [Page(items: [.action(file), .action(script)])])
+        #expect(shared.needsActionReview)
+        #expect(shared.applyingReview(.removeRunnable).allActions.map(\.name) == ["Notes"])
+    }
+
     @Test func theListShowsEachInFull() {
         let details = Dictionary(uniqueKeysWithValues: grid.actionReview.map { ($0.action.name, $0.detail) })
         #expect(details["Wipe"] == "rm -rf ~/secret-marker\n(in /private/marker-dir)")

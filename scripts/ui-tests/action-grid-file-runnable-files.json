@@ -1,0 +1,83 @@
+{
+  "name": "Files that run something when opened are listed for review and left out by Remove Them",
+  "fixture": {
+    "rows": 3,
+    "columns": 4,
+    "pages": [
+      [
+        "Delta"
+      ]
+    ],
+    "pageTitles": [
+      ""
+    ],
+    "folders": {},
+    "files": {
+      "shared.launchgrid": "{\"version\": 2, \"rows\": 3, \"columns\": 4, \"pages\": [{\"items\": [{\"type\": \"action\", \"action\": {\"name\": \"Notes\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/Notes.command\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"Readme\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/readme.txt\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"In Terminal\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/readme.txt\", \"appPath\": \"/System/Applications/Utilities/Terminal.app\"}}}]}]}\n",
+      "readme.txt": "Plain text.\n",
+      "Notes.command": "touch \"$(dirname \"$0\")/ran\"\n"
+    }
+  },
+  "steps": [
+    {
+      "run": "show"
+    },
+    {
+      "expect": {
+        "keyWindow": true,
+        "pagerReady": true
+      }
+    },
+    {
+      "run": "replacelayout:yes"
+    },
+    {
+      "run": "review:remove"
+    },
+    {
+      "run": "open:${FILES}/shared.launchgrid"
+    },
+    {
+      "expect": {
+        "pages": [
+          [
+            "Readme"
+          ]
+        ],
+        "reviewActions": [
+          "Readme"
+        ]
+      }
+    },
+    {
+      "run": "review:keep"
+    },
+    {
+      "run": "open:${FILES}/shared.launchgrid"
+    },
+    {
+      "expect": {
+        "pages": [
+          [
+            "Notes",
+            "Readme",
+            "In Terminal"
+          ]
+        ],
+        "reviewActions": [
+          "In Terminal",
+          "Notes",
+          "Readme"
+        ]
+      }
+    },
+    {
+      "run": "runaction:Notes"
+    },
+    {
+      "expect": {
+        "actionEditor": "edit:Notes"
+      }
+    }
+  ]
+}

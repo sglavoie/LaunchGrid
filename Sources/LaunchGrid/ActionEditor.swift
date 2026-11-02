@@ -530,7 +530,9 @@ struct ActionEditor: View {
         case .file:
             LabeledContent("File") {
                 HStack {
-                    Text(model.filePath.isEmpty ? String(localized: "None") : FileManager.default.displayName(atPath: model.filePath))
+                    // The whole path, with its extension: a Finder name can hide that it's an
+                    // app or a script, which matters when checking an action from a grid file.
+                    Text(model.filePath.isEmpty ? String(localized: "None") : (model.filePath as NSString).abbreviatingWithTildeInPath)
                         .lineLimit(1).truncationMode(.middle)
                         .help(model.filePath)
                     Button("Choose…") { model.chooseFile() }
@@ -540,6 +542,7 @@ struct ActionEditor: View {
                 HStack {
                     Text(model.appPath.map { FileManager.default.displayName(atPath: $0) } ?? String(localized: "Default app"))
                         .lineLimit(1)
+                        .help(model.appPath ?? "")
                     Button("Choose…") { model.chooseApp() }
                         .accessibilityLabel(Text("Choose app to open with"))
                     if model.appPath != nil {

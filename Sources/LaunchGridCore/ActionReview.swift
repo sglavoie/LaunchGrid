@@ -4,14 +4,40 @@ import Foundation
 /// treated as untrusted: its actions are listed before it loads and need a look in the editor
 /// before they run. The app's own layout, and its backups, are trusted and never pass here.
 extension ActionKind {
-    /// Whether running it does something beyond opening a web page, a file or a Shortcut: a
-    /// command, a script, or a link to another app (`obsidian://`, `x-callback-url`, `file://`).
+    /// Whether running it does something beyond opening a web page, a document or a Shortcut:
+    /// a command, a script, a link to another app (`obsidian://`, `x-callback-url`, `file://`),
+    /// or a file that runs something when opened (an app, a `.command`, an executable) or is
+    /// opened with a terminal, which runs it.
     public var isRunnableCode: Bool {
         switch self {
         case .shell, .userScript: true
         case .openURL(let template): !Self.isWebLink(template)
-        case .openFile, .shortcut: false
+        case .openFile(let path, let appPath): Self.opensAsCode(path) || appPath.map(Self.isTerminal) == true
+        case .shortcut: false
         }
+    }
+
+    /// Kinds of file whose default app runs them, or what they point to: apps, Terminal
+    /// commands and settings, Java archives, installers, Automator workflows and link files.
+    static let runnableExtensions: Set<String> = [
+        "app", "command", "tool", "terminal", "jar", "pkg", "mpkg", "prefpane", "workflow", "action",
+        "webloc", "inetloc", "fileloc",
+    ]
+
+    static func opensAsCode(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let ext = url.pathExtension.lowercased()
+        if runnableExtensions.contains(ext) { return true }
+        // An executable without an extension opens in Terminal, which runs it.
+        var isFolder: ObjCBool = false
+        return ext.isEmpty && FileManager.default.fileExists(atPath: path, isDirectory: &isFolder)
+            && !isFolder.boolValue && FileManager.default.isExecutableFile(atPath: path)
+    }
+
+    /// Terminal apps run a file they open as a script.
+    static func isTerminal(_ appPath: String) -> Bool {
+        let name = URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent.lowercased()
+        return ["terminal", "iterm", "iterm2", "warp", "ghostty", "kitty", "alacritty", "wezterm", "hyper", "tabby"].contains(name)
     }
 
     static func isWebLink(_ template: String) -> Bool {
@@ -41,7 +67,8 @@ extension ActionKind {
 /// An action in a grid file being opened, for the review sheet.
 public struct ActionReviewEntry: Equatable, Sendable, Identifiable {
     public var action: Action
-    /// A command, script or non-web link: the sheet is shown because of these.
+    /// A command, script, non-web link or file that runs something: the sheet is shown
+    /// because of these.
     public var isRunnableCode: Bool
     public var id: UUID { action.id }
     public var detail: String { action.kind.reviewDescription }
@@ -51,7 +78,8 @@ public struct ActionReviewEntry: Equatable, Sendable, Identifiable {
 public enum ActionReviewChoice: Sendable {
     /// Keep them all, each needing review before it runs.
     case keepForReview
-    /// Leave out the commands, scripts and non-web links; the rest are kept for review.
+    /// Leave out the commands, scripts, non-web links and files that run something; the rest
+    /// are kept for review.
     case removeRunnable
 }
 

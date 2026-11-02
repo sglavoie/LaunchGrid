@@ -1088,8 +1088,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate()
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = String(localized: "“\(name)” contains commands or links to other apps")
-        alert.informativeText = String(localized: "Nothing in it has run. Actions you keep don't run until you've checked them in the editor. Remove Them leaves out the commands, scripts and links to other apps listed first.")
+        alert.messageText = String(localized: "“\(name)” contains commands, links to other apps or files that run")
+        alert.informativeText = String(localized: "Nothing in it has run. Actions you keep don't run until you've checked them in the editor. Remove Them leaves out the commands, scripts, links to other apps and files that run something, listed first.")
         alert.accessoryView = Self.reviewList(entries)
         alert.addButton(withTitle: String(localized: "Keep for Review"))
         alert.addButton(withTitle: String(localized: "Remove Them"))
