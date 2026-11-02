@@ -123,7 +123,10 @@ final class ActionRunner {
 
     /// Opens what `plan` names; returns the app that opened it, when the system says.
     @discardableResult
-    func perform(_ plan: Plan, activates: Bool = true) async throws -> NSRunningApplication? {
+    /// - Parameter onStart: given a background run as it starts, so whoever asked can stop it
+    ///   (LaunchGrid quitting while the editor's Test waits for it).
+    func perform(_ plan: Plan, activates: Bool = true,
+                 onStart: (@MainActor (CodeRun) -> Void)? = nil) async throws -> NSRunningApplication? {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = activates
         switch plan {
@@ -134,7 +137,7 @@ final class ActionRunner {
             case .terminal:
                 try await openInTerminal(job)
             case .background:
-                let result = await runToEnd(job)
+                let result = await runToEnd(job, onStart: onStart)
                 if !result.succeeded { throw RunFailure(result: result) }
             }
             return nil
@@ -711,10 +714,11 @@ extension ActionRunner {
     }
 
     /// Runs `job` in the background and waits for it to end.
-    func runToEnd(_ job: CodeJob) async -> RunResult {
+    func runToEnd(_ job: CodeJob, onStart: (@MainActor (CodeRun) -> Void)? = nil) async -> RunResult {
         await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
             do {
-                _ = try start(job) { c.resume(returning: $0) }
+                let run = try start(job) { c.resume(returning: $0) }
+                onStart?(run)
             } catch {
                 c.resume(returning: RunResult(ending: .failed(error.localizedDescription), endedAt: Date(), output: "", errorOutput: ""))
             }

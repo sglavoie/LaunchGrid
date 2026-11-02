@@ -191,6 +191,10 @@ final class AppState {
     @ObservationIgnored var actionRunner = ActionRunner()
     /// Commands and scripts running in the background, by action. Not saved in the layout.
     private(set) var runningActions: [UUID: RunHandle] = [:]
+    /// Background runs the action editor's Test started, by run, until they end: kept here, not
+    /// in the editor, so quitting stops them even for a draft never saved or an editor closed
+    /// while it waits.
+    @ObservationIgnored private(set) var testRuns: [UUID: CodeRun] = [:]
     /// How each action's last background run ended, by action. Not saved in the layout.
     private(set) var lastRun: [UUID: RunResult] = [:]
     /// The scripts in the Application Scripts folder, looked at each time the grid shows; nil
@@ -1371,6 +1375,7 @@ final class AppState {
     /// Stops every background run, as LaunchGrid quits: they aren't left running on their own.
     func stopAllRuns() {
         for handle in runningActions.values { handle.stop() }
+        for run in testRuns.values { run.stop() }
     }
 
     /// Why an action can't run here, said on its tile: a command in the Mac App Store build, or a
@@ -1435,9 +1440,14 @@ final class AppState {
     /// Runs an action as the editor has it, unsaved, for its Test button: the grid isn't
     /// involved. Returns what went wrong, nil when it ran (or the person cancelled).
     func test(_ action: Action, argument: String?) async -> Error? {
+        let started = StartedRun()
+        defer { if let id = started.id { testRuns[id] = nil } }
         do {
             let plan = try ActionRunner.plan(action.kind, argument: argument)
-            _ = try await actionRunner.perform(plan, activates: true)
+            _ = try await actionRunner.perform(plan, activates: true) { [weak self] run in
+                started.id = run.id
+                self?.testRuns[run.id] = run
+            }
             return nil
         } catch {
             return Launcher.isUserCancel(error) ? nil : error

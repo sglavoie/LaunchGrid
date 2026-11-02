@@ -578,6 +578,49 @@ private final class FakeScriptTasks: @unchecked Sendable {
         #expect(error?.localizedDescription == "exit status 3")
         #expect(await s.test(command("Good", "true"), argument: nil) == nil)
     }
+
+    /// The pids a long command wrote: its child `sleep` and the shell itself.
+    private func longTestCommand(_ pidFile: URL) -> String {
+        "sleep 60 & echo $! > '\(pidFile.path)'; echo $$ >> '\(pidFile.path)'; wait"
+    }
+
+    private func pids(in file: URL) -> [pid_t] {
+        ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(whereSeparator: \.isNewline).compactMap { pid_t($0) }
+    }
+
+    @Test func editorTestRunsAreStoppedOnShutdown() async throws {
+        let s = state(with: [])
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // A draft never saved, tested straight from the state.
+        let direct = dir.appendingPathComponent("direct")
+        let waiting = Task { await s.test(command("Long", longTestCommand(direct)), argument: nil) }
+        // A new action in an editor that's closed while its Test waits.
+        let fromEditor = dir.appendingPathComponent("editor")
+        var model: ActionEditorModel? = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model?.fill("name", "Long Too")
+        model?.fill("kind", "command")
+        model?.fill("command", longTestCommand(fromEditor))
+        let editorTest = Task { [model] in await model?.test(with: s); return model?.testResult }
+        model = nil
+        s.actionEditor = nil
+
+        try await waitUntil { s.testRuns.count == 2 && pids(in: direct).count == 2 && pids(in: fromEditor).count == 2 }
+        let all = pids(in: direct) + pids(in: fromEditor)
+        #expect(all.allSatisfy { kill($0, 0) == 0 })
+
+        s.stopAllRuns()
+        let error = await waiting.value
+        #expect(error?.localizedDescription == "stopped")
+        #expect(await editorTest.value == "Could not run it: stopped")
+        #expect(s.testRuns.isEmpty)
+        try await waitUntil { all.allSatisfy { kill($0, 0) != 0 } }
+        // Nothing was saved along the way.
+        #expect(s.grid.allActions.isEmpty)
+        #expect(s.lastRun.isEmpty)
+    }
     #endif
 }
 
