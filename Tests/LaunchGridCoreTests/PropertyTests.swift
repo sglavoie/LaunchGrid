@@ -211,6 +211,56 @@ struct SeededRandom: RandomNumberGenerator {
         }
     }
 
+    /// With apps waiting to come back, some returning (which can recreate their folder and page)
+    /// and edits between scans, a second reconcile of the same scan still changes nothing: not
+    /// the layout, nor what the waiting apps remember of where they were.
+    @Test func aSecondReconcileChangesNothingWhileAppsWaitToReturn() {
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        for seed in UInt64(1)...600 {
+            var rng = SeededRandom(state: seed)
+            var g = Grid(rows: Int.random(in: 1...3, using: &rng), columns: Int.random(in: 1...4, using: &rng))
+            g.appendAtEnd((0..<Int.random(in: 2...20, using: &rng)).map { n in
+                .app(AppRef(bundleID: "com.x.a\(n)", path: "/Applications/A\(n).app", name: "A\(n)"))
+            })
+            for _ in 0..<2 {
+                let picked = Array(g.allApps.shuffled(using: &rng).prefix(3))
+                g.removingEmptiedPages { _ = $0.group(picked.map(\.id), name: "F", anchor: picked.first?.id) }
+            }
+            let installedApps = g.allApps.map { InstalledApp(bundleID: $0.bundleID, path: $0.path, name: $0.name) }
+            var present = Set(installedApps.map(\.path))
+            for round in 0..<5 {
+                if Bool.random(using: &rng) {
+                    let gone = installedApps.map(\.path).shuffled(using: &rng).prefix(Int.random(in: 0..<installedApps.count, using: &rng))
+                    present.subtract(gone)
+                    if present.isEmpty { present.insert(installedApps[0].path) }
+                } else {
+                    let back = installedApps.map(\.path).filter { !present.contains($0) }.shuffled(using: &rng)
+                    if !back.isEmpty { present.formUnion(back.prefix(Int.random(in: 1...back.count, using: &rng))) }
+                }
+                let items = g.pages.flatMap(\.items)
+                if let any = items.randomElement(using: &rng) {
+                    switch Int.random(in: 0..<5, using: &rng) {
+                    case 0:
+                        let page = Int.random(in: 0..<g.pages.count, using: &rng), at = Int.random(in: 0...g.capacity, using: &rng)
+                        g.removingEmptiedPages { $0.move([any.id], toPage: page, at: at) }
+                    case 1: g.deletePage(Int.random(in: 0..<g.pages.count, using: &rng))
+                    case 2: if let f = items.compactMap(\.folder).first { g.ungroup(f.id) }
+                    case 3: g.resize(rows: Int.random(in: 1...3, using: &rng), columns: Int.random(in: 1...4, using: &rng))
+                    default: break
+                    }
+                }
+                let shown = present
+                let scan = installedApps.filter { shown.contains($0.path) }
+                _ = Reconciler.reconcile(&g, installed: scan, autoAdd: true, pathExists: { shown.contains($0) }, now: now)
+                let once = g
+                _ = Reconciler.reconcile(&g, installed: scan, autoAdd: true, pathExists: { shown.contains($0) }, now: now)
+                #expect(g.pages == once.pages, "seed \(seed) round \(round): the layout")
+                #expect(g.recentlyPruned == once.recentlyPruned, "seed \(seed) round \(round): what waiting apps remember")
+                if g != once { break }
+            }
+        }
+    }
+
     @Test func aSecondReconcileOfTheSameScanChangesNothing() {
         for seed in UInt64(1)...200 {
             var rng = SeededRandom(state: seed)

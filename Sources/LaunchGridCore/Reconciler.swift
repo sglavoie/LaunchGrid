@@ -164,9 +164,10 @@ public enum Reconciler {
         /// pruned from just before it (`index` gives such an entry's slot there and the ID of
         /// what stood there, if it was in this list). One pruned at slot k sat just before the
         /// item now at k.
-        func neighbours(_ ids: [UUID], before i: Int, index: (PrunedApp) -> (slot: Int, id: UUID, before: [UUID]?)?) -> [UUID] {
+        func neighbours(_ ids: [UUID], before i: Int, among records: [PrunedApp]? = nil,
+                        index: (PrunedApp) -> (slot: Int, id: UUID, before: [UUID]?)?) -> [UUID] {
             var goneIDs = Set(ids)
-            let gone = earlier.compactMap { e in
+            let gone = (records ?? earlier).compactMap { e in
                 index(e).flatMap { $0.slot <= i && goneIDs.insert($0.id).inserted ? $0 : nil }
             }
             return Self.interleave(here: Array(ids[..<i]), gone: gone).suffix(neighbourMemory)
@@ -326,11 +327,48 @@ public enum Reconciler {
         let liveFolders = Set(grid.pages.flatMap { $0.items.compactMap(\.folder).map(\.id) })
         for i in grid.recentlyPruned.indices {
             if livePages.contains(grid.recentlyPruned[i].pageID) {
+                // Where the page came back is no longer needed, as when its folder is found live.
                 grid.recentlyPruned[i].pageEmptied = false
+                grid.recentlyPruned[i].pageIndex = nil
+                grid.recentlyPruned[i].pageTitle = nil
+                grid.recentlyPruned[i].pageBefore = nil
             }
             if let id = grid.recentlyPruned[i].folderID, liveFolders.contains(id) {
                 grid.recentlyPruned[i].folderEmptied = false
             }
+        }
+        // Apps still waiting in a folder that is live again (a return recreated it, or the user
+        // moved it) take its slot now, as the next pass would: then a scan again changes nothing.
+        // Each record's neighbours count the others, so until they settle.
+        for _ in 0..<4 {
+            let records = grid.recentlyPruned
+            var changed = false
+            for page in grid.pages {
+                let ids = page.items.map(\.id)
+                for (i, item) in page.items.enumerated() {
+                    guard let folder = item.folder else { continue }
+                    let fresh = neighbours(ids, before: i, among: records) { e in
+                        guard e.pageID == page.id else { return nil }
+                        if let folderID = e.folderID { return e.folderEmptied == true ? (e.index, folderID, e.before) : nil }
+                        return (e.index, e.app.id, e.before)
+                    }
+                    for k in grid.recentlyPruned.indices where grid.recentlyPruned[k].folderID == folder.id {
+                        let entry = grid.recentlyPruned[k]
+                        if entry.pageID == page.id, entry.index == i, entry.folderName == folder.name,
+                           entry.pageEmptied != true, entry.pageBefore == nil, entry.before == fresh { continue }
+                        grid.recentlyPruned[k].pageID = page.id
+                        grid.recentlyPruned[k].index = i
+                        grid.recentlyPruned[k].before = fresh
+                        grid.recentlyPruned[k].folderName = folder.name
+                        grid.recentlyPruned[k].pageEmptied = false
+                        grid.recentlyPruned[k].pageIndex = nil
+                        grid.recentlyPruned[k].pageTitle = nil
+                        grid.recentlyPruned[k].pageBefore = nil
+                        changed = true
+                    }
+                }
+            }
+            if !changed { break }
         }
         return report
     }
