@@ -199,6 +199,16 @@ enum DebugScript {
                     overlay.hide()
                     try? await Task.sleep(for: .milliseconds(Int(arg) ?? 50))
                     overlay.show()
+                case "hidetwice":
+                    // "hidetwice:ms": hides the grid, then hides it again ms later, within its fade, as
+                    // a caller bringing another window forward does; prints how it ended and the saves.
+                    let before = AppState.debugBackgroundSaves
+                    overlay.hide()
+                    try? await Task.sleep(for: .milliseconds(Int(arg) ?? 50))
+                    overlay.hide(deactivate: false)
+                    try? await Task.sleep(for: .milliseconds(400))
+                    print("hidetwice: visible=\(overlay.isVisible) panelOrdered=\(NSApp.windows.contains { $0 is NSPanel && $0.isVisible && $0.alphaValue == 0 } ? "faded-but-listed" : "ok") query='\(state.query)' active=\(NSApp.isActive) saves=\(AppState.debugBackgroundSaves - before)")
+                    fflush(stdout)
                 case "problem":
                     print("problem: \(state.hotkeyProblem ?? "-")")
                     fflush(stdout)

@@ -112,6 +112,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
     ///   isn't reported twice.
     func hide(deactivate: Bool = true, saving: Bool = true) {
         guard let panel, panel.isVisible else { return }
+        // Already fading out: that hide's save and completion stand, or the first save's
+        // failure would go unreported. A caller bringing another window forward still keeps
+        // the fade from handing focus back.
+        if !state.isShown, let progress = hideProgress, !progress.gone {
+            if !deactivate { progress.deactivate = false }
+            return
+        }
         // While it's still visible, which saving the frame checks.
         if frameSaveTask != nil { saveWindowFrame() }
         textInput.discardComposition()
@@ -119,6 +126,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // Written off the main thread, so the fade doesn't wait for the disk. A failure is told
         // once the panel is gone, whichever ends first: an alert would open behind it.
         let progress = HideProgress()
+        progress.deactivate = deactivate
         hideProgress = progress
         if saving {
             state.saveInBackground(reportingFailure: false) { [weak self] saved in
@@ -147,9 +155,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 // Hand focus back to the previous app unless another of our windows is up, or
                 // to the last app opened behind the grid while it stayed up.
                 let others = NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }
-                if deactivate, !others, let app = self.launchedBehind {
+                if progress.deactivate, !others, let app = self.launchedBehind {
                     Launcher.bringForward(app)
-                } else if deactivate && NSApp.isActive && !others {
+                } else if progress.deactivate && NSApp.isActive && !others {
                     NSApp.hide(nil)
                 }
                 self.launchedBehind = nil
@@ -994,4 +1002,6 @@ final class SearchInputView: NSView, @preconcurrency NSTextInputClient {
 @MainActor private final class HideProgress {
     var saved: Bool?
     var gone = false
+    /// Whether the fade's end hands focus back; a later hide during the fade can turn it off.
+    var deactivate = true
 }

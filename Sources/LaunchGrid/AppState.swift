@@ -534,8 +534,12 @@ final class AppState {
         return finishSave(generation, serial: serial, grid: grid, result: writer.save(grid), reportingFailure: reportingFailure)
     }
 
+    /// How many times `saveInBackground` was called, for the debug script's "hidetwice".
+    static var debugBackgroundSaves = 0
+
     /// `saveNow` with the writing done off the main thread; `done` gets whether it worked.
     func saveInBackground(reportingFailure: Bool = true, done: (@MainActor (Bool) -> Void)? = nil) {
+        Self.debugBackgroundSaves += 1
         guard let generation = prepareSave(reportingFailure: reportingFailure) else {
             done?(lastSaveError == nil)
             return
