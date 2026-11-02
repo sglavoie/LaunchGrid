@@ -61,8 +61,7 @@ struct BackgroundView: View {
 
     private var wallpaperURL: URL? {
         Self.wallpaperLookups += 1
-        let screen = NSScreen.screens.first { $0.displayID == state.screenID } ?? NSScreen.main
-        return screen.flatMap(BackgroundPicture.wallpaperURL)
+        return BackgroundPicture.screen(state.screenID).flatMap(BackgroundPicture.wallpaperURL)
     }
 }
 
@@ -85,6 +84,11 @@ struct VisualEffect: NSViewRepresentable {
 /// An image scaled to fill, blurred once and cached. Falls back to the blurred desktop
 /// while loading, or when the file can't be decoded (e.g. a dynamic or aerial wallpaper).
 enum BackgroundPicture {
+    /// The display with `id`, where the grid last opened, or the main one when it's gone.
+    @MainActor static func screen(_ id: CGDirectDisplayID) -> NSScreen? {
+        NSScreen.screens.first { $0.displayID == id } ?? NSScreen.main
+    }
+
     /// The desktop picture of `screen`, as the Wallpaper background shows it.
     static func wallpaperURL(for screen: NSScreen) -> URL? {
         #if !APP_STORE

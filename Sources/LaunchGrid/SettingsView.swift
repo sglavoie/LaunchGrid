@@ -347,8 +347,9 @@ struct AppearanceSettings: View {
             }
         }
         .formStyle(.grouped)
-        .task(id: "\(prefs.background)|\(prefs.customImagePath ?? "")|\(picks)") {
-            pictureProblem = await Self.pictureProblem(prefs.background, customImage: prefs.customImagePath)
+        .task(id: "\(prefs.background)|\(prefs.customImagePath ?? "")|\(picks)|\(state.screenID)") {
+            pictureProblem = await Self.pictureProblem(prefs.background, customImage: prefs.customImagePath,
+                                                       screenID: state.screenID)
         }
     }
 
@@ -366,7 +367,8 @@ struct AppearanceSettings: View {
     }
 
     /// Without this, a picture that can't be read silently shows as the blurred desktop.
-    static func pictureProblem(_ style: BackgroundStyle, customImage: String?) async -> String? {
+    /// The wallpaper is the one of the display the grid opens on (`screenID`), as the grid shows it.
+    static func pictureProblem(_ style: BackgroundStyle, customImage: String?, screenID: CGDirectDisplayID) async -> String? {
         switch style {
         case .image:
             guard let path = customImage else { return nil }
@@ -376,7 +378,7 @@ struct AppearanceSettings: View {
                 ? String(localized: "This picture can't be read, so the blurred desktop is shown instead. Choose it again, or another one.")
                 : String(localized: "This picture is no longer there (moved, deleted or on a disconnected drive), so the blurred desktop is shown instead.")
         case .wallpaper:
-            guard let url = NSScreen.main.flatMap(BackgroundPicture.wallpaperURL) else { return nil }
+            guard let url = BackgroundPicture.screen(screenID).flatMap(BackgroundPicture.wallpaperURL) else { return nil }
             guard await !Disk.run({ BackgroundPicture.isReadable(url) }) else { return nil }
             return Sandbox.isActive
                 ? String(localized: "This version of LaunchGrid isn't allowed to read your desktop picture, so the blurred desktop is shown instead. To use the picture, choose its file with Custom Image.")
