@@ -409,6 +409,18 @@ enum DebugScript {
                         }
                         if type == .leftMouseDown { try? await Task.sleep(for: .seconds(parts[0].hasSuffix("click") ? 0.05 : 1)) }
                     }
+                case "where", "fwhere":
+                    // Prints item N's centre in global display points (top left origin), for a real
+                    // click through the HID tap from outside, which carries modifier keys.
+                    guard let window = overlay.window else { break }
+                    let folder = parts[0] == "fwhere"
+                    let c = (folder ? state.folderLayout : state.pageLayout).center(Int(arg) ?? 0)
+                    let o = folder ? state.drag.folderGridFrame.origin : state.drag.pagerFrame.origin
+                    let (r, h) = (state.drag.rootOrigin, window.contentView?.bounds.height ?? 0)
+                    let local = NSPoint(x: r.x + o.x + c.x, y: h - (r.y + o.y + c.y))
+                    let screen = window.convertPoint(toScreen: local)
+                    let top = NSScreen.screens.first?.frame.maxY ?? 0
+                    print("where: \(arg) \(Int(screen.x)),\(Int(top - screen.y))"); fflush(stdout)
                 case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold":
                     // An optional third number grabs the icon that many points right of its centre.
                     let n = arg.split(separator: ",").compactMap { Int($0) }

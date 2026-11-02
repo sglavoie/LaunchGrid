@@ -271,11 +271,14 @@ final class ActionRunner {
         func isNameCharacter(_ c: Unicode.Scalar) -> Bool {
             c == "_" || c.properties.isAlphabetic || c.properties.numericType != nil
         }
-        /// Whether a `[` here follows `$name`, a subscript wherever parameters expand.
+        /// Whether a `[` here follows `$name`, a subscript wherever parameters expand, including
+        /// after zsh's flags (`$#name`, `$+name`, `$=name`, `$~name`, `$^name`).
         func afterParameterName() -> Bool {
             var j = i - 1
             while j >= 0, isNameCharacter(text[j]) { j -= 1 }
-            return j < i - 1 && j >= 0 && text[j] == "$"
+            guard j < i - 1 else { return false }
+            while j >= 0, "#+=~^".unicodeScalars.contains(text[j]) { j -= 1 }
+            return j >= 0 && text[j] == "$"
         }
         /// The innermost failure for a placeholder in a context that evaluates or can't hold it.
         func refusal() -> Failure? {
@@ -662,11 +665,12 @@ final class CodeRun: @unchecked Sendable {
 
     /// The process ended: what's still in the pipes gets a moment to arrive (a child left
     /// running in the background can keep them open), then the run ends. An ending already
-    /// set (the run timed out) is kept.
+    /// set (the run timed out) is kept. Such a child's later output is read and dropped, so
+    /// it never dies writing to a closed pipe or blocks on a full one.
     fileprivate func exited(_ ending: RunResult.Ending) {
         lock.withLock { if exit == nil { exit = ending } }
         finishIfDone()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1) { self.finish() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) { self.finish(keepReading: true) }
     }
 
     /// Ends the run from the menu. Nothing happens when it can't be stopped or already ended.

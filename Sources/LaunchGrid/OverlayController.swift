@@ -478,7 +478,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             // Get Info, as in Finder: the focused action's editor.
             case "i": if let id = focusedID, state.grid.item(id)?.action != nil { state.editAction(id) }
             // Search results hide the page; selecting it unseen would let ⌫ remove it.
-            case "a": if state.query.isEmpty { selectAll() }
+            case "a": if state.query.isEmpty { state.selectAll() }
             case "f": if !state.query.isEmpty { state.endSearch() }
             case "g": state.groupSelection()
             case "n": state.newPage() // which clears the search and closes the folder first
@@ -758,15 +758,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if let member = f.items[safe: i] { state.activate(member.gridItem) }
         } else if let item = state.currentItems[safe: i] {
             state.activate(item)
-        }
-    }
-
-    /// Like ⌘-click, without entering edit mode: clicks still open apps.
-    private func selectAll() {
-        if let f = state.openFolder {
-            state.selection = Set(f.items.map(\.id))
-        } else {
-            state.selection = Set(state.currentItems.map(\.id))
         }
     }
 

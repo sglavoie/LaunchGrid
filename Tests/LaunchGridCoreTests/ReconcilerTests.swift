@@ -61,6 +61,33 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.recentlyPruned.isEmpty)
     }
 
+    /// Resizing or sorting while an app is away keeps page IDs but carries its neighbours to
+    /// other pages; it comes back after the nearest one, wherever that went.
+    @Test func anUpdatingAppFollowsNeighboursMovedToAnotherPageByAResize() {
+        let source = ["A", "B", "C", "D"].map { installed($0) }
+        var g = Grid(rows: 1, columns: 4, pages: [Page(items: source.map { .app($0.makeRef()) })])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: Array(source.prefix(3)), autoAdd: false,
+                                 pathExists: { $0 != source[3].path }, now: now)
+        g.resize(rows: 1, columns: 2)
+        _ = Reconciler.reconcile(&g, installed: source, autoAdd: false, now: now + 5)
+        #expect(g.pages.map { $0.items.map(\.title) } == [["A", "B"], ["C", "D"]])
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
+    @Test func anUpdatingAppFollowsNeighboursMovedToAnotherPageByASort() {
+        let source = ["A", "B", "C", "D"].map { installed($0) }
+        func item(_ name: String) -> GridItem { .app(source.first { $0.name == name }!.makeRef()) }
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [item("D"), item("C")]), Page(items: [item("B"), item("A")])])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let missing = source[2]
+        _ = Reconciler.reconcile(&g, installed: source.filter { $0 != missing }, autoAdd: false,
+                                 pathExists: { $0 != missing.path }, now: now)
+        g.sortEverything()
+        _ = Reconciler.reconcile(&g, installed: source, autoAdd: false, now: now + 5)
+        #expect(g.pages.map { $0.items.map(\.title) } == [["A", "B"], ["D", "C"]])
+    }
+
     @Test func aMissingExcludedCopyDoesNotExcludeAnExistingCaseVariant() {
         let gone = installed("Editor", id: "com.test.editor")
         let kept = installed("editor", id: gone.bundleID)

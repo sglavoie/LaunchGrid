@@ -1257,7 +1257,13 @@ final class AppState {
     /// A search-only action has no slot to show, so nothing happens.
     func reveal(_ item: GridItem) {
         guard let loc = grid.locate(item.id) else { return }
+        // Revealed in the folder the search started in, that folder's selection stays, as when
+        // the search is closed: it's in sight again.
+        let folderID = loc.folderIndex.map { _ in grid.pages[loc.page].items[loc.index].id }
+        let kept = folderID != nil && folderID == folderBeforeSearch?.id
+            ? selection.intersection(grid.folder(folderID!)?.itemIDs ?? []) : []
         query = ""
+        selection.formUnion(kept)
         if let fi = loc.folderIndex {
             goToPage(loc.page)
             openFolder(grid.pages[loc.page].items[loc.index].id)
@@ -1498,7 +1504,8 @@ final class AppState {
     /// Keeps keyboard focus on an item shown: of the open folder, else of the page.
     func clampFocus() {
         let count = openFolder?.items.count ?? currentItems.count
-        focusIndex = focusIndex.map { min($0, max(0, count - 1)) }
+        // An empty page or folder has nothing to focus, so its own menu (⌃Return) can open.
+        focusIndex = count == 0 ? nil : focusIndex.map { min($0, count - 1) }
     }
 
     func flipPage(_ delta: Int) {
@@ -1532,6 +1539,14 @@ final class AppState {
         let reach = width * 0.2
         let give = (1 - 1 / (abs(dx) * 0.55 / reach + 1)) * reach
         return dx < 0 ? -give : give
+    }
+
+    /// ⌘A: everything shown, in the open folder or on the page, like ⌘-click without entering
+    /// edit mode (clicks still open apps). A ⇧-click after it extends
+    /// the selection instead of dropping part of an older range.
+    func selectAll() {
+        selection = Set(openFolder?.items.map(\.id) ?? currentItems.map(\.id))
+        shiftRange = []
     }
 
     func toggleSelection(_ id: UUID) {
@@ -1627,7 +1642,8 @@ final class AppState {
             let count = g.pages[page].items.filter { !ids.contains($0.id) }.count
             g.removingEmptiedPages { $0.move(ids, toPage: page, at: count) }
         }
-        selection.removeAll()
+        // As with a drop: an unselected item moved alone leaves the selection as it was.
+        if !selection.isDisjoint(with: ids) { selection.removeAll() }
     }
 
     /// Groups the selection into a folder where `anchor` is; without one, where the focused

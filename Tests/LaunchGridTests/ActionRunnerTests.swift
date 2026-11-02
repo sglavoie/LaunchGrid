@@ -181,6 +181,12 @@ import Testing
             ("a=(0); a[\"{query}\"]=1", .placeholderInArithmetic),
             ("a=(0); echo $a[\"{query}\"]", .placeholderInArithmetic),
             ("a=(0); echo \"$a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$#a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$+a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$=a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$~a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$^a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$^=a[{query}]\"", .placeholderInArithmetic),
             ("a=(0); [[ \"{query}\" -eq 1 ]]", .placeholderInNumericTest),
             ("a=(0); [[ 1 -lt $(printf %s \"{query}\") ]] && echo less", .placeholderInNumericTest),
             ("a=(0); [[ -n {query} && 1 -ge {query} ]]", .placeholderInNumericTest),
@@ -366,6 +372,18 @@ import Testing
         let result = try await run(#"printf '\303\251%.0s' {1..2049}"#)
         #expect(result.output.count == 2048, "\(result.output.count) \(result.ending)")
         #expect(result.output == String(repeating: "é", count: 2048))
+    }
+
+    /// A child the command leaves running keeps its output pipes: once the run ends, what it
+    /// prints is read and dropped, so it isn't killed for writing to a closed pipe.
+    @Test func aChildLeftRunningOutlivesTheRunAndKeepsPrinting() async throws {
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("after")
+        let result = try await run("(sleep 2; echo late; echo late >&2; touch \(ActionRunner.shellQuoted(marker.path))) & exit 0")
+        #expect(result.ending == .exited(0))
+        try await Task.sleep(for: .seconds(3))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
     }
 
     @Test func aRunOverItsTimeoutIsStopped() async throws {

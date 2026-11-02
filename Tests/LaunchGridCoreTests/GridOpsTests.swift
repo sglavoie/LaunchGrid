@@ -421,6 +421,26 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.allActions.map(\.id) == [shown.id, link.id, hidden.id])
     }
 
+    @Test func actionPicturesFollowTheirMovesForEveryKindOfAction() {
+        let file = Action(name: "Notes", icon: .image(path: "/Users/x/Pics/notes.png"),
+                          kind: .openFile(path: "/Users/x/Docs/notes.txt", appPath: nil))
+        let link = Action(name: "Link", icon: .image(path: "/Users/x/Pics/link.png"),
+                          kind: .openURL(template: "https://example.com"))
+        let hidden = Action(name: "Hidden", icon: .image(path: "/Users/x/Pics/hidden.png"),
+                            kind: .openURL(template: "https://example.com"), showsOnGrid: false)
+        let symbol = Action(name: "Symbol", icon: .symbol("star"), kind: .openURL(template: "https://example.com"))
+        var g = Grid(pages: [Page(items: [.action(file), .folder(Folder(name: "F", items: [.action(link)])), .action(symbol)])],
+                     hiddenActions: [hidden])
+        g.followMoves(["/Users/x/Pics": "/Users/x/Pictures"])
+        #expect(g.allActions.map(\.icon) == [
+            .image(path: "/Users/x/Pictures/notes.png"),
+            .image(path: "/Users/x/Pictures/link.png"),
+            .symbol("star"),
+            .image(path: "/Users/x/Pictures/hidden.png"),
+        ])
+        #expect(g.allActions.first?.kind == file.kind)
+    }
+
     @Test func exclusionsFollowMovesWithoutChangingBundleIDs() {
         let a = "/Applications/A.app", b = "/Applications/B.app"
         var g = Grid(removedBundleIDs: [a, b, "com.test.excluded"])

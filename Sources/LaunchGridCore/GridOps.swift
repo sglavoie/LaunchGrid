@@ -470,12 +470,14 @@ extension Grid {
             a.path = movedPath(a.path)
             return a
         }
-        // The file an action opens, and the app it opens it with, follow too: their sandbox
-        // bookmarks moved with them.
+        // The file an action opens, the app it opens it with and its picture follow too:
+        // their sandbox bookmarks moved with them.
         func moved(_ a: Action) -> Action {
-            guard case .openFile(let path, let appPath) = a.kind else { return a }
             var a = a
-            a.kind = .openFile(path: movedPath(path), appPath: appPath.map(movedPath))
+            if case .openFile(let path, let appPath) = a.kind {
+                a.kind = .openFile(path: movedPath(path), appPath: appPath.map(movedPath))
+            }
+            if case .image(let path) = a.icon { a.icon = .image(path: movedPath(path)) }
             return a
         }
         for p in pages.indices {

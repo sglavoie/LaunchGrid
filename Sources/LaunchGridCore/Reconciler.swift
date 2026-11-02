@@ -535,6 +535,14 @@ extension Grid {
     }
 
     private mutating func place(_ item: GridItem, _ entry: PrunedApp) {
+        // Resizing, sorting or dragging can carry its old neighbours to another page while
+        // it was away; it follows the nearest one still at the top level, wherever it is.
+        for id in (entry.before ?? []).reversed() {
+            if let loc = locate(id), loc.folderIndex == nil {
+                insert([item], page: loc.page, at: loc.index + 1)
+                return
+            }
+        }
         if let p = pages.firstIndex(where: { $0.id == entry.pageID }) {
             insert([item], page: p, at: Self.slot(after: entry.before, fallback: entry.index, in: pages[p].items.map(\.id)))
         } else if entry.pageEmptied == true {

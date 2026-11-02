@@ -1084,6 +1084,60 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["A"])
     }
 
+    @Test func revealingAResultInTheFolderTheSearchStartedInKeepsItsSelection() throws {
+        let state = makeState(["A", "B", "C"])
+        let id = ids(state)
+        state.editing = true
+        state.apply { _ = $0.group([id["A"]!, id["B"]!], name: "F") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        state.openFolder(folder.id)
+        state.toggleSelection(id["A"]!)
+        state.folderBeforeSearch = (folder.id, 0)
+        state.openFolderID = nil
+        state.query = "B"
+
+        state.reveal(try #require(state.grid.item(id["B"]!)?.app))
+
+        #expect(state.openFolderID == folder.id)
+        #expect(state.focusIndex == 1)
+        #expect(selected(state) == ["A"], "as when the search is closed: the folder is in sight again")
+    }
+
+    @Test func movingAnUnselectedItemToAPageKeepsTheSelection() {
+        let state = makeState(["A", "B", "C", "D"])
+        let id = ids(state)
+        state.toggleSelection(id["A"]!)
+        state.toggleSelection(id["B"]!)
+        state.moveToPage([id["D"]!], pageID: nil)
+        #expect(state.grid.pages.map { $0.items.map(\.title) } == [["A", "B", "C"], ["D"]])
+        #expect(selected(state) == ["A", "B"])
+
+        state.moveToPage([id["A"]!], pageID: state.grid.pages[1].id)
+        #expect(selected(state) == [], "a selected item moved: the selection is done with")
+    }
+
+    @Test func shiftClickAfterSelectAllExtendsInsteadOfDroppingAnOldRange() {
+        let state = makeState((0..<10).map { "X\($0)" })
+        let id = ids(state)
+        state.toggleSelection(id["X2"]!)
+        state.extendSelection(to: id["X6"]!)
+        state.selectAll()
+        state.extendSelection(to: id["X4"]!)
+        #expect(selected(state).count == 10)
+    }
+
+    @Test func anEmptyPageHasNoFocus() {
+        let state = makeState(["A", "B"])
+        state.focusIndex = 1
+        state.apply { _ = $0.addPage() }
+        state.goToPage(1)
+        #expect(state.focusIndex == nil, "nothing to focus, so ⌃Return opens the page's own menu")
+        state.goToPage(0)
+        state.focusIndex = 1
+        state.clampFocus()
+        #expect(state.focusIndex == 1)
+    }
+
     @Test func openingAFolderFromAnOldMenuFollowsItsCurrentPage() throws {
         let state = makeState(["A", "B"])
         state.apply { _ = $0.group([$0.allApps[0].id], name: "F") }
