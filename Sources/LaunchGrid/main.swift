@@ -1,6 +1,8 @@
 import AppKit
 
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
+/// Set when SIGINT or SIGTERM quits the app: nobody is there to answer a question.
+nonisolated(unsafe) var quittingOnSignal = false
 
 MainActor.assumeIsolated {
     // `just uninstall`: drop the login item while the bundle that registered it still exists.
@@ -51,7 +53,10 @@ MainActor.assumeIsolated {
     for sig in [SIGINT, SIGTERM] {
         signal(sig, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-        source.setEventHandler { NSApp.terminate(nil) }
+        source.setEventHandler {
+            quittingOnSignal = true
+            NSApp.terminate(nil)
+        }
         source.resume()
         signalSources.append(source)
     }

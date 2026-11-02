@@ -407,6 +407,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // The last changes would be lost on the way out: say so, so they can be kept open.
         guard let state else { return .terminateNow }
+        // An action editor with changes asks first, as its close button does; a signal (a script
+        // quitting the app) doesn't wait for an answer.
+        if !quittingOnSignal, let open = state.actionEditor, open.hasChanges, windows["actionEditor"] != nil,
+           !confirmDiscardEditor(open) {
+            bringForward("actionEditor")
+            return .terminateCancel
+        }
         if state.saveNow(reportingFailure: false) {
             // A failed backup refresh is separate from saving the current layout. Make the
             // warning visible even when this was the only save made before quitting.
@@ -764,6 +771,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         return true
+    }
+
+    /// The close button and ⌘W ask before an action editor with changes goes; Cancel and Save
+    /// close it directly.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender.identifier?.rawValue == "actionEditor", let open = state.actionEditor, open.hasChanges else { return true }
+        return confirmDiscardEditor(open)
     }
 
     func windowWillClose(_ notification: Notification) {
