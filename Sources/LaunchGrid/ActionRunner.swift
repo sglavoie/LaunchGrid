@@ -447,7 +447,13 @@ final class ActionRunner {
                 }
             }
             // `<<` but not `<<<`, outside quotes: a here-document, whose body the shell expands.
-            if [.single, .double, .ansiSingle, .comment].contains(context) == false,
+            // In arithmetic and subscripts, `<<` shifts.
+            let shifts: Bool
+            switch context {
+            case .arithmetic, .subscripted: shifts = true
+            default: shifts = false
+            }
+            if !shifts, [.single, .double, .ansiSingle, .comment].contains(context) == false,
                text[i] == "<", at(1) == "<", at(2) != "<", i == 0 || text[i - 1] != "<" {
                 afterHereDocument = true
                 copy(2)
@@ -572,8 +578,11 @@ final class ActionRunner {
         var numericFormat = false
         /// `typeset -i` and the like: values are evaluated as numbers.
         var numericTypes = false
-        /// After `sed` or `awk`: the program comes as an argument, without `-e`.
-        var programSeen = false
+        /// After `sed` or `awk`: how many of the next words that aren't options may be its program,
+        /// given as an argument without `-e`. Its files come after.
+        var programWordsLeft = 0
+        /// After `sed` or `awk`, the next word is an option's argument (`-v x=1`, `-F :`).
+        var programOptionArgument = false
         /// Variables this command declares as numbers (`integer n`, `typeset -i n`), and the ones
         /// it assigns a value with `{query}` in it (`n={query}`), which `scan` collects.
         var numericNames: [String] = []
@@ -586,7 +595,8 @@ final class ActionRunner {
                 let bare = word.unicodeScalars.filter { $0 != "\"" && $0 != "'" }
                 let alone = String(String.UnicodeScalarView(bare.drop { $0 == "$" })) == ActionKind.argumentPlaceholder
                 if !alone, (interpreterSeen && previous.map(ActionRunner.runsNextWordAsCode) == true)
-                    || programSeen || ["eval", "ssh", "trap", "sched"].contains(command) {
+                    || (programWordsLeft > 0 && !programOptionArgument && !word.hasPrefix("-"))
+                    || ["eval", "ssh", "trap", "sched"].contains(command) {
                     throw Failure.placeholderInCode
                 }
                 if evaluates(word, command: command) { throw Failure.placeholderInBuiltin }
@@ -598,12 +608,37 @@ final class ActionRunner {
                     assignedNames.append(name)
                 }
             } else {
+                noteProgramArgument(word)
                 previous = word
                 notice(option: word)
                 noteDeclaration(word)
             }
             if ActionRunner.isInterpreter(word) { interpreterSeen = true }
-            if ActionRunner.takesProgramAsArgument(word) { programSeen = true }
+            if ActionRunner.takesProgramAsArgument(word) {
+                programWordsLeft = 1
+                programOptionArgument = false
+            }
+        }
+
+        /// sed and awk: `-e` and `-f` give the program, `-v`, `-F` and `-l` take an argument,
+        /// and BSD sed's `-i` takes a suffix that can look like a program (`sed -i '' 's/…/'`).
+        private mutating func noteProgramArgument(_ word: String) {
+            guard programWordsLeft > 0 else { return }
+            let isOption = word.hasPrefix("-") && word.count > 1
+            if programOptionArgument {
+                programOptionArgument = false
+            } else if isOption {
+                if ["-e", "-f", "--expression", "--file", "--source"].contains(word)
+                    || (!word.hasPrefix("--") && (word.hasSuffix("e") || word.hasSuffix("f"))) {
+                    programWordsLeft = 0
+                } else if ["-v", "-F", "-l"].contains(word) {
+                    programOptionArgument = true
+                } else if word == "-i" {
+                    programWordsLeft += 1
+                }
+            } else if word != "--" {
+                programWordsLeft -= 1
+            }
         }
 
         /// The names `typeset`, `integer` and the like declare as numbers or assign `{query}` to.

@@ -321,6 +321,15 @@ import Testing
             #expect(result.output.trimmingCharacters(in: .newlines).hasSuffix("[\(argument)]"), "\(template): \(result.output)")
             #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("ran").path), "\(template) ran it")
         }
+        // Data, not code: files and text after the program, input to a program given its script,
+        // a file read by a program that isn't run, `||`, and a shift in arithmetic.
+        for template in ["sed 's/a/b/' {query}.txt", "sed -n 's/a/b/p' notes-{query}", "awk '{print}' notes-{query}.log",
+                         "gawk -v x=1 '{print}' {query}.log", "perl -e 'print 1' {query}.txt",
+                         "echo {query} | python3 script.py", "echo {query} || sh", "diff <(echo {query}) file",
+                         "echo $((1<<2)) {query}", "x=$((n << 1)); open {query}", "cat <<< {query}",
+                         "ssh host {query}", "ssh -p 22 host {query}", "eval {query}", "watch -n 1 {query}"] {
+            #expect(throws: Never.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
+        }
         // A whole program given as the argument is what the command asks for.
         #expect(try ActionRunner.substitutingArgument(in: "sh -c {query}") == #"sh -c "${LAUNCHGRID_QUERY}""#)
         #expect(try ActionRunner.substitutingArgument(in: "osascript -e \"{query}\"") == #"osascript -e "${LAUNCHGRID_QUERY}""#)
