@@ -644,11 +644,12 @@ final class AppState {
         }
     }
 
-    /// Paths of the apps on the grid, in its undo and redo history, and recently pruned (which
-    /// can still return to their slot).
+    /// Paths of the apps on the grid, in its undo and redo history, recently pruned (which
+    /// can still return to their slot), and where apps moved to mid-drag, which the grid
+    /// follows at the drop but whose bookmarks have moved already.
     var appPathsInUse: Set<String> {
         let now = Date()
-        var paths = Set<String>()
+        var paths = Set(movesAfterDrag.flatMap(\.values))
         for g in [grid] + undoStack + redoStack {
             paths.formUnion(g.allApps.map(\.path))
             let recent = g.recentlyPruned.filter { (0..<Reconciler.restoreWindow).contains(now.timeIntervalSince($0.prunedAt)) }

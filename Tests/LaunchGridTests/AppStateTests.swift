@@ -3446,6 +3446,21 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.first?.path == "/Applications/Final.app")
     }
 
+    /// The bookmark of an app that moved mid-drag is filed under its new path at once, while
+    /// the grid follows at the drop: a save in between must count the new path as in use.
+    @Test func whereAnAppMovedMidDragIsInUseBeforeTheDrop() throws {
+        let state = makeState(["A", "B"])
+        let a = try #require(state.grid.allApps.first)
+        state.drag.active = true
+        state.followMovedApps([a.path: "/Applications/Middle.app"])
+        state.followMovedApps(["/Applications/Middle.app": "/Applications/Final.app"])
+        #expect(state.appPathsInUse.contains("/Applications/Final.app"))
+        #expect(state.pathsInUse.contains("/Applications/Final.app"))
+        state.cancelDrag()
+        #expect(state.appPathsInUse.contains("/Applications/Final.app"))
+        #expect(!state.appPathsInUse.contains("/Applications/Middle.app"))
+    }
+
     @Test func swappingPathsDuringADragUpdatesHistoryOnlyOnce() throws {
         let state = makeState(["A", "B"])
         let a = try #require(state.grid.allApps.first)

@@ -241,7 +241,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         #endif
         // Before the first scan, so it sees the folders and apps the bookmarks reach. Resolved
         // off the main thread: one to a volume that has stopped answering could hang the launch.
-        let restored = Task { await FileAccess.restoreInBackground(prefs: prefs) }
+        // The grid follows moved apps in the same main-actor turn their bookmarks move in: a
+        // save finishing in between would see the new paths unused and forget them.
+        let restored = Task { [state] in state.followMovedApps(await FileAccess.restoreInBackground(prefs: prefs)) }
         buildMainMenu()
         applyDockPolicy()
         applyMenuBarIcon()
@@ -297,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         IconProvider.shared.prewarm(state.grid.allApps.map(\.path))
         Task { [self] in
-            state.followMovedApps(await restored.value)
+            await restored.value
             state.rescan { [weak self] in
                 guard let self else { return }
                 #if !APP_STORE
