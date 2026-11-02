@@ -863,10 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         alert.informativeText = String(localized: "Run another copy of it at the same time?")
         alert.addButton(withTitle: String(localized: "Run Another Copy"))
         alert.addButton(withTitle: String(localized: "Cancel"))
-        if let panel = overlay.window, panel.isVisible {
-            alert.window.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
-        }
-        return alert.runModal() == .alertFirstButtonReturn
+        return overlay.runAlertOverGrid(alert) == .alertFirstButtonReturn
     }
 
     /// What an action's last background run printed, in its own window.

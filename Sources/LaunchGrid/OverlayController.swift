@@ -279,10 +279,25 @@ final class OverlayController: NSObject, NSWindowDelegate {
         showBackground(for: current)
     }
 
+    /// Runs `alert` above the grid, which stays up behind it and takes the keyboard back after.
+    func runAlertOverGrid(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        guard let panel, isVisible else { return alert.runModal() }
+        alert.window.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
+        alertOverGrid = true
+        defer {
+            alertOverGrid = false
+            if isVisible { panel.makeKey() }
+        }
+        return alert.runModal()
+    }
+
+    /// While `runAlertOverGrid` shows an alert, which takes key status from the panel.
+    private var alertOverGrid = false
+
     /// Clicking another app, or our own Settings, takes key status away: hide like Launchpad.
     /// A rename in progress is cancelled, unless the panel was only briefly not key.
     func windowDidResignKey(_ notification: Notification) {
-        guard isVisible else { return }
+        guard isVisible, !alertOverGrid else { return }
         guard state.textEdit != nil else {
             hide(deactivate: false)
             return
