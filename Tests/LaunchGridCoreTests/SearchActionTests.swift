@@ -28,6 +28,16 @@ import Testing
         #expect(Search.results(in: items, query: "gh ").first?.argument == nil)
     }
 
+    /// A Shortcut with no input of its own takes what's typed after its keyword as its input;
+    /// one with a fixed input doesn't take an argument.
+    @Test func aShortcutWithNoInputTakesTheArgument() {
+        let log = Action(name: "Log", keywords: ["lg"], kind: .shortcut(name: "Log", input: nil))
+        let fixed = Action(name: "Fixed", keywords: ["fx"], kind: .shortcut(name: "Fixed", input: "clipboard"))
+        let match = Search.results(in: [.action(log)], query: "lg Buy milk").first
+        #expect(match?.id == log.id && match?.argument == "Buy milk")
+        #expect(Search.results(in: [.action(fixed)], query: "fx Buy milk").first?.argument == nil)
+    }
+
     @Test func aKeywordWithASpaceTakesAnArgumentToo() {
         let wiki = Action(name: "Wiki", keywords: ["w en"], kind: .openURL(template: "https://en.wikipedia.org/wiki/{query}"))
         let match = Search.results(in: [.action(wiki)], query: "w en Swift").first
@@ -63,7 +73,8 @@ import Testing
         #expect(ActionKind.userScript(fileName: "a.sh", arguments: ["-q", "{query}"], runMode: .background).takesArgument)
         #expect(!ActionKind.userScript(fileName: "{query}.sh", arguments: [], runMode: .background).takesArgument)
         #expect(ActionKind.shortcut(name: "S", input: "{query}").takesArgument)
-        #expect(!ActionKind.shortcut(name: "{query}", input: nil).takesArgument)
+        #expect(!ActionKind.shortcut(name: "{query}", input: "fixed").takesArgument)
+        #expect(ActionKind.shortcut(name: "S", input: nil).takesArgument, "what's typed is its input")
         #expect(!ActionKind.openFile(path: "/{query}", appPath: nil).takesArgument)
         let shell = Action(name: "Grep", keywords: ["g"], kind: .shell(command: "grep {query}", runMode: .terminal, workingDirectory: nil, timeoutSeconds: nil))
         #expect(Search.results(in: [.action(shell)], query: "g foo").first?.argument == "foo")

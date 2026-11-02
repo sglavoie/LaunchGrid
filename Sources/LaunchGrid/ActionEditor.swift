@@ -564,7 +564,7 @@ struct ActionEditor: View {
                 #endif
             }
             TextField("Input", text: $model.shortcutInput, prompt: Text("Optional"))
-            Text("Use {query} in the input for what you type after a keyword.")
+            Text("Use {query} in the input for what you type after a keyword. With no input, what you type is the input.")
                 .font(.caption).foregroundStyle(.secondary)
         case .command:
             if model.kind.isAvailable {
@@ -673,7 +673,11 @@ struct ActionEditor: View {
 
     @ViewBuilder private func testFields(_ draft: Action) -> some View {
         if draft.kind.takesArgument {
-            TextField("Argument", text: $model.testArgument, prompt: Text("Replaces {query}"))
+            if case .shortcut(_, nil) = draft.kind {
+                TextField("Argument", text: $model.testArgument, prompt: Text("The Shortcut's input"))
+            } else {
+                TextField("Argument", text: $model.testArgument, prompt: Text("Replaces {query}"))
+            }
         }
         HStack {
             Button("Test") { Task { await model.test(with: state) } }

@@ -92,7 +92,7 @@ An action is a grid item you make, next to apps and folders: it can be placed, m
 
 - **Link:** opens a web link or a deep link into another app (`https://…`, `obsidian://…`, `x-callback-url://…`) with the app that handles it. LaunchGrid itself makes no connection.
 - **File:** opens a file or folder, with its default app or one you choose.
-- **Shortcut:** runs an Apple Shortcut by name, with an optional text input.
+- **Shortcut:** runs an Apple Shortcut by name, with an optional text input. With no input set, the text typed after its keyword is the input.
 - **Command:** runs a shell command (`/bin/zsh -l -c`, a login shell) in the background, where a badge on the tile shows it running or failed and **Show Last Output…** keeps the last 4 KB of its output and errors, or in a terminal (Terminal, iTerm, Ghostty or another app, set in Settings › General › Actions). Background commands stop after a time limit (60 s unless set) and can be stopped from the tile's menu. **Downloadable build only.**
 - **Script:** runs a script you saved in `~/Library/Application Scripts/com.sglavoie.launchgrid/` (create it if it doesn't exist; **Open Scripts Folder** in the editor opens it), with arguments one per line. It must be executable (`chmod +x`), or an AppleScript (`.scpt`, `.applescript`). Works in both builds.
 

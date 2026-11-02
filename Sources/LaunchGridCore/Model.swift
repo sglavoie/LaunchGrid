@@ -405,15 +405,16 @@ public enum ActionKind: Equatable, Sendable {
     /// The environment variable commands and scripts get the argument in.
     public static let argumentVariable = "LAUNCHGRID_QUERY"
 
-    /// Whether `{query}` appears where it is substituted, or a command reads
-    /// `$LAUNCHGRID_QUERY` (where the editor asks for it instead of `{query}`), so search hands
-    /// this action the text typed after its keyword.
+    /// Whether `{query}` appears where it is substituted, a command reads `$LAUNCHGRID_QUERY`
+    /// (where the editor asks for it instead of `{query}`), or a Shortcut has no input of its
+    /// own (what's typed is its input), so search hands this action the text typed after its
+    /// keyword.
     public var takesArgument: Bool {
         let p = Self.argumentPlaceholder
         return switch self {
         case .openURL(let template): template.contains(p)
         case .openFile: false
-        case .shortcut(_, let input): input?.contains(p) ?? false
+        case .shortcut(_, let input): input?.contains(p) ?? true
         case .shell(let command, _, _, _): command.contains(p) || command.contains(Self.argumentVariable)
         case .userScript(_, let arguments, _): arguments.contains { $0.contains(p) }
         }
