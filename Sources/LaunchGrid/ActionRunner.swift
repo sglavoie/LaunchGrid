@@ -41,7 +41,7 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset or vared, a variable name for typeset, declare, local or export, or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
         }
         static var placeholderInCode: Failure {
-            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, or with eval, trap or ssh), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
+            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, with eval, trap, watch or ssh, or in input piped to a shell or osascript), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
         }
         static var placeholderInGlobQualifier: Failure {
             Failure(message: String(localized: "{query} can't go inside parentheses that end a word, like the glob qualifier in *(e:'…':), where zsh would run what's typed as code. Use $LAUNCHGRID_QUERY there instead."))
@@ -285,6 +285,9 @@ final class ActionRunner {
         // Anywhere in the command, so the order of a declaration and an assignment doesn't matter.
         var numericNames = ActionRunner.numericVariables
         var assignedNames: Set<String> = []
+        // Whether `{query}` came anywhere before, for a command reading a pipe: `echo {query} | sh`,
+        // and `{ echo {query}; } | sh` too.
+        var placeholderSoFar = false
         var i = 0
         func at(_ offset: Int) -> Unicode.Scalar? { i + offset < text.count ? text[i + offset] : nil }
         func copy(_ n: Int) {
@@ -295,7 +298,7 @@ final class ActionRunner {
         func startsWord(afterBrace: Bool = false) -> Bool {
             guard i > 0 else { return true }
             let previous = text[i - 1]
-            return previous.properties.isWhitespace || ";&|()<>".unicodeScalars.contains(previous)
+            return ActionRunner.isBlank(previous) || ";&|()<>".unicodeScalars.contains(previous)
                 || (afterBrace && previous == "{")
         }
         func isNameCharacter(_ c: Unicode.Scalar) -> Bool {
@@ -319,8 +322,15 @@ final class ActionRunner {
             let word = String(String.UnicodeScalarView(text[min(words.start, i)..<i]))
             if !word.isEmpty {
                 if words.redirecting {
-                    // A file to read or write (`<<< {query}`, `> {query}`): data, not an argument.
+                    // A file to read or write (`<<< {query}`, `> {query}`): data, not an argument,
+                    // but what a program reading code from its input runs: `bash <<< "echo {query}"`,
+                    // `sh < <(echo {query})`. A file named by `{query}` alone is like `sh {query}`.
+                    if words.redirectingInput, words.hasPlaceholder, words.hereString || !ActionRunner.isAlone(word) {
+                        words.stdinPlaceholder = true
+                    }
                     words.redirecting = false
+                    words.redirectingInput = false
+                    words.hereString = false
                 } else {
                     try words.add(word)
                     numericNames.formUnion(words.numericNames)
@@ -330,12 +340,22 @@ final class ActionRunner {
                 }
             }
             words.hasPlaceholder = false
+            words.processPlaceholder = false
             words.start = i + 1
             if newCommand {
+                try words.finish()
+                // `|` and `|&`, not `||`; a pipe at the end of a line feeds the next one.
+                let previous = i > 0 ? text[i - 1] : " "
+                let piped = i < text.count && ((text[i] == "|" && at(1) != "|" && previous != "|")
+                    || (text[i] == "&" && previous == "|" && (i < 2 || text[i - 2] != "|"))
+                    || (text[i] == "\n" && words.command == nil && words.pipedPlaceholder))
                 // Still in the same `$(…)`, whose output the word around it takes.
                 let any = words.anyPlaceholder
+                let process = words.isProcessSubstitution
                 words = Words(start: i + 1)
                 words.anyPlaceholder = any
+                words.isProcessSubstitution = process
+                words.pipedPlaceholder = piped && placeholderSoFar
             }
         }
         /// The innermost failure for a placeholder in a context that evaluates or can't hold it.
@@ -389,7 +409,7 @@ final class ActionRunner {
         /// Whether a word ends `offset` characters on.
         func endsWord(after offset: Int) -> Bool {
             guard let next = at(offset) else { return true }
-            return next.properties.isWhitespace || ";&|()<>".unicodeScalars.contains(next)
+            return ActionRunner.isBlank(next) || ";&|()<>".unicodeScalars.contains(next)
         }
         /// Notes `{query}` in each `[[ … ]]` around it, refused at its end if it compares numbers.
         func markConditionals() {
@@ -414,6 +434,7 @@ final class ActionRunner {
                 markConditionals()
                 words.hasPlaceholder = true
                 words.anyPlaceholder = true
+                placeholderSoFar = true
                 let reference: String
                 switch context {
                 case .comment, .backtick, .parameter, .arithmetic, .subscripted, .qualifier: throw Failure.placeholderInArithmetic // refused above
@@ -433,16 +454,27 @@ final class ActionRunner {
                 copy(1)
                 continue
             }
+            // `<(…)`, `>(…)` and zsh's `=(…)`: commands whose output (or input) is a file the word
+            // names. Read like `$(…)`, so the command around it carries on after.
+            if context.readsWords, "<>=".unicodeScalars.contains(text[i]), at(1) == "(", startsWord() {
+                stack.append(.substitution(depth: 0)); copy(2)
+                outerWords.append(words)
+                words = Words(start: i)
+                words.isProcessSubstitution = true
+                continue
+            }
             if !joiningOnly, context.startsCommands {
                 let c = text[i]
                 let previous = i > 0 ? text[i - 1] : " "
                 if c == "<" || c == ">" || (c == "&" && (previous == ">" || previous == "<" || at(1) == ">")) {
                     // A redirection (`2>&1` and `&>` too): the word after it is its file.
                     try endWord(newCommand: false)
+                    if !words.redirecting { words.redirectingInput = c == "<" }
+                    if c == "<", at(1) == "<", at(2) == "<" { words.hereString = true }
                     words.redirecting = true
                 } else if c == "\n" || ";&|()".unicodeScalars.contains(c) {
                     try endWord(newCommand: true)
-                } else if c.properties.isWhitespace {
+                } else if ActionRunner.isBlank(c) {
                     try endWord(newCommand: false)
                 }
             }
@@ -471,6 +503,7 @@ final class ActionRunner {
                     let inner = words
                     words = outerWords.popLast() ?? Words(start: i)
                     if inner.anyPlaceholder { words.hasPlaceholder = true; words.anyPlaceholder = true }
+                    if inner.anyPlaceholder && inner.isProcessSubstitution { words.processPlaceholder = true }
                 case ")": stack[stack.count - 1] = .substitution(depth: depth - 1); copy(1)
                 default: unquoted(context)
                 }
@@ -539,9 +572,12 @@ final class ActionRunner {
             case .comment:
                 if text[i] == "\n" {
                     stack.removeLast()
+                    try words.finish()
                     let any = words.anyPlaceholder
+                    let process = words.isProcessSubstitution
                     words = Words(start: i + 1)
                     words.anyPlaceholder = any
+                    words.isProcessSubstitution = process
                 }
                 copy(1)
             }
@@ -583,6 +619,30 @@ final class ActionRunner {
         var programWordsLeft = 0
         /// After `sed` or `awk`, the next word is an option's argument (`-v x=1`, `-F :`).
         var programOptionArgument = false
+        /// The interpreter last named (`bash`, `node`, `pwsh`), whose options say where code goes.
+        var interpreter: String?
+        /// After `bash -c` and the like: the next word that isn't an option (`--`, `-x`) is code.
+        var codePending = false
+        /// For `eval`, `watch` and `ssh`, which join their arguments into one command that a shell
+        /// reads again: arguments that aren't options so far, and whether the next is an option's.
+        var joinedOperands = 0
+        var joinedOptionArgument = false
+        /// Whether the word being read holds a `<(…)` or `=(…)` with `{query}` in it.
+        var processPlaceholder = false
+        /// Whether these are the words of a `<(…)`, `>(…)` or `=(…)`.
+        var isProcessSubstitution = false
+        /// Input from a pipe after `{query}` (`echo {query} | sh`), or a here-string or input
+        /// redirection with it (`bash <<< "echo {query}"`), which a program can read as code.
+        var pipedPlaceholder = false
+        var stdinPlaceholder = false
+        var redirectingInput = false
+        var hereString = false
+        /// For a command that reads its program from its input unless given one: whether it was
+        /// told to read it there anyway (`bash -s`, `python3 -`), and whether it was given one
+        /// (a script file, or code after `-c`).
+        var stdinForced = false
+        var programGiven = false
+        var stdinOptionArgument = false
         /// Variables this command declares as numbers (`integer n`, `typeset -i n`), and the ones
         /// it assigns a value with `{query}` in it (`n={query}`), which `scan` collects.
         var numericNames: [String] = []
@@ -591,15 +651,28 @@ final class ActionRunner {
         init(start: Int = 0) { self.start = start }
 
         mutating func add(_ word: String) throws {
+            let alone = ActionRunner.isAlone(word)
             if hasPlaceholder, let command {
-                let bare = word.unicodeScalars.filter { $0 != "\"" && $0 != "'" }
-                let alone = String(String.UnicodeScalarView(bare.drop { $0 == "$" })) == ActionKind.argumentPlaceholder
-                if !alone, (interpreterSeen && previous.map(ActionRunner.runsNextWordAsCode) == true)
+                let codeOption = previous.map { ActionRunner.runsNextWordAsCode($0, program: interpreter) } == true
+                let isCode = (interpreterSeen && (codeOption || (codePending && !word.hasPrefix("-"))))
                     || (programWordsLeft > 0 && !programOptionArgument && !word.hasPrefix("-"))
-                    || ["eval", "ssh", "trap", "sched"].contains(command) {
+                    || ["eval", "ssh", "trap", "sched", "watch"].contains(command)
+                if !alone, isCode { throw Failure.placeholderInCode }
+                // `eval echo {query}` joins its arguments and reads them again, so even a whole
+                // argument is code there, unless it starts the command (`ssh host {query}`).
+                if alone, !joinedOptionArgument, !word.hasPrefix("-"),
+                   ["eval", "watch", "ssh"].contains(command), joinedOperands > (command == "ssh" ? 1 : 0) {
                     throw Failure.placeholderInCode
                 }
                 if evaluates(word, command: command) { throw Failure.placeholderInBuiltin }
+            }
+            // A `<(…)` with `{query}` that a program runs: its script (`sh <(…)`, `source <(…)`)
+            // or its program file (`awk -f <(…)`).
+            if processPlaceholder, let command {
+                let isProgram = ["source", "."].contains(command)
+                    || (ActionRunner.readsProgramFromInput(command) && !programGiven && !stdinOptionArgument && !word.hasPrefix("-"))
+                    || (interpreterSeen && previous.map { ["-f", "--file", "-E"].contains($0) } == true)
+                if isProgram { throw Failure.placeholderInCode }
             }
             if command == nil {
                 if !ActionRunner.precedesCommand(word) {
@@ -608,37 +681,90 @@ final class ActionRunner {
                     assignedNames.append(name)
                 }
             } else {
-                noteProgramArgument(word)
+                noteArgument(word)
                 previous = word
                 notice(option: word)
                 noteDeclaration(word)
             }
-            if ActionRunner.isInterpreter(word) { interpreterSeen = true }
+            if ActionRunner.isInterpreter(word) {
+                interpreterSeen = true
+                interpreter = ActionRunner.programName(word)
+                codePending = false
+            }
             if ActionRunner.takesProgramAsArgument(word) {
                 programWordsLeft = 1
                 programOptionArgument = false
             }
         }
 
-        /// sed and awk: `-e` and `-f` give the program, `-v`, `-F` and `-l` take an argument,
-        /// and BSD sed's `-i` takes a suffix that can look like a program (`sed -i '' 's/…/'`).
-        private mutating func noteProgramArgument(_ word: String) {
-            guard programWordsLeft > 0 else { return }
+        /// Follows an argument through the options of the programs that read code from it.
+        private mutating func noteArgument(_ word: String) {
             let isOption = word.hasPrefix("-") && word.count > 1
-            if programOptionArgument {
-                programOptionArgument = false
-            } else if isOption {
-                if ["-e", "-f", "--expression", "--file", "--source"].contains(word)
-                    || (!word.hasPrefix("--") && (word.hasSuffix("e") || word.hasSuffix("f"))) {
-                    programWordsLeft = 0
-                } else if ["-v", "-F", "-l"].contains(word) {
-                    programOptionArgument = true
-                } else if word == "-i" {
-                    programWordsLeft += 1
-                }
-            } else if word != "--" {
-                programWordsLeft -= 1
+            // `bash -c -x -- 'code'`
+            if interpreterSeen, ActionRunner.runsNextWordAsCode(word, program: interpreter) {
+                codePending = true
+            } else if codePending, !isOption {
+                codePending = false
             }
+            // sed and awk: `-e` and `-f` give the program, `-v`, `-F` and `-l` take an argument,
+            // and BSD sed's `-i` takes a suffix that can look like a program (`sed -i '' 's/…/'`).
+            if programWordsLeft > 0 {
+                if programOptionArgument {
+                    programOptionArgument = false
+                } else if isOption {
+                    if ["-e", "-f", "--expression", "--file", "--source"].contains(word)
+                        || (!word.hasPrefix("--") && (word.hasSuffix("e") || word.hasSuffix("f"))) {
+                        programWordsLeft = 0
+                    } else if ["-v", "-F", "-l"].contains(word) {
+                        programOptionArgument = true
+                    } else if word == "-i" {
+                        programWordsLeft += 1
+                    }
+                } else if word != "--" {
+                    programWordsLeft -= 1
+                }
+            }
+            if let command, ["eval", "watch", "ssh"].contains(command) {
+                if joinedOptionArgument {
+                    joinedOptionArgument = false
+                } else if isOption {
+                    let takesArgument: Set<String> = command == "ssh"
+                        ? ["-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w", "-B"]
+                        : ["-n", "--interval", "-d", "-q"]
+                    joinedOptionArgument = takesArgument.contains(word)
+                } else {
+                    joinedOperands += 1
+                }
+            }
+            if let command, ActionRunner.readsProgramFromInput(command) {
+                let program = ActionRunner.programName(command)
+                if stdinOptionArgument {
+                    stdinOptionArgument = false
+                } else if word == "-" || word == "/dev/stdin" || (word == "-s" && ActionRunner.isShell(program)) {
+                    stdinForced = true
+                } else if ActionRunner.runsNextWordAsCode(word, program: program) || word == "-m" {
+                    programGiven = true // the code, or a module, comes after
+                } else if isOption {
+                    let takesArgument: Set<String> = switch program {
+                    case "osascript": ["-l", "-s"]
+                    case "python": ["-W", "-X", "-Q"]
+                    case "perl", "ruby": ["-I", "-M", "-x"]
+                    case "at", "batch": ["-q", "-t", "-f"]
+                    default: ["-o", "+o", "-O", "+O"]
+                    }
+                    stdinOptionArgument = takesArgument.contains(word)
+                    // `at -f file`: its commands come from the file.
+                    if (program == "at" || program == "batch") && word == "-f" { programGiven = true }
+                } else if program != "at" && program != "batch" {
+                    programGiven = true // a script file; at's are times
+                }
+            }
+        }
+
+        /// Ends the command: input with `{query}` in it, read as its program, is refused.
+        func finish() throws {
+            guard pipedPlaceholder || stdinPlaceholder, let command, ActionRunner.readsProgramFromInput(command) else { return }
+            if stdinForced || !programGiven { throw Failure.placeholderInCode }
         }
 
         /// The names `typeset`, `integer` and the like declare as numbers or assign `{query}` to.
@@ -691,11 +817,46 @@ final class ActionRunner {
     }
 
     /// Whether a program reads the word after `word` as code: `sh -c`, `bash -lc`, `osascript -e`,
-    /// `perl -E`, `perl -pe`, `python3 -c`, `node --eval`, `php -r`, `sed -nE`.
-    nonisolated static func runsNextWordAsCode(_ word: String) -> Bool {
+    /// `perl -E`, `perl -pe`, `python3 -c`, `node --eval`, `php -r`, `sed -nE`. Some depend on the
+    /// program: `node -p`, `php -R`, `pwsh -Command` (any abbreviation), `deno eval`.
+    nonisolated static func runsNextWordAsCode(_ word: String, program: String? = nil) -> Bool {
         if ["--command", "--eval", "--expression", "--source", "--exec"].contains(word) { return true }
+        switch program {
+        case "node", "nodejs", "bun": if word == "-p" || word == "--print" { return true }
+        case "php": if word == "-R" || word == "-B" { return true }
+        case "pwsh", "powershell":
+            let lower = word.lowercased()
+            if lower.hasPrefix("-c") || lower.hasPrefix("-e") || lower.hasPrefix("/c") { return true }
+        case "deno": if word == "eval" { return true }
+        default: break
+        }
         guard word.hasPrefix("-"), !word.hasPrefix("--"), word.count <= 5, let last = word.last else { return false }
         return "ceEr".contains(last)
+    }
+
+    /// Whether `word` is `{query}` alone, bare or in one pair of quotes: a whole argument, not
+    /// part of one. `'"{query}"'` isn't: its double quotes are part of the code it's given to.
+    nonisolated static func isAlone(_ word: String) -> Bool {
+        let p = ActionKind.argumentPlaceholder
+        return [p, "\"\(p)\"", "'\(p)'", "$'\(p)'", "$\"\(p)\""].contains(word)
+    }
+
+    /// The blanks zsh splits words at. A no-break space, say, stays part of the word.
+    nonisolated static func isBlank(_ c: Unicode.Scalar) -> Bool {
+        c == " " || c == "\t" || c == "\n"
+    }
+
+    nonisolated static func isShell(_ program: String) -> Bool {
+        ["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh"].contains(program)
+    }
+
+    /// Whether `command` reads its program from its input when not given one: a shell or a
+    /// scripting language (`echo … | sh`, `osascript <<< …`), or `at` and `batch`. Not sed or awk,
+    /// whose input is text.
+    nonisolated static func readsProgramFromInput(_ command: String) -> Bool {
+        let name = programName(command)
+        return isShell(name) || ["osascript", "perl", "python", "ruby", "node", "nodejs", "bun", "php", "lua",
+                                 "tclsh", "pwsh", "powershell", "at", "batch"].contains(name)
     }
 
     /// Whether `word` names a program whose first argument, without `-e`, is its program:
@@ -733,7 +894,7 @@ final class ActionRunner {
     nonisolated static func isInterpreter(_ word: String) -> Bool {
         let name = programName(word)
         return ["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "osascript", "perl",
-                "python", "ruby", "node", "nodejs", "deno", "bun", "php", "lua", "tclsh", "pwsh", "su",
+                "python", "ruby", "node", "nodejs", "deno", "bun", "php", "lua", "tclsh", "pwsh", "powershell", "su",
                 "sed", "gsed", "awk", "gawk", "mawk", "nawk"].contains(name)
     }
 

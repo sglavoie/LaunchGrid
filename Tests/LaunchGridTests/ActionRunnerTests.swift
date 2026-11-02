@@ -285,6 +285,40 @@ import Testing
             "echo a | awk '/{query}/'",
             "gawk -v x=1 '{ print \"{query}\" }'",
             "trap \"echo {query}\" EXIT",
+            // The code a shell takes after `-c` comes after its other options too.
+            "bash -c -- 'echo {query}'",
+            "sh -c -x 'echo {query}'",
+            // Options and subcommands that take code in only some programs.
+            "node -p '\"x{query}\"'",
+            "deno eval 'console.log(\"{query}\")'",
+            "pwsh -Command 'echo {query}'",
+            "php -R 'echo \"{query}\";'",
+            // Quotes inside the quotes are part of the code: the shell would read "$(…)" in it.
+            "sh -c '\"{query}\"'",
+            // Programs that join their arguments into a command a shell reads again.
+            "watch 'echo {query}'",
+            "eval echo {query}",
+            "ssh host echo {query}",
+            "ssh -p 22 host ls {query}",
+            // Input that a program reads as its code.
+            "echo 'display notification \"{query}\"' | osascript",
+            "echo \"echo {query}\" | sh",
+            "echo {query} |& bash",
+            "{ echo {query}; } | sh",
+            "bash <<< \"echo {query}\"",
+            "bash -s arg <<< \"x{query}\"",
+            "python3 - <<< \"print('{query}')\"",
+            "osascript -l JavaScript <<< \"'{query}'\"",
+            "echo {query} | at now",
+            "sh <(echo {query})",
+            "source <(echo {query})",
+            "bash < <(echo {query})",
+            "awk -f <(echo '/{query}/') file",
+            // sed and awk programs after options that take an argument.
+            "sed -i '' 's/a/{query}/' file",
+            "awk -F : '/{query}/' file",
+            // zsh doesn't split words at a no-break space: all this is the code after -c.
+            "bash -c :\u{00A0}'; echo {query}'",
         ]
         for template in refused {
             #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
