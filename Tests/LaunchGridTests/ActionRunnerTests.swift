@@ -161,6 +161,86 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
+    /// zsh evaluates arithmetic even on a quoted value, and on the output of a `$(…)` inside it,
+    /// and a subscript in it runs `$(…)`: `{query}` anywhere inside `$((…))`, `((…))`, `$[…]`, a
+    /// subscript or a `[[ … ]]` that compares numbers is refused before anything runs, in the
+    /// background, in a terminal and in the editor. Next to them, text uses still run, with the
+    /// argument delivered as it is.
+    @Test func arithmeticCommandPlaceholdersCannotExecuteArgumentSyntax() async throws {
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let arguments = ["a[$(printf INJECTED >&2)0]", "a[`printf INJECTED >&2`0]"]
+        let refused: [(String, ActionRunner.Failure)] = [
+            ("a=(0); echo $(( \"{query}\" ))", .placeholderInArithmetic),
+            ("a=(0); [[ 1 -eq {query} ]]", .placeholderInNumericTest),
+            ("a=(0); echo $(( '{query}' + 1 ))", .placeholderInArithmetic),
+            ("a=(0); (( \"{query}\" > 1 )) && echo big", .placeholderInArithmetic),
+            ("a=(0); echo $(( $(printf %s \"{query}\") ))", .placeholderInArithmetic),
+            ("a=(0); echo \"$(( \"{query}\" ))\"", .placeholderInArithmetic),
+            ("a=(0); echo $[ \"{query}\" ]", .placeholderInArithmetic),
+            ("a=(0); a[\"{query}\"]=1", .placeholderInArithmetic),
+            ("a=(0); echo $a[\"{query}\"]", .placeholderInArithmetic),
+            ("a=(0); echo \"$a[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); [[ \"{query}\" -eq 1 ]]", .placeholderInNumericTest),
+            ("a=(0); [[ 1 -lt $(printf %s \"{query}\") ]] && echo less", .placeholderInNumericTest),
+            ("a=(0); [[ -n {query} && 1 -ge {query} ]]", .placeholderInNumericTest),
+        ]
+        for (template, failure) in refused {
+            for argument in arguments {
+                for mode in [RunMode.background, .terminal] {
+                    #expect(throws: failure, "\(template) \(mode)") {
+                        try ActionRunner.plan(shell(template, mode: mode), argument: argument)
+                    }
+                }
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [failure.message], "\(template)")
+            #expect(!failure.message.isEmpty)
+        }
+
+        // Text uses next to them: the argument arrives as it is and nothing in it runs.
+        let accepted = [
+            "exec 2>&1; a=(0); printf '[%s]' {query}",
+            "exec 2>&1; a=(0); printf '[%s]' \"{query}\"",
+            "exec 2>&1; a=(0); echo $(( 1 + 1 )) >/dev/null; printf '[%s]' '{query}'",
+            "exec 2>&1; a=(0); [[ -n {query} ]] && printf '[%s]' \"{query}\"",
+            "exec 2>&1; a=(0); [[ {query} == x ]] || printf '[%s]' {query}",
+            "exec 2>&1; a=(0); [[ 1 -eq 1 ]] && printf '[%s]' \"{query}\"",
+            "exec 2>&1; a=(0); b=x; printf '[%s]' \"$b{query}\" | sed 's/^\\[x/[/'",
+        ]
+        let runner = ActionRunner()
+        for template in accepted {
+            for argument in arguments {
+                let expected = "[\(argument)]"
+                let plan = try ActionRunner.plan(shell(template), argument: argument)
+                guard case .code(let job) = plan, case .shell(let command) = job.program else {
+                    Issue.record("not a command: \(template)"); continue
+                }
+                #expect(!command.contains(argument))
+                let background = await runner.runToEnd(job)
+                #expect(background.ending == .exited(0), "\(template) \(argument): \(background.output)")
+                #expect(background.output == expected, "\(template) with \(argument)")
+                // Its output is the argument once, so the marker printed nowhere else.
+                #expect(!background.output.replacingOccurrences(of: expected, with: "").contains("INJECTED"))
+                #expect(!background.errorOutput.contains("INJECTED"))
+
+                let terminalPlan = try ActionRunner.plan(shell(template, mode: .terminal), argument: argument)
+                guard case .code(let terminalJob) = terminalPlan, case .shell(let terminalCommand) = terminalJob.program else {
+                    Issue.record("not a command: \(template)"); continue
+                }
+                #expect(terminalCommand == command)
+                let file = try ActionRunner.writeCommandFile(terminalCommand, directory: dir.path, argument: argument)
+                let terminal = try runZsh(file)
+                #expect(terminal.status == 0, "\(template) \(argument) in a terminal")
+                #expect(terminal.output == expected, "\(template) with \(argument) in a terminal")
+                #expect(!terminal.output.replacingOccurrences(of: expected, with: "").contains("INJECTED"))
+            }
+        }
+    }
+
     /// Runs a terminal command file the way the terminal would, through zsh.
     private func runZsh(_ file: URL) throws -> (status: Int32, output: String) {
         let process = Process()

@@ -32,7 +32,10 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't go inside ${…}. Use $LAUNCHGRID_QUERY there instead."))
         }
         static var placeholderInArithmetic: Failure {
-            Failure(message: String(localized: "{query} can't go inside $((…)) or ((…)), where the shell would run what's typed as code."))
+            Failure(message: String(localized: "{query} can't go inside $((…)), ((…)), $[…] or a subscript like a[…], even in quotes or a $(…), where the shell would run what's typed as code. Use it as plain text outside them instead."))
+        }
+        static var placeholderInNumericTest: Failure {
+            Failure(message: String(localized: "{query} can't go inside a [[ … ]] test that compares numbers (-eq, -lt and the like), where the shell would run what's typed as code. Compare it as text with == instead."))
         }
         static var placeholderAfterHereDocument: Failure {
             Failure(message: String(localized: "{query} can't go in or after a here-document (<<). Use $LAUNCHGRID_QUERY there instead."))
@@ -212,16 +215,23 @@ final class ActionRunner {
     /// syntax: a parameter's value isn't parsed again. The reference fits where `{query}` is:
     /// unquoted, inside '…', "…" or $'…' it stays one piece of text, as typed; in a comment it is
     /// left alone. Throws for places where the shell would read the value as code or the
-    /// reference can't fit: backticks, `${…}`, arithmetic and here-documents.
+    /// reference can't fit: backticks, `${…}`, arithmetic (`$((…))`, `((…))`, `$[…]`, array
+    /// subscripts), `[[ … ]]` tests that compare numbers, and here-documents. Each of these is
+    /// refused however deeply the placeholder sits inside it, quoted or in a `$(…)`: zsh still
+    /// evaluates a quoted value in arithmetic, and the output of a `$(…)` there too.
     nonisolated static func substitutingArgument(in command: String) throws -> String {
         enum Context: Equatable {
             case top, substitution(depth: Int), backtick, parameter(depth: Int), arithmetic(depth: Int)
             case single, double, ansiSingle, comment
+            /// `$[…]` or a subscript (`a[…]`, `$a[…]`), which zsh evaluates as arithmetic.
+            case subscripted(depth: Int)
+            /// `[[ … ]]`: whether it compares numbers, and whether `{query}` is in it.
+            case conditional(numeric: Bool, placeholder: Bool)
 
             /// Where a `#` starting a word starts a comment.
             var startsCommands: Bool {
                 switch self {
-                case .top, .substitution: true
+                case .top, .substitution, .conditional: true
                 default: false
                 }
             }
@@ -242,9 +252,33 @@ final class ActionRunner {
             let previous = text[i - 1]
             return previous.properties.isWhitespace || ";&|()<>".unicodeScalars.contains(previous)
         }
-        /// `$(`, `$((`, `${` and backticks, which can start in any context that expands.
+        func isNameCharacter(_ c: Unicode.Scalar) -> Bool {
+            c == "_" || c.properties.isAlphabetic || c.properties.numericType != nil
+        }
+        /// Whether a `[` here follows `$name`, a subscript wherever parameters expand.
+        func afterParameterName() -> Bool {
+            var j = i - 1
+            while j >= 0, isNameCharacter(text[j]) { j -= 1 }
+            return j < i - 1 && j >= 0 && text[j] == "$"
+        }
+        /// The innermost failure for a placeholder in a context that evaluates or can't hold it.
+        func refusal() -> Failure? {
+            for context in stack.reversed() {
+                switch context {
+                case .backtick: return .placeholderInBackticks
+                case .parameter: return .placeholderInParameter
+                case .arithmetic, .subscripted: return .placeholderInArithmetic
+                default: continue
+                }
+            }
+            return nil
+        }
+        /// `$(`, `$((`, `${`, `$[` and backticks, which can start in any context that expands, and
+        /// a subscript after `$name`.
         func openExpansion() -> Bool {
             switch (at(0), at(1), at(2)) {
+            case ("[", _, _) where afterParameterName(): stack.append(.subscripted(depth: 0)); copy(1)
+            case ("$", "[", _): stack.append(.subscripted(depth: 0)); copy(2)
             case ("$", "(", "("): stack.append(.arithmetic(depth: 0)); copy(3)
             case ("$", "(", _): stack.append(.substitution(depth: 0)); copy(2)
             case ("$", "{", _): stack.append(.parameter(depth: 0)); copy(2)
@@ -263,7 +297,25 @@ final class ActionRunner {
             case "$" where at(1) == "'": stack.append(.ansiSingle); copy(2)
             case "#" where context.startsCommands && startsWord(): stack.append(.comment); copy(1)
             case "(" where at(1) == "(" && startsWord(): stack.append(.arithmetic(depth: 0)); copy(2)
+            // `a[…]` outside quotes: a subscript when assigning, otherwise a pattern, where
+            // `{query}` isn't refused for being in brackets but is safer left out anyway.
+            case "[" where i > 0 && isNameCharacter(text[i - 1]): stack.append(.subscripted(depth: 0)); copy(1)
+            case "[" where context.startsCommands && startsWord() && at(1) == "[" && endsWord(after: 2):
+                stack.append(.conditional(numeric: false, placeholder: false)); copy(2)
             default: copy(1)
+            }
+        }
+        /// Whether a word ends `offset` characters on.
+        func endsWord(after offset: Int) -> Bool {
+            guard let next = at(offset) else { return true }
+            return next.properties.isWhitespace || ";&|()<>".unicodeScalars.contains(next)
+        }
+        /// Notes `{query}` in each `[[ … ]]` around it, refused at its end if it compares numbers.
+        func markConditionals() {
+            for index in stack.indices {
+                if case .conditional(let numeric, _) = stack[index] {
+                    stack[index] = .conditional(numeric: numeric, placeholder: true)
+                }
             }
         }
         while i < text.count {
@@ -272,13 +324,12 @@ final class ActionRunner {
                Array(text[i..<i + placeholder.count]) == placeholder {
                 if context == .comment { copy(placeholder.count); continue }
                 if afterHereDocument { throw Failure.placeholderAfterHereDocument }
+                if let failure = refusal() { throw failure }
+                markConditionals()
                 let reference: String
                 switch context {
-                case .comment: continue
-                case .backtick: throw Failure.placeholderInBackticks
-                case .parameter: throw Failure.placeholderInParameter
-                case .arithmetic: throw Failure.placeholderInArithmetic
-                case .top, .substitution: reference = #""${LAUNCHGRID_QUERY}""#
+                case .comment, .backtick, .parameter, .arithmetic, .subscripted: throw Failure.placeholderInArithmetic // refused above
+                case .top, .substitution, .conditional: reference = #""${LAUNCHGRID_QUERY}""#
                 case .double: reference = "${LAUNCHGRID_QUERY}"
                 case .single: reference = #"'"${LAUNCHGRID_QUERY}"'"#
                 case .ansiSingle: reference = #"'"${LAUNCHGRID_QUERY}"$'"#
@@ -302,6 +353,25 @@ final class ActionRunner {
                 case "(" where at(1) != "(" || !startsWord(): stack[stack.count - 1] = .substitution(depth: depth + 1); copy(1)
                 case ")" where depth == 0: stack.removeLast(); copy(1)
                 case ")": stack[stack.count - 1] = .substitution(depth: depth - 1); copy(1)
+                default: unquoted(context)
+                }
+            case .conditional(let numeric, let placeholder):
+                if text[i] == "]", at(1) == "]", startsWord(), endsWord(after: 2) {
+                    if numeric && placeholder { throw Failure.placeholderInNumericTest }
+                    stack.removeLast()
+                    copy(2)
+                } else if text[i] == "-", startsWord(), endsWord(after: 3),
+                          ["eq", "ne", "lt", "le", "gt", "ge"].contains(String(String.UnicodeScalarView(text[(i + 1)..<min(i + 3, text.count)]))) {
+                    stack[stack.count - 1] = .conditional(numeric: true, placeholder: placeholder)
+                    copy(3)
+                } else {
+                    unquoted(context)
+                }
+            case .subscripted(let depth):
+                switch text[i] {
+                case "[": stack[stack.count - 1] = .subscripted(depth: depth + 1); copy(1)
+                case "]" where depth == 0: stack.removeLast(); copy(1)
+                case "]": stack[stack.count - 1] = .subscripted(depth: depth - 1); copy(1)
                 default: unquoted(context)
                 }
             case .backtick:
@@ -340,6 +410,10 @@ final class ActionRunner {
                 if text[i] == "\n" { stack.removeLast() }
                 copy(1)
             }
+        }
+        // A `[[` left open is a syntax error, but refuse it as if it were closed.
+        for context in stack {
+            if case .conditional(true, true) = context { throw Failure.placeholderInNumericTest }
         }
         return String(out)
     }
