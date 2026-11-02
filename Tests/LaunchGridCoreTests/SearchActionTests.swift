@@ -34,6 +34,15 @@ import Testing
         #expect(match?.id == wiki.id && match?.argument == "Swift")
     }
 
+    /// The editor asks for $LAUNCHGRID_QUERY where {query} can't go (a here-document): such a
+    /// command still gets what's typed after its keyword.
+    @Test func aCommandReadingTheVariableCarriesTheArgument() {
+        let note = Action(name: "Note", keywords: ["n"],
+                          kind: .shell(command: "cat >> ~/notes.txt <<EOF\n$LAUNCHGRID_QUERY\nEOF", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        let match = Search.results(in: [.action(note)], query: "n buy milk").first
+        #expect(match?.id == note.id && match?.argument == "buy milk")
+    }
+
     @Test func anActionWithoutQueryTakesNoArgument() {
         // "ghh launchgrid" isn't a keyword match: GitHub Home has no {query}. It falls back to
         // scoring names and keywords, which neither matches.
@@ -48,6 +57,9 @@ import Testing
         #expect(!ActionKind.openURL(template: "x://").takesArgument)
         #expect(ActionKind.shell(command: "echo {query}", runMode: .background, workingDirectory: nil, timeoutSeconds: nil).takesArgument)
         #expect(!ActionKind.shell(command: "echo", runMode: .terminal, workingDirectory: "{query}", timeoutSeconds: nil).takesArgument)
+        // Where the editor asks for $LAUNCHGRID_QUERY instead of {query}, it still takes one.
+        #expect(ActionKind.shell(command: "cat <<EOF\n$LAUNCHGRID_QUERY\nEOF", runMode: .background, workingDirectory: nil, timeoutSeconds: nil).takesArgument)
+        #expect(ActionKind.shell(command: "echo ${LAUNCHGRID_QUERY:-none}", runMode: .terminal, workingDirectory: nil, timeoutSeconds: nil).takesArgument)
         #expect(ActionKind.userScript(fileName: "a.sh", arguments: ["-q", "{query}"], runMode: .background).takesArgument)
         #expect(!ActionKind.userScript(fileName: "{query}.sh", arguments: [], runMode: .background).takesArgument)
         #expect(ActionKind.shortcut(name: "S", input: "{query}").takesArgument)
