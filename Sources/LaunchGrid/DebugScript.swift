@@ -19,6 +19,8 @@ enum DebugScript {
     private static var heldMenu: [MenuEntry] = []
     /// What "runagain:yes|no" answers in place of asking whether to run another copy.
     static var runAgainAnswer: Bool?
+    /// What "discardeditor:yes|no" answers in place of asking to discard an editor's changes.
+    static var discardEditorAnswer: Bool?
     /// What "review:keep|remove|cancel" answers in place of the grid file review sheet.
     static var reviewAnswer: NSApplication.ModalResponse?
     /// What "exportcommands:on|off" sets the save panel's "Include commands and scripts" to.
@@ -526,6 +528,9 @@ enum DebugScript {
                 case "runagain":
                     // "runagain:yes|no" answers "run another copy?" without asking; "runagain:ask" asks again.
                     runAgainAnswer = arg == "ask" ? nil : arg == "yes"
+                case "discardeditor":
+                    // "discardeditor:yes|no" answers "discard the open editor's changes?"; "discardeditor:ask" asks.
+                    discardEditorAnswer = arg == "ask" ? nil : arg == "yes"
                 case "stopaction", "lastoutput":
                     // "stopaction:<name>" and "lastoutput:<name>": the tile menu's Stop and Show Last Output….
                     guard let action = state.grid.allActions.first(where: { $0.name == arg }) else {
@@ -622,7 +627,7 @@ enum DebugScript {
                         await model.test(with: state)
                         print("editortest: \(model.testResult ?? "-")")
                     default:
-                        print("editor: new=\(model.isNew) name=\(model.name) kind=\(model.kind.rawValue) errors=\(model.errors) warnings=\(model.warnings)")
+                        print("editor: new=\(model.isNew) name=\(model.name) changed=\(model.hasChanges) kind=\(model.kind.rawValue) errors=\(model.errors) warnings=\(model.warnings)")
                     }
                     fflush(stdout)
                     if let failure {

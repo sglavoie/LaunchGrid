@@ -736,12 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func present<V: View>(_ key: String, title: String, resizable: Bool = false, @ViewBuilder content: (@escaping () -> Void) -> V) {
-        overlay.hide(deactivate: false)
-        if let existing = windows[key] {
-            NSApp.activate()
-            existing.makeKeyAndOrderFront(nil)
-            return
-        }
+        if bringForward(key) { return }
         let close: () -> Void = { [weak self] in self?.windows[key]?.close() }
         let root = content(close)
             .environment(state)
@@ -757,6 +752,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         windows[key] = window
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Brings the open window for `key` to the front, over the grid. False when none is open.
+    @discardableResult
+    private func bringForward(_ key: String) -> Bool {
+        guard let window = windows[key] else { return false }
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        return true
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -806,14 +811,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc func newAction() { state.newAction() }
 
     /// Opens the action editor on `action`, or on a new action for the page with `pageID`. One
-    /// editor at a time: opening another replaces it, unsaved.
+    /// editor at a time. Asking again for the one that's open brings it forward as it is: after
+    /// Test, the action's own app is in front, and New Action… is the way back. Opening a
+    /// different one asks first when the open one has changes.
     func showActionEditor(_ action: Action?, pageID: UUID?) {
+        if let open = state.actionEditor, windows["actionEditor"] != nil {
+            if open.edits(action) {
+                bringForward("actionEditor")
+                return
+            }
+            if open.hasChanges, !confirmDiscardEditor(open) {
+                bringForward("actionEditor")
+                return
+            }
+        }
         windows["actionEditor"]?.close()
         let model = ActionEditorModel(action: action, pageID: pageID, others: state.grid.allActions)
         state.actionEditor = model
         present("actionEditor", title: action == nil ? String(localized: "New Action") : String(localized: "Edit Action")) { close in
             ActionEditor(model: model, close: close)
         }
+    }
+
+    /// Asked before another action's editor replaces one with changes.
+    private func confirmDiscardEditor(_ model: ActionEditorModel) -> Bool {
+        #if !APP_STORE
+        if let answer = DebugScript.discardEditorAnswer { return answer }
+        #endif
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        let name = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.messageText = model.isNew
+            ? String(localized: "Discard the new action?")
+            : String(localized: "Discard your changes to “\(name.isEmpty ? model.original?.name ?? "" : name)”?")
+        alert.informativeText = String(localized: "The action editor is open with changes that aren't saved.")
+        alert.addButton(withTitle: String(localized: "Keep Editing"))
+        alert.addButton(withTitle: String(localized: "Discard"))
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     /// Asked when an action still running is run again: over the grid, which stays up.

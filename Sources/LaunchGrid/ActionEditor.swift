@@ -112,6 +112,8 @@ final class ActionEditorModel {
             for k in other.keywords where keywords[k] == nil { keywords[k] = other.name }
         }
         otherKeywords = keywords
+        // Whichever way init ends, what it filled in is the baseline for `hasChanges`.
+        defer { initialFields = fields }
         guard let action else { return }
         name = action.name
         keywordsText = action.keywords.joined(separator: ", ")
@@ -137,6 +139,22 @@ final class ActionEditorModel {
     }
 
     var isNew: Bool { original == nil }
+
+    /// Whether this editor is for `action`, or for a new action when that's nil.
+    func edits(_ action: Action?) -> Bool { original?.id == action?.id }
+
+    /// The fields as first filled in, for `hasChanges`.
+    @ObservationIgnored private var initialFields: [String] = []
+
+    /// Everything the person can change, as text, to compare.
+    private var fields: [String] {
+        [name, keywordsText, kind.rawValue, template, filePath, appPath ?? "", shortcutName, shortcutInput,
+         command, runMode.rawValue, workingDirectory, String(timeout), scriptName, argumentsText,
+         iconChoice.rawValue, symbol, emoji, imagePath ?? "", String(showsOnGrid), testArgument]
+    }
+
+    /// Whether anything was changed since the editor opened: closing it would lose that.
+    var hasChanges: Bool { fields != initialFields }
 
     /// It came from a grid file and hasn't run yet: the editor says to check it, and saving it
     /// (which the draft does, without the flag) lets it run.

@@ -4238,6 +4238,22 @@ extension SandboxFileAccessTests {
 @MainActor @Suite(.tempDir) struct ActionEditorTests {
     let gh = Action(name: "Search GitHub", keywords: ["gh"], kind: .openURL(template: "https://github.com/search?q={query}"))
 
+    @Test func theEditorKnowsWhenItHasChangesAndWhichActionItIsFor() {
+        let fresh = ActionEditorModel(action: nil, pageID: nil, others: [gh])
+        #expect(!fresh.hasChanges && fresh.edits(nil) && !fresh.edits(gh))
+        fresh.template = "https://example.com"
+        #expect(fresh.hasChanges)
+        fresh.template = ""
+        #expect(!fresh.hasChanges, "back as it was is no change")
+
+        let existing = ActionEditorModel(action: gh, pageID: nil, others: [gh])
+        #expect(!existing.hasChanges, "filling in the action's own fields is no change")
+        #expect(existing.edits(gh) && !existing.edits(nil))
+        existing.symbol = "bolt"
+        existing.iconChoice = .symbol
+        #expect(existing.hasChanges)
+    }
+
     @Test func aNewLinkActionGoesToTheChosenPageAsOneUndoStep() throws {
         let state = makeState(["A", "B"])
         state.apply { $0.pages.append(Page(items: [.app(AppRef(bundleID: "c", path: "/Applications/C.app", name: "C"))])) }
