@@ -106,6 +106,8 @@ final class ActionRunner {
     var scriptsDirectory: URL
     /// The terminal app commands in terminal mode open in; nil for Terminal.
     var terminalApp: @MainActor () -> URL? = { nil }
+    /// How the sandboxed build hands a script to macOS. Tests swap in their own.
+    var scriptTasks: UserScriptTasks = .live
 
     init(system: System = .live, scriptsDirectory: URL = ActionRunner.applicationScriptsDirectory) {
         self.system = system
@@ -476,6 +478,7 @@ final class CodeRun: @unchecked Sendable {
     private var exit: RunResult.Ending?
     private var stopReason: RunResult.Ending?
     private var finished = false
+    private var writersOpen = true
     private var onEnd: (@MainActor @Sendable (RunResult) -> Void)?
     /// What to signal: the process and everything it started.
     private var rootPID: pid_t = 0
@@ -503,7 +506,12 @@ final class CodeRun: @unchecked Sendable {
                     self.lock.withLock { self.openPipes -= 1 }
                     self.finishIfDone()
                 } else {
-                    self.lock.withLock { if isError { self.err.append(data) } else { self.out.append(data) } }
+                    // Once the run ended (a sandboxed script past its timeout), what's left is
+                    // read and dropped, so the script never blocks on a full pipe.
+                    self.lock.withLock {
+                        guard !self.finished else { return }
+                        if isError { self.err.append(data) } else { self.out.append(data) }
+                    }
                 }
             }
         }
@@ -516,10 +524,48 @@ final class CodeRun: @unchecked Sendable {
         }
     }
 
+    /// For a run that can't be stopped (a script macOS runs for the sandboxed build): after
+    /// `interval` it ends as `.timedOut` and LaunchGrid stops waiting, though the script may
+    /// still be running in the system service. Output and an ending that come later are dropped.
+    fileprivate func waitAtMost(_ interval: DispatchTimeInterval) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + interval) { [weak self] in
+            guard let self else { return }
+            let timedOut = self.lock.withLock {
+                guard !self.finished, self.exit == nil else { return false }
+                self.exit = .timedOut
+                return true
+            }
+            guard timedOut else { return }
+            // The pipes keep being read until the script's own copies of the write ends close.
+            self.closeWriters()
+            self.finish(keepReading: true)
+        }
+    }
+
+    /// Closes LaunchGrid's write ends of the pipes, once.
+    fileprivate func closeWriters() {
+        let close = lock.withLock { () -> Bool in
+            defer { writersOpen = false }
+            return writersOpen
+        }
+        guard close else { return }
+        for w in [outputWriter, errorWriter] { try? w.close() }
+    }
+
+    /// Adds `text` to what the run printed, unless it already ended.
+    fileprivate func append(_ text: String, isError: Bool) {
+        let data = Data(text.utf8)
+        lock.withLock {
+            guard !finished else { return }
+            if isError { err.append(data) } else { out.append(data) }
+        }
+    }
+
     /// The process ended: what's still in the pipes gets a moment to arrive (a child left
-    /// running in the background can keep them open), then the run ends.
+    /// running in the background can keep them open), then the run ends. An ending already
+    /// set (the run timed out) is kept.
     fileprivate func exited(_ ending: RunResult.Ending) {
-        lock.withLock { exit = ending }
+        lock.withLock { if exit == nil { exit = ending } }
         finishIfDone()
         DispatchQueue.global().asyncAfter(deadline: .now() + 1) { self.finish() }
     }
@@ -550,7 +596,7 @@ final class CodeRun: @unchecked Sendable {
         if done { finish() }
     }
 
-    private func finish() {
+    private func finish(keepReading: Bool = false) {
         let ended: (RunResult, @MainActor @Sendable (RunResult) -> Void)? = lock.withLock {
             guard !finished, let exit, let onEnd else { return nil }
             finished = true
@@ -559,7 +605,9 @@ final class CodeRun: @unchecked Sendable {
             return (result, onEnd)
         }
         guard let (result, onEnd) = ended else { return }
-        for pipe in [outPipe, errPipe] { pipe.fileHandleForReading.readabilityHandler = nil }
+        if !keepReading {
+            for pipe in [outPipe, errPipe] { pipe.fileHandleForReading.readabilityHandler = nil }
+        }
         lock.withLock {
             process?.terminationHandler = nil
             process = nil
@@ -648,10 +696,10 @@ extension ActionRunner {
         case .script(let fileName, let arguments):
             let url = try scriptURL(fileName)
             #if APP_STORE
-            return startUserScriptTask(url, arguments, onEnd: onEnd)
+            return startUserScriptTask(url, arguments, waitingAtMost: .seconds(job.timeout), onEnd: onEnd)
             #else
             // Only macOS may run what's in the folder for a sandboxed app.
-            if Sandbox.isActive { return startUserScriptTask(url, arguments, onEnd: onEnd) }
+            if Sandbox.isActive { return startUserScriptTask(url, arguments, waitingAtMost: .seconds(job.timeout), onEnd: onEnd) }
             // Run here rather than through NSUserUnixTask, whose scripts run in a system
             // service LaunchGrid can't signal: this way Stop and the timeout work.
             if Self.isAppleScript(url) {
@@ -719,53 +767,38 @@ extension ActionRunner {
     #endif
 
     /// The sandboxed build: macOS runs the script for LaunchGrid, which can neither give it an
-    /// environment nor stop it. The timeout stops waiting for it.
-    private func startUserScriptTask(_ url: URL, _ arguments: [String],
-                                     onEnd: @escaping @MainActor @Sendable (RunResult) -> Void) -> CodeRun {
+    /// environment nor stop it. After `interval` the run ends as timed out: LaunchGrid stops
+    /// waiting, though the script may go on running in the system service.
+    func startUserScriptTask(_ url: URL, _ arguments: [String], waitingAtMost interval: DispatchTimeInterval,
+                             onEnd: @escaping @MainActor @Sendable (RunResult) -> Void) -> CodeRun {
         let run = CodeRun(canStop: false, onEnd: onEnd)
         run.readOutput()
-        let writers = [run.outputWriter, run.errorWriter]
-        // The task holds its own copies of the write ends; once it's done, LaunchGrid's go too,
-        // so the pipes reach their end.
-        let closeWriters: @Sendable () -> Void = { for w in writers { try? w.close() } }
+        run.waitAtMost(interval)
         do {
             if Self.isAppleScript(url) {
-                let task = try NSUserAppleScriptTask(url: url)
-                task.execute(withAppleEvent: Self.runEvent(arguments)) { result, error in
-                    if let text = result?.stringValue { try? run.outputWriter.write(contentsOf: Data((text + "\n").utf8)) }
-                    if let error { try? run.errorWriter.write(contentsOf: Data((Self.scriptError(error) + "\n").utf8)) }
-                    closeWriters()
+                try scriptTasks.appleScript(url, arguments) { result, error in
+                    if let result { run.append(result + "\n", isError: false) }
+                    if let error { run.append(error + "\n", isError: true) }
+                    run.closeWriters()
                     run.exited(error == nil ? .exited(0) : .failed(nil))
                 }
             } else {
-                let task = try NSUserUnixTask(url: url)
-                task.standardOutput = run.outputWriter
-                task.standardError = run.errorWriter
-                task.execute(withArguments: arguments) { error in
-                    closeWriters()
+                try scriptTasks.unix(url, arguments, run.outputWriter, run.errorWriter) { error in
+                    // The task holds its own copies of the write ends; once it's done,
+                    // LaunchGrid's go too, so the pipes reach their end.
+                    run.closeWriters()
                     // It reports a failure without the script's exit status.
                     run.exited(error == nil ? .exited(0) : .failed(nil))
                 }
             }
         } catch {
-            closeWriters()
+            run.closeWriters()
             run.failedToStart(error.localizedDescription)
         }
         return run
     }
 
-    /// The Apple event that calls an AppleScript's `on run argv` with `arguments`.
-    private nonisolated static func runEvent(_ arguments: [String]) -> NSAppleEventDescriptor {
-        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenApplication),
-                                           targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
-                                           transactionID: AETransactionID(kAnyTransactionID))
-        let list = NSAppleEventDescriptor.list()
-        for (i, a) in arguments.enumerated() { list.insert(NSAppleEventDescriptor(string: a), at: i + 1) }
-        event.setParam(list, forKeyword: AEKeyword(keyDirectObject))
-        return event
-    }
-
-    private nonisolated static func scriptError(_ error: Error) -> String {
+    fileprivate nonisolated static func scriptError(_ error: Error) -> String {
         let info = (error as NSError).userInfo
         return (info[NSAppleScript.errorMessage] as? String) ?? (info[NSLocalizedFailureReasonErrorKey] as? String)
             ?? error.localizedDescription
@@ -832,6 +865,42 @@ extension ActionRunner {
         return file
     }
     #endif
+}
+
+/// How the sandboxed build hands a user script to macOS (`NSUserUnixTask`,
+/// `NSUserAppleScriptTask`), which runs it in a system service LaunchGrid can't signal.
+struct UserScriptTasks: Sendable {
+    /// Starts a Unix script writing to `output` and `error`; `done` gets its failure.
+    var unix: @Sendable (_ url: URL, _ arguments: [String], _ output: FileHandle, _ error: FileHandle,
+                         _ done: @escaping @Sendable (Error?) -> Void) throws -> Void
+    /// Starts an AppleScript's `on run argv`; `done` gets what it returned and its error message.
+    var appleScript: @Sendable (_ url: URL, _ arguments: [String],
+                                _ done: @escaping @Sendable (_ result: String?, _ error: String?) -> Void) throws -> Void
+
+    static let live = UserScriptTasks(
+        unix: { url, arguments, output, error, done in
+            let task = try NSUserUnixTask(url: url)
+            task.standardOutput = output
+            task.standardError = error
+            task.execute(withArguments: arguments) { done($0) }
+        },
+        appleScript: { url, arguments, done in
+            let task = try NSUserAppleScriptTask(url: url)
+            task.execute(withAppleEvent: runEvent(arguments)) { result, error in
+                done(result?.stringValue, error.map(ActionRunner.scriptError))
+            }
+        })
+
+    /// The Apple event that calls an AppleScript's `on run argv` with `arguments`.
+    private nonisolated static func runEvent(_ arguments: [String]) -> NSAppleEventDescriptor {
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenApplication),
+                                           targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        let list = NSAppleEventDescriptor.list()
+        for (i, a) in arguments.enumerated() { list.insert(NSAppleEventDescriptor(string: a), at: i + 1) }
+        event.setParam(list, forKeyword: AEKeyword(keyDirectObject))
+        return event
+    }
 }
 
 /// An action's runs in the background: usually one, more when another copy was asked for.

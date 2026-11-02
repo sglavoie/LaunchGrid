@@ -297,6 +297,68 @@ import Testing
         #expect(missing.ending == .failed("Script not found: gone.sh"))
     }
 
+    /// The sandboxed build can't stop a script macOS runs for it, but stops waiting at its
+    /// timeout: the run ends once, as timed out, whether the task never calls back or calls
+    /// back (with more output) afterwards.
+    @Test func sandboxUserScriptTimeoutCompletesExactlyOnce() async throws {
+        let dir = try temporaryFolder()
+        try script(dir, "hang.sh", "#!/bin/sh\n")
+        try Data().write(to: dir.appendingPathComponent("hang.applescript"))
+        let tasks = FakeScriptTasks()
+        let runner = ActionRunner(scriptsDirectory: dir)
+        runner.scriptTasks = tasks.tasks
+        defer { tasks.closeAll() }
+        let clock = ContinuousClock()
+
+        for name in ["hang.sh", "hang.applescript"] {
+            for callsBackLate in [false, true] {
+                tasks.callBackAfter = callsBackLate ? 0.4 : nil
+                let ends = EndCount()
+                let start = clock.now
+                var started: CodeRun?
+                let result = await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
+                    let run = runner.startUserScriptTask(dir.appendingPathComponent(name), ["a"], waitingAtMost: .milliseconds(150)) { r in
+                        ends.count += 1
+                        ends.results.append(r)
+                        if ends.count == 1 { c.resume(returning: r) }
+                    }
+                    #expect(!run.canStop)
+                    run.stop()
+                    started = run
+                }
+                let label = "\(name) late: \(callsBackLate)"
+                #expect(result.ending == .timedOut, "\(label)")
+                #expect(result.summary == "timed out", "\(label)")
+                #expect(clock.now - start < .seconds(2), "\(label)")
+                if name == "hang.sh" { #expect(result.output == "early\n", "\(label)") }
+                // Past the late callback (and the 1 s grace an exit allows for output).
+                try await Task.sleep(for: .seconds(1.6))
+                #expect(ends.count == 1, "\(label)")
+                #expect(ends.results.allSatisfy { $0.ending == .timedOut && !$0.output.contains("late") }, "\(label)")
+                #expect(tasks.lateCallbacks == (callsBackLate ? 1 : 0), "\(label)")
+                tasks.lateCallbacks = 0
+                started?.stop()
+            }
+        }
+
+        // A task that ends before the deadline keeps its own ending; the deadline does nothing.
+        tasks.callBackAfter = 0
+        let quick = await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
+            _ = runner.startUserScriptTask(dir.appendingPathComponent("hang.applescript"), [], waitingAtMost: .milliseconds(300)) { c.resume(returning: $0) }
+        }
+        #expect(quick.ending == .exited(0))
+        #expect(quick.output == "late result\n")
+
+        #if APP_STORE
+        // Through `start`, as the sandboxed build runs every script, with the job's timeout.
+        tasks.callBackAfter = nil
+        let job = CodeJob(program: .script(fileName: "hang.sh", arguments: []), argument: nil,
+                          workingDirectory: nil, timeout: 1, mode: .background)
+        let waited = await runner.runToEnd(job)
+        #expect(waited.ending == .timedOut)
+        #endif
+    }
+
     // MARK: Helpers
 
     private func temporaryFolder() throws -> URL {
@@ -309,6 +371,69 @@ import Testing
         let url = dir.appendingPathComponent(name)
         try Data(text.utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+}
+
+/// How many times a run ended, and with what.
+@MainActor private final class EndCount {
+    var count = 0
+    var results: [RunResult] = []
+}
+
+/// Script tasks that never call back, or call back after a delay; a Unix one prints `early`
+/// at once and `late` as it calls back, through its own copy of the output pipe.
+private final class FakeScriptTasks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _callBackAfter: Double?
+    private var _lateCallbacks = 0
+    private var descriptors: [Int32] = []
+
+    var callBackAfter: Double? {
+        get { lock.withLock { _callBackAfter } }
+        set { lock.withLock { _callBackAfter = newValue } }
+    }
+    var lateCallbacks: Int {
+        get { lock.withLock { _lateCallbacks } }
+        set { lock.withLock { _lateCallbacks = newValue } }
+    }
+
+    private func later(_ body: @escaping @Sendable () -> Void) {
+        guard let delay = callBackAfter else { return }
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+            if delay > 0 { self.lock.withLock { self._lateCallbacks += 1 } }
+            body()
+        }
+    }
+
+    var tasks: UserScriptTasks {
+        UserScriptTasks(
+            unix: { _, _, output, _, done in
+                let fd = dup(output.fileDescriptor)
+                self.lock.withLock { self.descriptors.append(fd) }
+                _ = "early\n".withCString { write(fd, $0, strlen($0)) }
+                self.later {
+                    _ = "late\n".withCString { write(fd, $0, strlen($0)) }
+                    self.close(fd)
+                    done(nil)
+                }
+            },
+            appleScript: { _, _, done in
+                self.later { done("late result", nil) }
+            })
+    }
+
+    private func close(_ fd: Int32) {
+        let open = lock.withLock { () -> Bool in
+            guard let i = descriptors.firstIndex(of: fd) else { return false }
+            descriptors.remove(at: i)
+            return true
+        }
+        if open { Darwin.close(fd) }
+    }
+
+    /// What never called back lets go of its pipes.
+    func closeAll() {
+        for fd in lock.withLock({ descriptors }) { close(fd) }
     }
 }
 
