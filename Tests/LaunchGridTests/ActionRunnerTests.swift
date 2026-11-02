@@ -190,6 +190,17 @@ import Testing
             ("a=(0); [[ \"{query}\" -eq 1 ]]", .placeholderInNumericTest),
             ("a=(0); [[ 1 -lt $(printf %s \"{query}\") ]] && echo less", .placeholderInNumericTest),
             ("a=(0); [[ -n {query} && 1 -ge {query} ]]", .placeholderInNumericTest),
+            // Subscripts on special parameters, ((…)) and [[ … ]] right after {, and -v or -t.
+            ("a=(0); echo \"$#[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo $*[{query}]", .placeholderInArithmetic),
+            ("a=(0); echo \"$?[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$@[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); echo \"$$[{query}]\"", .placeholderInArithmetic),
+            ("a=(0); {(({query}))}", .placeholderInArithmetic),
+            ("a=(0); { (( {query} )) }", .placeholderInArithmetic),
+            ("a=(0); {[[ 1 -eq {query} ]]}", .placeholderInNumericTest),
+            ("a=(0); [[ -v {query} ]]", .placeholderInNumericTest),
+            ("a=(0); [[ -t \"{query}\" ]]", .placeholderInNumericTest),
         ]
         for (template, failure) in refused {
             for argument in arguments {
@@ -244,6 +255,117 @@ import Testing
                 #expect(terminal.output == expected, "\(template) with \(argument) in a terminal")
                 #expect(!terminal.output.replacingOccurrences(of: expected, with: "").contains("INJECTED"))
             }
+        }
+    }
+
+    /// Text that another program runs as code (`sh -c '…'`, `osascript -e '…'`, `eval`, `ssh`)
+    /// would run the argument as that program's code even though zsh hands it over as text:
+    /// `{query}` mixed into such code is refused. On its own, as that program's whole code or
+    /// as an ordinary argument, it is still delivered as it is.
+    @Test func placeholdersInsideAnotherProgramsCodeAreRefused() async throws {
+        let refused = [
+            "osascript -e 'display notification \"{query}\"'",
+            "sh -c 'echo {query}'",
+            "bash -lc \"echo {query}\"",
+            "/bin/zsh -c 'echo x{query}'",
+            "python3 -c 'print(\"{query}\")'",
+            "sed -e 's/a/{query}/' file",
+            "find . -name x -exec sh -c 'echo {query}' \\;",
+            "eval \"echo {query}\"",
+            "ssh host 'ls {query}'",
+            "echo $(sh -c 'echo {query}')",
+            "if true; then sh -c 'echo {query}'; fi",
+            "LANG=C sh -c 'echo {query}'",
+        ]
+        for template in refused {
+            #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
+                try ActionRunner.plan(shell(template), argument: "$(touch x)")
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [ActionRunner.Failure.placeholderInCode.message], "\(template)")
+        }
+
+        // Options that aren't code, programs that aren't interpreters, the placeholder as a
+        // whole argument, and a comment: the argument arrives as it is.
+        let argument = "\"; touch ran; echo \""
+        let accepted = [
+            "printf '[%s]' -e '{query}'",
+            "echo -e '[{query}]'",
+            "printf '%s' '[{query}]' | grep -e '{query}'",
+            "sh -c 'printf \"[%s]\" \"$1\"' sh {query}",
+            "sh -c 'printf \"[%s]\" \"$LAUNCHGRID_QUERY\"'; # sh -c 'echo {query}'",
+            "sh -c 'true'; printf '%s' \"[{query}]\"",
+        ]
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let runner = ActionRunner()
+        for template in accepted {
+            let plan = try ActionRunner.plan(shell("cd \(ActionRunner.shellQuoted(dir.path)); " + template), argument: argument)
+            guard case .code(let job) = plan else { Issue.record("not code: \(template)"); continue }
+            let result = await runner.runToEnd(job)
+            #expect(result.ending == .exited(0), "\(template): \(result.errorOutput)")
+            #expect(result.output.trimmingCharacters(in: .newlines).hasSuffix("[\(argument)]"), "\(template): \(result.output)")
+            #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("ran").path), "\(template) ran it")
+        }
+        // A whole program given as the argument is what the command asks for.
+        #expect(try ActionRunner.substitutingArgument(in: "sh -c {query}") == #"sh -c "${LAUNCHGRID_QUERY}""#)
+        #expect(try ActionRunner.substitutingArgument(in: "osascript -e \"{query}\"") == #"osascript -e "${LAUNCHGRID_QUERY}""#)
+    }
+
+    /// zsh builtins that evaluate their arguments as arithmetic, or as variable names with a
+    /// subscript, run `$(…)` in what's typed even from a quoted reference: `{query}` there is
+    /// refused. Text uses of the same builtins still deliver the argument as it is.
+    @Test func placeholdersInEvaluatingBuiltinsAreRefused() async throws {
+        let refused = [
+            "let {query}", "let x=\"{query}\"", "integer x={query}", "float x=\"{query}\"",
+            "repeat {query} true", "shift {query}", "exit {query}", "f() { return \"{query}\" }; f",
+            "read -t {query} x", "read {query}", "read -A '{query}'", "unset {query}", "vared {query}",
+            "typeset {query}", "declare \"{query}\"", "export {query}", "typeset -i x={query}",
+            "print -v {query} hi", "printf -v \"{query}\" hi", "printf '%d' {query}", "printf '%5.2f\\n' {query}",
+            "printf '%*s' {query} x", "builtin let {query}", "true && let {query}",
+            "let x=$(printf %s {query})", "echo $(let {query})", "LANG=C let \"{query}\"",
+            "let x=$(printf %s {query} # note\n)", "let x=\"$(true; printf %s {query})\"",
+        ]
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("ran")
+        for template in refused {
+            #expect(throws: ActionRunner.Failure.placeholderInBuiltin, "\(template)") {
+                try ActionRunner.plan(shell(template), argument: "PATH[$(touch \(ActionRunner.shellQuoted(marker.path)))]")
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [ActionRunner.Failure.placeholderInBuiltin.message], "\(template)")
+        }
+
+        let argument = "PATH[$(touch \(ActionRunner.shellQuoted(marker.path)))]"
+        let accepted = [
+            "export X={query}; printf '[%s]' \"$X\"",
+            "typeset x=\"{query}\"; printf '[%s]' \"$x\"",
+            "read -r y <<< {query}; printf '[%s]' \"$y\"",
+            "printf '%s' {query} > out.txt 2>&1; printf '[%s]' \"$(cat out.txt)\"",
+            "printf '[%s]' {query}",
+            "print -rn -- '[{query}]'",
+            "x=$(printf %s {query}); printf '[%s]' \"$x\"",
+            "let n=1; printf '[%s]' {query}",
+        ]
+        let runner = ActionRunner()
+        for template in accepted {
+            let command = "cd \(ActionRunner.shellQuoted(dir.path)); " + template
+            let plan = try ActionRunner.plan(shell(command), argument: argument)
+            guard case .code(let job) = plan, case .shell(let substituted) = job.program else { Issue.record("not code: \(template)"); continue }
+            let result = await runner.runToEnd(job)
+            #expect(result.ending == .exited(0), "\(template): \(result.errorOutput)")
+            #expect(result.output == "[\(argument)]", "\(template)")
+            let file = try ActionRunner.writeCommandFile(substituted, directory: dir.path, argument: argument)
+            let terminal = try runZsh(file)
+            #expect(terminal.output == "[\(argument)]", "\(template) in a terminal")
+            #expect(!FileManager.default.fileExists(atPath: marker.path), "\(template) ran it")
         }
     }
 

@@ -35,7 +35,13 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't go inside $((…)), ((…)), $[…] or a subscript like a[…], even in quotes or a $(…), where the shell would run what's typed as code. Use it as plain text outside them instead."))
         }
         static var placeholderInNumericTest: Failure {
-            Failure(message: String(localized: "{query} can't go inside a [[ … ]] test that compares numbers (-eq, -lt and the like), where the shell would run what's typed as code. Compare it as text with == instead."))
+            Failure(message: String(localized: "{query} can't go inside a [[ … ]] test that compares numbers (-eq, -lt and the like) or checks -v or -t, where the shell would run what's typed as code. Compare it as text with == instead."))
+        }
+        static var placeholderInBuiltin: Failure {
+            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset or vared, a variable name for typeset, declare, local or export, or an argument of printf %d (and other number formats), print -v or printf -v, where zsh would run what's typed as code. Use it as plain text instead."))
+        }
+        static var placeholderInCode: Failure {
+            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c or -e, or with eval or ssh), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
         }
         static var placeholderAfterHereDocument: Failure {
             Failure(message: String(localized: "{query} can't go in or after a here-document (<<). Use $LAUNCHGRID_QUERY there instead."))
@@ -257,28 +263,59 @@ final class ActionRunner {
         var stack: [Context] = [.top]
         var changed = false
         var afterHereDocument = false
+        // The words of the command being read, outside quotes: whether `{query}` is part of code
+        // another program runs (`sh -c 'echo {query}'`, `osascript -e '… "{query}"'`).
+        var words = Words()
+        // The words of the commands around each `$(…)` being read, outermost first.
+        var outerWords: [Words] = []
         var i = 0
         func at(_ offset: Int) -> Unicode.Scalar? { i + offset < text.count ? text[i + offset] : nil }
         func copy(_ n: Int) {
             out.append(contentsOf: text[i..<min(i + n, text.count)])
             i += n
         }
-        func startsWord() -> Bool {
+        /// With `afterBrace`, a `{` before counts too: `{((…))}` and `{[[ … ]]}` are commands.
+        func startsWord(afterBrace: Bool = false) -> Bool {
             guard i > 0 else { return true }
             let previous = text[i - 1]
             return previous.properties.isWhitespace || ";&|()<>".unicodeScalars.contains(previous)
+                || (afterBrace && previous == "{")
         }
         func isNameCharacter(_ c: Unicode.Scalar) -> Bool {
             c == "_" || c.properties.isAlphabetic || c.properties.numericType != nil
         }
         /// Whether a `[` here follows `$name`, a subscript wherever parameters expand, including
         /// after zsh's flags (`$#name`, `$+name`, `$=name`, `$~name`, `$^name`).
+        /// Special parameters count too: `$#[…]`, `$*[…]`, `$?[…]` and the like.
         func afterParameterName() -> Bool {
             var j = i - 1
             while j >= 0, isNameCharacter(text[j]) { j -= 1 }
-            guard j < i - 1 else { return false }
+            if j == i - 1 {
+                guard j >= 0, "@*#?-$!".unicodeScalars.contains(text[j]) else { return false }
+                j -= 1
+            }
             while j >= 0, "#+=~^".unicodeScalars.contains(text[j]) { j -= 1 }
             return j >= 0 && text[j] == "$"
+        }
+        /// Ends the word before `i`. A new command starts after `;`, `&`, `|`, `(`, `)` or a newline.
+        func endWord(newCommand: Bool) throws {
+            let word = String(String.UnicodeScalarView(text[min(words.start, i)..<i]))
+            if !word.isEmpty {
+                if words.redirecting {
+                    // A file to read or write (`<<< {query}`, `> {query}`): data, not an argument.
+                    words.redirecting = false
+                } else {
+                    try words.add(word)
+                }
+            }
+            words.hasPlaceholder = false
+            words.start = i + 1
+            if newCommand {
+                // Still in the same `$(…)`, whose output the word around it takes.
+                let any = words.anyPlaceholder
+                words = Words(start: i + 1)
+                words.anyPlaceholder = any
+            }
         }
         /// The innermost failure for a placeholder in a context that evaluates or can't hold it.
         func refusal() -> Failure? {
@@ -299,7 +336,10 @@ final class ActionRunner {
             case ("[", _, _) where afterParameterName(): stack.append(.subscripted(depth: 0)); copy(1)
             case ("$", "[", _): stack.append(.subscripted(depth: 0)); copy(2)
             case ("$", "(", "("): stack.append(.arithmetic(depth: 0)); copy(3)
-            case ("$", "(", _): stack.append(.substitution(depth: 0)); copy(2)
+            case ("$", "(", _):
+                stack.append(.substitution(depth: 0)); copy(2)
+                outerWords.append(words)
+                words = Words(start: i)
             case ("$", "{", _): stack.append(.parameter(depth: 0)); copy(2)
             case ("`", _, _): stack.append(.backtick); copy(1)
             default: return false
@@ -315,11 +355,11 @@ final class ActionRunner {
             case "\"": stack.append(.double); copy(1)
             case "$" where at(1) == "'": stack.append(.ansiSingle); copy(2)
             case "#" where context.startsCommands && startsWord(): stack.append(.comment); copy(1)
-            case "(" where at(1) == "(" && startsWord(): stack.append(.arithmetic(depth: 0)); copy(2)
+            case "(" where at(1) == "(" && startsWord(afterBrace: true): stack.append(.arithmetic(depth: 0)); copy(2)
             // `a[…]` outside quotes: a subscript when assigning, otherwise a pattern, where
             // `{query}` isn't refused for being in brackets but is safer left out anyway.
             case "[" where i > 0 && isNameCharacter(text[i - 1]): stack.append(.subscripted(depth: 0)); copy(1)
-            case "[" where context.startsCommands && startsWord() && at(1) == "[" && endsWord(after: 2):
+            case "[" where context.startsCommands && startsWord(afterBrace: true) && at(1) == "[" && endsWord(after: 2):
                 stack.append(.conditional(numeric: false, placeholder: false)); copy(2)
             default: copy(1)
             }
@@ -350,6 +390,8 @@ final class ActionRunner {
                 if afterHereDocument { throw Failure.placeholderAfterHereDocument }
                 if let failure = refusal() { throw failure }
                 markConditionals()
+                words.hasPlaceholder = true
+                words.anyPlaceholder = true
                 let reference: String
                 switch context {
                 case .comment, .backtick, .parameter, .arithmetic, .subscripted: throw Failure.placeholderInArithmetic // refused above
@@ -361,6 +403,19 @@ final class ActionRunner {
                 out.append(contentsOf: reference.unicodeScalars)
                 i += placeholder.count
                 continue
+            }
+            if !joiningOnly, context.startsCommands {
+                let c = text[i]
+                let previous = i > 0 ? text[i - 1] : " "
+                if c == "<" || c == ">" || (c == "&" && (previous == ">" || previous == "<" || at(1) == ">")) {
+                    // A redirection (`2>&1` and `&>` too): the word after it is its file.
+                    try endWord(newCommand: false)
+                    words.redirecting = true
+                } else if c == "\n" || ";&|()".unicodeScalars.contains(c) {
+                    try endWord(newCommand: true)
+                } else if c.properties.isWhitespace {
+                    try endWord(newCommand: false)
+                }
             }
             // `<<` but not `<<<`, outside quotes: a here-document, whose body the shell expands.
             if [.single, .double, .ansiSingle, .comment].contains(context) == false,
@@ -374,8 +429,13 @@ final class ActionRunner {
                 unquoted(context)
             case .substitution(let depth):
                 switch text[i] {
-                case "(" where at(1) != "(" || !startsWord(): stack[stack.count - 1] = .substitution(depth: depth + 1); copy(1)
-                case ")" where depth == 0: stack.removeLast(); copy(1)
+                case "(" where at(1) != "(" || !startsWord(afterBrace: true): stack[stack.count - 1] = .substitution(depth: depth + 1); copy(1)
+                case ")" where depth == 0:
+                    stack.removeLast(); copy(1)
+                    // Its output is part of the word it's in: `let x=$(echo {query})` evaluates it.
+                    let inner = words
+                    words = outerWords.popLast() ?? Words(start: i)
+                    if inner.anyPlaceholder { words.hasPlaceholder = true; words.anyPlaceholder = true }
                 case ")": stack[stack.count - 1] = .substitution(depth: depth - 1); copy(1)
                 default: unquoted(context)
                 }
@@ -388,6 +448,10 @@ final class ActionRunner {
                           ["eq", "ne", "lt", "le", "gt", "ge"].contains(String(String.UnicodeScalarView(text[(i + 1)..<min(i + 3, text.count)]))) {
                     stack[stack.count - 1] = .conditional(numeric: true, placeholder: placeholder)
                     copy(3)
+                } else if text[i] == "-", startsWord(), endsWord(after: 2), at(1) == "v" || at(1) == "t" {
+                    // `-v name` evaluates a subscript in the name, `-t fd` arithmetic.
+                    stack[stack.count - 1] = .conditional(numeric: true, placeholder: placeholder)
+                    copy(2)
                 } else {
                     unquoted(context)
                 }
@@ -431,16 +495,132 @@ final class ActionRunner {
                 default: copy(1)
                 }
             case .comment:
-                if text[i] == "\n" { stack.removeLast() }
+                if text[i] == "\n" {
+                    stack.removeLast()
+                    let any = words.anyPlaceholder
+                    words = Words(start: i + 1)
+                    words.anyPlaceholder = any
+                }
                 copy(1)
             }
         }
         if joiningOnly { return (String(String.UnicodeScalarView(text)), changed) }
+        try endWord(newCommand: true)
         // A `[[` left open is a syntax error, but refuse it as if it were closed.
         for context in stack {
             if case .conditional(true, true) = context { throw Failure.placeholderInNumericTest }
         }
         return (String(out), changed)
+    }
+
+    /// The words of a command as `scan` reads them, outside quotes, to tell where `{query}` would
+    /// be run as code by what reads it: another program (`sh -c '…{query}…'`) or a zsh builtin
+    /// that evaluates its arguments (`let`, `read`, `printf %d`) even when they're quoted.
+    private struct Words {
+        /// Where the word being read starts.
+        var start = 0
+        var command: String?
+        var previous: String?
+        var interpreterSeen = false
+        /// Whether `{query}` is in the word being read, or in a `$(…)` inside it.
+        var hasPlaceholder = false
+        /// Whether `{query}` was anywhere in this `$(…)` so far, for the word around it.
+        var anyPlaceholder = false
+        /// After `<`, `>` and the like: the next word is a file.
+        var redirecting = false
+        /// `print -v`, `printf -v`: an argument names a variable to assign.
+        var assigns = false
+        /// `printf` (or `print -f`) with a format that evaluates its arguments as numbers.
+        var numericFormat = false
+        /// `typeset -i` and the like: values are evaluated as numbers.
+        var numericTypes = false
+
+        init(start: Int = 0) { self.start = start }
+
+        mutating func add(_ word: String) throws {
+            if hasPlaceholder, let command {
+                let bare = word.unicodeScalars.filter { $0 != "\"" && $0 != "'" }
+                let alone = String(String.UnicodeScalarView(bare.drop { $0 == "$" })) == ActionKind.argumentPlaceholder
+                if !alone, (interpreterSeen && previous.map(ActionRunner.runsNextWordAsCode) == true)
+                    || ["eval", "ssh"].contains(command) {
+                    throw Failure.placeholderInCode
+                }
+                if evaluates(word, command: command) { throw Failure.placeholderInBuiltin }
+            }
+            if command == nil {
+                if !ActionRunner.precedesCommand(word) { command = word }
+            } else {
+                previous = word
+                notice(option: word)
+            }
+            if ActionRunner.isInterpreter(word) { interpreterSeen = true }
+        }
+
+        /// Options and formats that make `command` evaluate its other arguments.
+        private mutating func notice(option word: String) {
+            switch command {
+            case "print", "printf":
+                if word == "-v" || (command == "print" && word.hasPrefix("-") && !word.hasPrefix("--") && word.contains("v")) {
+                    assigns = true
+                }
+                if ActionRunner.hasNumericConversion(word) { numericFormat = true }
+            case "typeset", "declare", "local", "export":
+                if word.hasPrefix("-") || word.hasPrefix("+"), word.contains(where: { "iEF".contains($0) }) { numericTypes = true }
+            default: break
+            }
+        }
+
+        /// Whether zsh evaluates `{query}` in `word`, an argument of `command`, as code: arithmetic
+        /// or a subscript in a variable name runs `$(…)` in what's typed.
+        private func evaluates(_ word: String, command: String) -> Bool {
+            switch command {
+            case "let", "integer", "float", "repeat", "shift", "exit", "return", "read", "unset", "vared":
+                return true
+            case "typeset", "declare", "local", "export":
+                // A name (`typeset {query}`), or a number (`typeset -i x={query}`); a plain value is text.
+                if numericTypes { return true }
+                guard let equals = word.firstIndex(of: "=") else { return true }
+                return word[..<equals].contains(ActionKind.argumentPlaceholder)
+            case "print", "printf":
+                return assigns || numericFormat
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Whether a printf format in `word` converts an argument as a number (`%d`, `%5.2f`, `%x`,
+    /// a `*` width), which zsh evaluates as arithmetic.
+    nonisolated static func hasNumericConversion(_ word: String) -> Bool {
+        word.range(of: #"%[-+ 0#]*(\*|[0-9]*)(\.(\*|[0-9]*))?[diouxXeEfgG]"#, options: .regularExpression) != nil
+            || word.range(of: #"%[-+ 0#]*[0-9]*\.?\*"#, options: .regularExpression) != nil
+    }
+
+    /// Whether a program reads the word after `word` as code: `sh -c`, `bash -lc`, `osascript -e`,
+    /// `perl -E`, `python3 -c`, `node --eval`.
+    nonisolated static func runsNextWordAsCode(_ word: String) -> Bool {
+        if ["-e", "-E", "--command", "--eval"].contains(word) { return true }
+        return word.hasPrefix("-") && !word.hasPrefix("--") && word.count <= 4 && word.hasSuffix("c")
+    }
+
+    /// Whether `word` names a program that runs code given after `-c` or `-e`: a shell,
+    /// `osascript`, `sed` or a scripting language, by path too (`/usr/bin/python3.12`).
+    nonisolated static func isInterpreter(_ word: String) -> Bool {
+        let name = (word.split(separator: "/").last.map(String.init) ?? word)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "0123456789."))
+        return ["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "osascript", "perl",
+                "python", "ruby", "node", "nodejs", "deno", "bun", "php", "lua", "tclsh", "pwsh", "su",
+                "sed", "gsed"].contains(name)
+    }
+
+    /// Words that come before the command itself: `if`, `then`, `!`, `{`, `exec`, `command`,
+    /// `noglob` and the like, and assignments (`LANG=C`).
+    nonisolated static func precedesCommand(_ word: String) -> Bool {
+        let prefixes: Set<String> = ["{", "!", "if", "then", "else", "elif", "while", "until", "do", "time",
+                                     "exec", "command", "builtin", "noglob", "nocorrect", "nohup", "sudo"]
+        if prefixes.contains(word) { return true }
+        guard let equals = word.firstIndex(of: "="), equals > word.startIndex else { return false }
+        return word[..<equals].allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
     }
 
     /// `text` as a single-quoted shell word: `it's` becomes `'it'\''s'`.
