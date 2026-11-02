@@ -87,6 +87,9 @@ final class Preferences {
     var showLabels: Bool { didSet { d.set(showLabels, forKey: "showLabels") } }
     var folderPlacement: FolderPlacement { didSet { d.set(folderPlacement.rawValue, forKey: "folderPlacement") } }
     var extraFolders: [String] { didSet { d.set(extraFolders, forKey: "extraFolders") } }
+    /// The paths of the apps the latest scan found, so the first scan after a launch knows which
+    /// copies were there before it. Not a setting anyone sees, so nothing observes it.
+    @ObservationIgnored var scannedPaths: [String] { didSet { d.set(scannedPaths, forKey: "scannedPaths") } }
     /// The app commands set to run in a terminal open in; nil for Terminal.
     var terminalAppPath: String? { didSet { d.set(terminalAppPath, forKey: "terminalAppPath") } }
     /// Window-mode frames keyed by screen (name + display ID).
@@ -140,6 +143,7 @@ final class Preferences {
         showLabels = d.bool(forKey: "showLabels")
         folderPlacement = FolderPlacement(rawValue: d.string(forKey: "folderPlacement") ?? "") ?? .first
         extraFolders = d.stringArray(forKey: "extraFolders") ?? []
+        scannedPaths = d.stringArray(forKey: "scannedPaths") ?? []
         terminalAppPath = d.string(forKey: "terminalAppPath").flatMap { $0.isEmpty ? nil : $0 }
         windowFrames = (d.dictionary(forKey: "windowFrames") as? [String: String]) ?? [:]
         if !showInDock && !showInMenuBar { showInMenuBar = true }

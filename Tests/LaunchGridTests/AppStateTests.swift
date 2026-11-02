@@ -261,6 +261,31 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.first?.id == a.id)
     }
 
+    /// The first scan after a launch knows the copies the last run found: Xcode deleted while
+    /// LaunchGrid wasn't running doesn't make its tile Xcode-beta, there all along.
+    @Test func aGoneAppDoesNotTakeOverACopyFromTheLastRun() throws {
+        let dir = TempDir.url
+        let prefs = testPreferences()
+        prefs.autoAddApps = false
+        let xcode = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/LGTest Tool.app", name: "LGTest Tool")
+        let beta = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/LGTest Tool-beta.app", name: "LGTest Tool-beta")
+        let first = AppState(prefs: prefs, store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        first.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.app(AppRef(bundleID: xcode.bundleID, path: xcode.path, name: xcode.name))])]))
+        first.catalogScanned([xcode, beta])
+        #expect(first.grid.allApps.map(\.path) == [xcode.path])
+        _ = first.saveNow()
+
+        let next = AppState(prefs: prefs, store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        next.catalogScanned([beta])
+        #expect(next.grid.allApps.map(\.path) != [beta.path], "Xcode's tile isn't Xcode-beta's")
+
+        // An app renamed while LaunchGrid wasn't running is new, so its tile still follows it.
+        let renamed = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/LGTest Tool 2.app", name: "LGTest Tool 2")
+        let other = AppState(prefs: prefs, store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        other.catalogScanned([beta, renamed])
+        #expect(other.grid.allApps.map(\.path) == [renamed.path])
+    }
+
     @Test func historyDoesNotMistakeAnExistingCopyForARename() throws {
         let state = makeState(["A", "B"])
         state.prefs.autoAddApps = false

@@ -57,8 +57,9 @@ final class AppState {
     @ObservationIgnored private var installedFoldedPaths: Set<String> = []
     /// Real paths of apps the scan found through a symlink, to the paths it lists them at.
     @ObservationIgnored private var pathAliases: [String: String] = [:]
-    /// Paths of apps any scan this run found, and those found before the latest scan: a tile
-    /// whose app is gone doesn't become a copy that was there beside it all along.
+    /// Paths of apps any scan this run (or the last scan of the run before) found, and those
+    /// found before the latest scan: a tile whose app is gone doesn't become a copy that was
+    /// there beside it all along, the first scan after a launch included.
     @ObservationIgnored private var everInstalled: Set<String> = []
     @ObservationIgnored private var installedBefore: Set<String> = []
     /// Apps on the grid from outside the scan folders, read off the main thread with each
@@ -229,6 +230,7 @@ final class AppState {
     init(prefs: Preferences, store: GridStore) {
         self.prefs = prefs
         self.store = store
+        everInstalled = Set(prefs.scannedPaths)
         var loaded: Grid?
         var skipped = 0
         if store.exists {
@@ -777,6 +779,8 @@ final class AppState {
         if drag.active, installedBeforeDrag == nil { installedBeforeDrag = everInstalled }
         installedBefore = installedBeforeDrag ?? everInstalled
         everInstalled.formUnion(apps.map(\.path))
+        let scanned = apps.map(\.path).sorted()
+        if prefs.scannedPaths != scanned { prefs.scannedPaths = scanned }
         let outside = outside ?? Self.readOutsideApps(outsideCandidates(includingHistory: true).filter { needsDiskCheck($0) })
         outsideApps = outside.apps
         outsideChecked = outside.checked
