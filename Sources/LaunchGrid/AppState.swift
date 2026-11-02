@@ -342,6 +342,9 @@ final class AppState {
         // folder selection cannot survive out of sight in the replacement.
         if openFolderID != nil { closeFolder() }
         if !hasGridFile {
+            // Actions made before the first layout (New Action… in the menu bar or Settings)
+            // go on it, or building it would drop them.
+            for action in grid.allActions where new.item(action.id) == nil { new.addAction(action) }
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
             undoStack.removeAll()

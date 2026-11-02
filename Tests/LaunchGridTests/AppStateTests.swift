@@ -1694,6 +1694,21 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.map(\.name) == ["A", "B"])
     }
 
+    @Test func actionsMadeBeforeTheFirstLayoutGoOnIt() {
+        let dir = TempDir.url
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        state.catalogScanned(["A", "B"].map(installed))
+        let shown = Action(name: "Shown", kind: .openURL(template: "https://example.com"))
+        let hidden = Action(name: "Hidden", kind: .openURL(template: "https://example.org"), showsOnGrid: false)
+        state.saveAction(shown)
+        state.saveAction(hidden)
+        #expect(!state.hasGridFile)
+
+        state.build(style: .alphabetical)
+        #expect(state.grid.pages.flatMap(\.items).map(\.title) == ["A", "B", "Shown"])
+        #expect(state.grid.hiddenActions.map(\.name) == ["Hidden"])
+    }
+
     @Test func theExcludedCountIsOfInstalledAppsOffTheGrid() {
         let state = makeState(["A"])
         state.catalogScanned(["A", "B", "C"].map(installed))
