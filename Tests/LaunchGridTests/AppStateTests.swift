@@ -1763,6 +1763,25 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.hiddenActions.map(\.name) == ["Hidden"])
     }
 
+    /// Quitting before the welcome window builds the layout keeps them, and the next launch
+    /// still offers that window rather than taking them for a layout.
+    @Test func actionsMadeBeforeTheFirstLayoutAreSavedForIt() {
+        let dir = TempDir.url
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let state = AppState(prefs: testPreferences(), store: store)
+        state.catalogScanned(["A", "B"].map(installed))
+        state.saveAction(Action(name: "Shown", kind: .openURL(template: "https://example.com")))
+        #expect(state.saveNow())
+        #expect(store.exists, "the action is written")
+
+        let next = AppState(prefs: testPreferences(), store: store)
+        #expect(!next.hasGridFile, "the welcome window still opens")
+        #expect(next.grid.allActions.map(\.name) == ["Shown"])
+        next.catalogScanned(["A", "B"].map(installed))
+        next.build(style: .alphabetical)
+        #expect(next.grid.pages.flatMap(\.items).map(\.title) == ["A", "B", "Shown"])
+    }
+
     @Test func theExcludedCountIsOfInstalledAppsOffTheGrid() {
         let state = makeState(["A"])
         state.catalogScanned(["A", "B", "C"].map(installed))

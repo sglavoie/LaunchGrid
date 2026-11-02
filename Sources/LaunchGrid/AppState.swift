@@ -277,7 +277,9 @@ final class AppState {
         }
         // Older files have no setup marker. Apps or restoration records still identify
         // their existing layout, and the next edit saves the marker even if it empties it.
-        let hasLayout = loaded.map { $0.hasCreatedLayout || !$0.allApps.isEmpty || !$0.allActions.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
+        // Actions alone don't: they came after the marker, so a file holding them without it
+        // was saved before the first layout (New Action… from the welcome window's menu bar).
+        let hasLayout = loaded.map { $0.hasCreatedLayout || !$0.allApps.isEmpty || !$0.recentlyPruned.isEmpty } ?? false
         hasGridFile = hasLayout
         if hasLayout { loaded?.hasCreatedLayout = true }
         grid = loaded ?? Grid()
@@ -557,9 +559,10 @@ final class AppState {
         lastSaveError = nil
         lastSaveFailureDetail = nil
         saveTask?.cancel()
-        // Before the first layout, exclusions chosen in the welcome window are still worth keeping,
-        // and so is emptying them: the file on disk would otherwise keep the last one.
-        guard hasGridFile || !grid.allApps.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return nil }
+        // Before the first layout, exclusions chosen in the welcome window and actions made from
+        // the menu bar are still worth keeping, and so is emptying them: the file on disk would
+        // otherwise keep the last one.
+        guard hasGridFile || !grid.allApps.isEmpty || !grid.allActions.isEmpty || !grid.removedBundleIDs.isEmpty || store.exists else { return nil }
         if savesBlocked {
             guard !store.exists else {
                 NSLog("LaunchGrid: not saving over the layout that couldn't be read")
