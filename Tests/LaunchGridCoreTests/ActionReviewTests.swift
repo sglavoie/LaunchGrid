@@ -79,6 +79,16 @@ import Testing
         #expect(kept.hiddenActions.isEmpty && kept.allApps.map(\.name) == ["A"])
     }
 
+    /// A page that held only commands goes with them, rather than loading blank.
+    @Test func removingDropsThePagesItEmpties() {
+        let a = GridItem.app(AppRef(bundleID: "com.test.A", path: "/Applications/A.app", name: "A"))
+        let b = GridItem.app(AppRef(bundleID: "com.test.B", path: "/Applications/B.app", name: "B"))
+        let shared = Grid(rows: 3, columns: 4, pages: [Page(items: [a]), Page(items: [.action(shell)]), Page(), Page(items: [b])])
+        let kept = shared.applyingReview(.removeRunnable)
+        #expect(kept.pages.map(\.items.count) == [1, 0, 1], "the emptied page goes; one already empty stays")
+        #expect(kept.allApps.map(\.name) == ["A", "B"])
+    }
+
     @Test func needsReviewIsWrittenOnlyWhenSetAndSurvivesTheAppsOwnLayout() throws {
         let plain = String(decoding: try GridStore.encode(grid), as: UTF8.self)
         #expect(!plain.contains("needsReview"))

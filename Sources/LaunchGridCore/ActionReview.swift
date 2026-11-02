@@ -96,7 +96,9 @@ extension Grid {
     public func applyingReview(_ choice: ActionReviewChoice) -> Grid {
         var grid = self
         if choice == .removeRunnable {
-            grid.remove(allActions.filter { $0.kind.isRunnableCode }.map(\.id))
+            let runnable = allActions.filter { $0.kind.isRunnableCode }.map(\.id)
+            // A page that held only these goes too, as when hiding or deleting them.
+            grid.removingEmptiedPages { $0.remove(runnable) }
         }
         grid.mapActions { $0.needsReview = true }
         return grid
