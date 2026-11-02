@@ -317,6 +317,12 @@ final class ActionEditorModel {
 
     // MARK: Choosing files
 
+    /// The file, app and picture picked here, saved or not: their bookmarks stay while the
+    /// editor is open, even if the grid saves (and lets go of unused ones) in the meantime.
+    var pickedPaths: Set<String> {
+        Set([filePath.isEmpty ? nil : filePath, appPath, imagePath].compactMap { $0 })
+    }
+
     func chooseFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true

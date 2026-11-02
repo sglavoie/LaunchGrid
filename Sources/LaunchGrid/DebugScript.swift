@@ -603,6 +603,11 @@ enum DebugScript {
                     }
                     print("\(parts[0]): \(String(describing: state.grid.item(action.id)?.action?.kind))")
                     fflush(stdout)
+                case "editorpick":
+                    // "editorpick": the open editor's Choose… for the file to open (an open panel).
+                    state.actionEditor?.chooseFile()
+                    print("editorpick: \(state.actionEditor?.filePath ?? "-")")
+                    fflush(stdout)
                 case "neweditor":
                     // "neweditor[:page]": the action editor on a new action for that page (the
                     // current one by default), as New Action… in the page menu.

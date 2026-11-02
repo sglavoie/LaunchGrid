@@ -4033,6 +4033,32 @@ extension SandboxFileAccessTests {
                 "the picture had stopped being an action's: its setting forgets it")
     }
 
+    /// The grid can save while the action editor is open (a rescan, a rename): what it picked
+    /// but hasn't saved yet keeps its bookmark until the editor closes.
+    @Test func filesPickedInAnOpenEditorKeepTheirBookmarksUntilItCloses() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let file = "/Users/x/notes.txt", app = "/Users/x/Editor.app", picture = "/Users/x/icon.png"
+        let state = makeState(["A"])
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        state.actionEditor = model
+        for path in [file, app, picture] { #expect(FileAccess.rememberForAction(URL(fileURLWithPath: path))) }
+        model.filePath = file
+        model.appPath = app
+        model.imagePath = picture
+
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
+        for path in [file, app, picture] {
+            #expect(FileAccess.isGranted(path) && sandbox.saved[path] != nil, "\(path) is still the editor's")
+        }
+
+        // Closed without saving, they go at the next save.
+        state.actionEditor = nil
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
+        #expect([file, app, picture].allSatisfy { !FileAccess.isGranted($0) && sandbox.saved[$0] == nil })
+    }
+
     @Test func changingSettingsKeepsBookmarksUsedByActions() {
         sandbox.install()
         defer { FileAccess.reset() }
