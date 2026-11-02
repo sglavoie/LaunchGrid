@@ -276,6 +276,15 @@ import Testing
             "echo $(sh -c 'echo {query}')",
             "if true; then sh -c 'echo {query}'; fi",
             "LANG=C sh -c 'echo {query}'",
+            "echo foo | perl -pe 's/foo/{query}/'",
+            "perl -lne 'print \"{query}\"' file",
+            "node -pe '\"x{query}\"'",
+            "php -r 'echo \"{query}\";'",
+            "echo a | sed 's/a/{query}/'",
+            "sed -n 's/a/{query}/p' file",
+            "echo a | awk '/{query}/'",
+            "gawk -v x=1 '{ print \"{query}\" }'",
+            "trap \"echo {query}\" EXIT",
         ]
         for template in refused {
             #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
@@ -295,6 +304,8 @@ import Testing
             "printf '[%s]' -e '{query}'",
             "echo -e '[{query}]'",
             "printf '%s' '[{query}]' | grep -e '{query}'",
+            "printf '[%s]' {query} | sed -e 's/=/=/'",
+            "printf '%s' {query} | awk '{ printf \"[%s]\", $0 }'",
             "sh -c 'printf \"[%s]\" \"$1\"' sh {query}",
             "sh -c 'printf \"[%s]\" \"$LAUNCHGRID_QUERY\"'; # sh -c 'echo {query}'",
             "sh -c 'true'; printf '%s' \"[{query}]\"",
@@ -315,6 +326,29 @@ import Testing
         #expect(try ActionRunner.substitutingArgument(in: "osascript -e \"{query}\"") == #"osascript -e "${LAUNCHGRID_QUERY}""#)
     }
 
+    /// A glob qualifier (`*(e:'…':)`) is code zsh runs for each file: `{query}` in one is
+    /// refused. Function definitions, arrays and `$(…)` still take it.
+    @Test func placeholdersInGlobQualifiersAreRefused() async throws {
+        for template in ["print -l *(e:'[[ $REPLY == {query}* ]]':)", "ls *(N.e:'true {query}':)",
+                         "echo $(print *(e:\"[[ $REPLY == {query} ]]\":))", "ls x(a|{query})"] {
+            #expect(throws: ActionRunner.Failure.placeholderInGlobQualifier, "\(template)") {
+                try ActionRunner.plan(shell(template), argument: "x$(touch ran)")
+            }
+        }
+        let argument = "a b$(touch ran)"
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let runner = ActionRunner()
+        for template in ["f() { printf '[%s]' \"$1\" }; f {query}", "a=(x {query}); printf '[%s]' \"${a[2]}\"",
+                         "printf '[%s]' \"$(printf %s {query})\""] {
+            let plan = try ActionRunner.plan(shell("cd \(ActionRunner.shellQuoted(dir.path)); " + template), argument: argument)
+            guard case .code(let job) = plan else { Issue.record("not code: \(template)"); continue }
+            let result = await runner.runToEnd(job)
+            #expect(result.output == "[\(argument)]", "\(template): \(result.errorOutput)")
+            #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("ran").path), "\(template) ran it")
+        }
+    }
+
     /// zsh builtins that evaluate their arguments as arithmetic, or as variable names with a
     /// subscript, run `$(…)` in what's typed even from a quoted reference: `{query}` there is
     /// refused. Text uses of the same builtins still deliver the argument as it is.
@@ -328,6 +362,8 @@ import Testing
             "printf '%*s' {query} x", "builtin let {query}", "true && let {query}",
             "let x=$(printf %s {query})", "echo $(let {query})", "LANG=C let \"{query}\"",
             "let x=$(printf %s {query} # note\n)", "let x=\"$(true; printf %s {query})\"",
+            "typeset -i n; n={query}", "integer n; n=\"{query}\"", "n={query}; local -i n",
+            "typeset -i n; n+={query}", "SECONDS={query}", "HISTSIZE=\"{query}\" true", "export UID={query}",
         ]
         let dir = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -353,6 +389,8 @@ import Testing
             "print -rn -- '[{query}]'",
             "x=$(printf %s {query}); printf '[%s]' \"$x\"",
             "let n=1; printf '[%s]' {query}",
+            "typeset -i n=1; m={query}; printf '[%s]' \"$m\"",
+            "s={query}; printf '[%s]' \"$s\"",
         ]
         let runner = ActionRunner()
         for template in accepted {
