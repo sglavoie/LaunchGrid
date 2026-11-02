@@ -308,6 +308,13 @@ enum DebugScript {
                     if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
                     if let f = state.openFolder { print("folder: \(f.items.count) apps, first \(f.items.prefix(3).map(\.title)), last \(f.items.suffix(3).map(\.title))") }
                     fflush(stdout)
+                case "textedit":
+                    // The rename or page-title card: open or not, its field's text and what an input
+                    // method is still composing there.
+                    let field = overlay.window?.firstResponder as? NSTextView
+                    let marked = field.flatMap { f in f.hasMarkedText() ? (f.string as NSString).substring(with: f.markedRange()) : nil }
+                    print("textedit: open=\(state.textEdit != nil) text='\(field?.string ?? "-")' marked='\(marked ?? "")' shown=\(state.isShown) key=\(overlay.window?.isKeyWindow == true) alpha=\(overlay.window?.alphaValue ?? -1)")
+                    fflush(stdout)
                 case "wclick":
                     // Clicks at x,y (points from the top left) in the window titled `title`: "wclick:title,x,y";
                     // "-" for the untitled overlay.

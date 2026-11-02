@@ -369,7 +369,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let panel, event.window === panel, isVisible else { return event }
         // Let the inline text editor have its keys.
         if state.textEdit != nil {
-            if Int(event.keyCode) == kVK_Escape { state.textEdit = nil; return nil }
+            // While an input method composes in its field, Esc cancels the composition there.
+            let composing = (panel.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
+            if Int(event.keyCode) == kVK_Escape, !composing { state.textEdit = nil; return nil }
             return event
         }
         // While an input method composes, it has every key (Return commits, Esc cancels).
