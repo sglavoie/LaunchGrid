@@ -70,6 +70,7 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | `fakeinstall:Echo`, `autoadd:on` | Simulate a catalog update using the reconciler |
 | `pagetitle:First`, `titleedit` | Set a page title or open its editor |
 | `addaction:{"name": "X", "kind": {...}}`, `runaction:X,argument` | Add an action from its layout JSON (no `;` inside), or run one by name |
+| `neweditor`, `editaction:X`, `editorfill:keywords=gh`, `editorsave`, `editorcancel` | Open the action editor on a new action (`neweditor:1` for page 1) or on one by name, set a field (`name`, `keywords`, `kind` = link/file/shortcut, `template`, `file`, `app`, `shortcut`, `input`, `showongrid`, `symbol`, `emoji`, `icon`), then save or cancel. The fields `actions` (keywords by name), `hiddenActions`, `actionEditor` (`""`, `new` or `edit:X`), `editorErrors` and `editorWarnings` assert on them |
 
 Prefer events for the behavior under test; direct state commands are useful for setup.
 Indices are zero-based. Key codes are macOS virtual key codes; literal characters can include

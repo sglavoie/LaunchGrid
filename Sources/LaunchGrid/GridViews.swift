@@ -1202,6 +1202,9 @@ struct MenuEntry {
                     state.onHideForLaunch()
                 })
             }
+            if !multi {
+                entries.append(.button(String(localized: "Edit Action…")) { state.editAction(a.id) })
+            }
         } else if case .folder(let f) = item {
             entries.append(.button(String(localized: "Open Folder")) { state.openFolder(f.id) })
             entries.append(.button(String(localized: "Ungroup")) { state.apply { $0.ungroup(f.id) } })
@@ -1246,6 +1249,7 @@ struct MenuEntry {
             .divider,
             .button(String(localized: "New Page")) { state.newPage() },
             .button(String(localized: "Edit Page Title…")) { if let pageID { state.beginPageTitleEdit(pageID) } },
+            .button(String(localized: "New Action…")) { state.newAction(onPage: pageID) },
         ]
         if state.currentItems.isEmpty && state.grid.pages.count > 1 {
             entries.append(.button(String(localized: "Delete Empty Page")) { if let pageID { state.deleteEmptyPage(pageID) } })

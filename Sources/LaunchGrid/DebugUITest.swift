@@ -98,6 +98,7 @@ enum DebugUITest {
         "edit", "select", "fselect", "search", "type", "group", "undo", "redo",
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
         "movetopage", "titleedit", "autoadd", "windowsize", "addaction", "runaction",
+        "neweditor", "editaction", "editorfill", "editorsave", "editorcancel",
     ]
 
     static func snapshot(_ state: AppState, overlay: OverlayController) -> [String: Value] {
@@ -132,6 +133,13 @@ enum DebugUITest {
             // The argument each result carries, "" for none, in the same order.
             "searchArguments": .strings(state.allSearchResults.map { $0.argument ?? "" }),
             "toast": .string(state.toast ?? ""),
+            // Every action's keywords by name, and the search-only ones' names.
+            "actions": .object(Dictionary(state.grid.allActions.map { ($0.name, Value.strings($0.keywords)) }, uniquingKeysWith: { a, _ in a })),
+            "hiddenActions": .strings(state.grid.hiddenActions.map(\.name)),
+            // "" with no editor open, else "new" or "edit:<name>", and what keeps it from saving.
+            "actionEditor": .string(state.actionEditor.map { $0.original.map { "edit:\($0.name)" } ?? "new" } ?? ""),
+            "editorErrors": .strings(state.actionEditor?.errors ?? []),
+            "editorWarnings": .strings(state.actionEditor?.warnings ?? []),
             "keyWindow": .bool(overlay.window?.isKeyWindow == true),
             "pagerReady": .bool(state.drag.pagerFrame.width > 0 && state.drag.pagerFrame.height > 0),
             "folderReady": .bool(state.openFolder != nil && state.drag.folderGridFrame.width > 0 && state.drag.folderGridFrame.height > 0),

@@ -397,9 +397,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 showPageMenu()
             } else if state.editing && state.query.isEmpty {
                 // Edit mode opens a focused folder, as a click does, to arrange it; Return again
-                // renames it. Otherwise it renames the focused app, else the open folder.
+                // renames it. A focused action opens in its editor, which renames it too.
+                // Otherwise it renames the focused app, else the open folder.
                 if let id = focusedID, state.openFolder == nil, let item = state.grid.item(id), item.folder != nil {
                     state.activate(item)
+                } else if let id = focusedID, state.grid.item(id)?.action != nil {
+                    state.editAction(id)
                 } else if let id = focusedID ?? state.openFolderID {
                     state.beginRename(id)
                 }
@@ -472,6 +475,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             switch key {
             case "z": mods.contains(.shift) ? state.redo() : state.undo()
             case "e": state.editing.toggle()
+            // Get Info, as in Finder: the focused action's editor.
+            case "i": if let id = focusedID, state.grid.item(id)?.action != nil { state.editAction(id) }
             // Search results hide the page; selecting it unseen would let ⌫ remove it.
             case "a": if state.query.isEmpty { selectAll() }
             case "f": if !state.query.isEmpty { state.endSearch() }

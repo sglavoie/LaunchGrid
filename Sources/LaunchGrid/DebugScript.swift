@@ -529,6 +529,49 @@ enum DebugScript {
                     }
                     print("\(parts[0]): \(String(describing: state.grid.item(action.id)?.action?.kind))")
                     fflush(stdout)
+                case "neweditor":
+                    // "neweditor[:page]": the action editor on a new action for that page (the
+                    // current one by default), as New Action… in the page menu.
+                    state.newAction(onPage: Int(arg).flatMap { state.grid.pages[safe: $0]?.id })
+                case "editaction":
+                    // "editaction:<name>": the editor on the action named, as Edit Action….
+                    guard let action = state.grid.allActions.first(where: { $0.name == arg }) else {
+                        let message = "editaction: no action named \(arg)"
+                        print(message); fflush(stdout)
+                        if strict { completion?(message); return }
+                        break
+                    }
+                    state.editAction(action.id)
+                case "editorfill", "editorsave", "editorcancel", "editortest", "editor":
+                    // "editorfill:<field>=<value>" sets a field of the open editor (see
+                    // ActionEditorModel.fill); "editorsave" presses Add/Save, "editorcancel" Cancel,
+                    // "editortest" Test; "editor" prints its state.
+                    guard let model = state.actionEditor else {
+                        let message = "\(parts[0]): no action editor is open"
+                        print(message); fflush(stdout)
+                        if strict { completion?(message); return }
+                        break
+                    }
+                    var failure: String?
+                    switch parts[0] {
+                    case "editorfill":
+                        let kv = arg.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                        if kv.count != 2 || !model.fill(kv[0], kv[1]) { failure = "editorfill: can't set \(arg)" }
+                    case "editorsave":
+                        if model.save(to: state) { delegate.closeActionEditor() }
+                        else { failure = "editorsave: \(model.errors.joined(separator: " "))" }
+                    case "editorcancel": delegate.closeActionEditor()
+                    case "editortest":
+                        await model.test(with: state)
+                        print("editortest: \(model.testResult ?? "-")")
+                    default:
+                        print("editor: new=\(model.isNew) name=\(model.name) kind=\(model.kind.rawValue) errors=\(model.errors) warnings=\(model.warnings)")
+                    }
+                    fflush(stdout)
+                    if let failure {
+                        print(failure); fflush(stdout)
+                        if strict { completion?(failure); return }
+                    }
                 case "extrafolder":
                     // Adds a scan folder without the open panel, as Settings › Library does.
                     state.prefs.extraFolders.append(arg)

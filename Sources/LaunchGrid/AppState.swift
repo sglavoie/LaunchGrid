@@ -180,6 +180,10 @@ final class AppState {
     @ObservationIgnored var onSaveFailure: ((_ title: String, _ detail: String) -> Void)?
     @ObservationIgnored var onOpenSettings: () -> Void = {}
     @ObservationIgnored var onAddMissing: () -> Void = {}
+    /// Opens the action editor on an action, or on a new one (nil) for the page with that ID.
+    @ObservationIgnored var onEditAction: (_ action: Action?, _ pageID: UUID?) -> Void = { _, _ in }
+    /// The open action editor, for the debug scripts and UI scenarios to drive.
+    @ObservationIgnored var actionEditor: ActionEditorModel?
     /// After each save, with the paths of every app the grid, its undo history or its
     /// recently pruned apps still refer to; access kept to any other app can go.
     @ObservationIgnored var onAppPathsInUse: (Set<String>) -> Void = { _ in }
@@ -638,8 +642,8 @@ final class AppState {
         return paths
     }
 
-    /// `appPathsInUse`, and the files actions open and the apps they open them with, in the
-    /// undo and redo history too: what the sandbox must keep access to.
+    /// `appPathsInUse`, and the files actions open, the apps they open them with and their
+    /// pictures, in the undo and redo history too: what the sandbox must keep access to.
     var pathsInUse: Set<String> {
         var paths = appPathsInUse
         for g in [grid] + undoStack + redoStack {
@@ -648,6 +652,7 @@ final class AppState {
                     paths.insert(path)
                     if let appPath { paths.insert(appPath) }
                 }
+                if case .image(let path) = action.icon { paths.insert(path) }
             }
         }
         return paths
@@ -1297,6 +1302,47 @@ final class AppState {
             showToast(String(localized: "Could not run \(action.name): \(error.localizedDescription)"))
         } else {
             onError(String(localized: "Could not run \(action.name)"), error.localizedDescription)
+        }
+    }
+
+    // MARK: Action editing
+
+    /// Opens the editor on a new action, which goes to the first free slot of the page with
+    /// `pageID` (the current page when nil).
+    func newAction(onPage pageID: UUID? = nil) {
+        onEditAction(nil, pageID ?? grid.pages[safe: currentPage]?.id)
+    }
+
+    /// Opens the editor on the action with `id`, wherever it is (search-only ones too).
+    func editAction(_ id: UUID) {
+        guard let action = grid.item(id)?.action else { return }
+        onEditAction(action, nil)
+    }
+
+    /// Saves what the editor made as one undo step: a new action goes to the first free slot of
+    /// the page with `pageID`; an existing one is replaced where it is, or moves between its
+    /// page and search-only. One removed while it was being edited comes back as new.
+    func saveAction(_ action: Action, pageID: UUID? = nil) {
+        let page = pageID.flatMap { id in grid.pages.firstIndex { $0.id == id } }
+        apply { $0.addAction(action, page: page) }
+    }
+
+    /// Shows an action on the grid (in the first free slot) or keeps it to search only.
+    func setShowsOnGrid(_ id: UUID, _ shows: Bool) {
+        guard var action = grid.item(id)?.action, action.showsOnGrid != shows else { return }
+        action.showsOnGrid = shows
+        apply { $0.updateAction(action) }
+    }
+
+    /// Runs an action as the editor has it, unsaved, for its Test button: the grid isn't
+    /// involved. Returns what went wrong, nil when it ran (or the person cancelled).
+    func test(_ action: Action, argument: String?) async -> Error? {
+        do {
+            let plan = try ActionRunner.plan(action.kind, argument: argument)
+            _ = try await actionRunner.perform(plan, activates: true)
+            return nil
+        } catch {
+            return Launcher.isUserCancel(error) ? nil : error
         }
     }
 

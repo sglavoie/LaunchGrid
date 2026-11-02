@@ -1305,6 +1305,25 @@ func action(_ name: String, showsOnGrid: Bool = true, kind: ActionKind? = nil) -
         #expect(g.allApps.map(\.name) == ["A"])
     }
 
+    @Test func addActionGoesToThePagesFreeSlotElseTheFirstFreeOneOrHidden() {
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("X"))]), Page(items: [.app(app("Y"))]),
+                                                  Page(items: [.app(app("Z")), .app(app("W"))])])
+        g.addAction(action("OnSecond"), page: 1)
+        #expect(g.pages.map(titles) == [["X"], ["Y", "OnSecond"], ["Z", "W"]])
+        g.addAction(action("Full"), page: 2) // that page is full: the grid's first free slot
+        #expect(g.pages.map(titles) == [["X", "Full"], ["Y", "OnSecond"], ["Z", "W"]])
+        g.addAction(action("NoPage"), page: 9)
+        #expect(g.pages.map(titles) == [["X", "Full"], ["Y", "OnSecond"], ["Z", "W"], ["NoPage"]])
+        let hidden = action("Hidden", showsOnGrid: false)
+        g.addAction(hidden, page: 0)
+        #expect(g.hiddenActions == [hidden])
+        #expect(g.pages.count == 4)
+        var renamed = hidden
+        renamed.name = "Again"
+        g.addAction(renamed) // an action already there is updated, not added twice
+        #expect(g.hiddenActions == [renamed])
+    }
+
     @Test func updateActionReplacesInPlaceAndMovesBetweenPageAndHidden() {
         let a = action("A")
         var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("X")), .action(a)]), Page(items: [.app(app("Y"))])])

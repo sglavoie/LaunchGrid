@@ -501,6 +501,51 @@ struct LayoutSettings: View {
     }
 }
 
+/// Every action, search-only ones too (the only place besides search to reach those), with
+/// what can be done to each. Each change is one step ⌘Z in the grid undoes.
+struct ActionsSection: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        Section("Actions") {
+            let actions = state.grid.allActions
+            if actions.isEmpty {
+                Text("Actions open links, files and Shortcuts from the grid and from search.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(actions) { action in
+                HStack(spacing: 8) {
+                    ActionTile(action: action, size: 24)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(action.name).lineLimit(1)
+                        let detail = action.keywords.isEmpty ? nil : action.keywords.joined(separator: ", ")
+                        if let detail { Text(detail).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1) }
+                    }
+                    Spacer()
+                    Toggle("Show on grid", isOn: Binding(get: { action.showsOnGrid },
+                                                         set: { state.setShowsOnGrid(action.id, $0) }))
+                        .toggleStyle(.checkbox)
+                        .accessibilityLabel(Text("Show \(action.name) on grid"))
+                    Button("Edit…") { state.editAction(action.id) }
+                        .accessibilityLabel(Text("Edit \(action.name)"))
+                    Button(role: .destructive) {
+                        state.remove([action.id])
+                    } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.borderless)
+                    .help("Remove this action")
+                    .accessibilityLabel(Text("Remove \(action.name)"))
+                }
+            }
+            Button("New Action…") { state.newAction() }
+            if !actions.isEmpty {
+                Text("Removing an action or changing where it shows can be undone from the grid with ⌘Z.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 struct LibrarySettings: View {
     @Environment(AppState.self) private var state
     let actions: LibraryActions
@@ -548,6 +593,7 @@ struct LibrarySettings: View {
                 Text("Excluded apps stay off the grid and aren't added back by scans or rebuilds.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            ActionsSection()
             Section("Rebuild") {
                 HStack {
                     Button("Rebuild by Category…") { confirmRebuild = .byCategory }

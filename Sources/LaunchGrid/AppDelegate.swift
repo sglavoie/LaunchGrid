@@ -215,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onSaveFailure = { [weak self] title, detail in self?.showSaveFailure(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
+        state.onEditAction = { [weak self] action, pageID in self?.showActionEditor(action, pageID: pageID) }
 
         #if !APP_STORE
         if let scenario = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_UI_TEST"] {
@@ -584,6 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: String(localized: "Add Missing Apps…"), action: #selector(showAddMissing), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Choose Apps…"), action: #selector(showChooseApps), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Sort Everything…"), action: #selector(sortEverything), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "New Action…"), action: #selector(newAction), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Load Grid File…"), action: #selector(loadGridFile as () -> Void), keyEquivalent: "").target = self
@@ -733,6 +735,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, let key = window.identifier?.rawValue else { return }
         windows[key] = nil
+        if key == "actionEditor" { state.actionEditor = nil }
         if key == "firstRun" && !state.hasGridFile {
             // Closed without choosing: start with the category layout, once the apps are found.
             state.buildWhenScanned(style: .byCategory)
@@ -768,6 +771,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Before the first layout nothing is missing yet: apps are chosen in the welcome window.
         guard state.hasGridFile else { return showFirstRun() }
         present("addMissing", title: String(localized: "Add Missing Apps"), resizable: true) { close in AddMissingAppsView(close: close) }
+    }
+
+    func closeActionEditor() { windows["actionEditor"]?.close() }
+
+    /// From the menu-bar or Dock menu: a new action for the page the grid shows.
+    @objc func newAction() { state.newAction() }
+
+    /// Opens the action editor on `action`, or on a new action for the page with `pageID`. One
+    /// editor at a time: opening another replaces it, unsaved.
+    func showActionEditor(_ action: Action?, pageID: UUID?) {
+        windows["actionEditor"]?.close()
+        let model = ActionEditorModel(action: action, pageID: pageID, others: state.grid.allActions)
+        state.actionEditor = model
+        present("actionEditor", title: action == nil ? String(localized: "New Action") : String(localized: "Edit Action")) { close in
+            ActionEditor(model: model, close: close)
+        }
     }
 
     @objc func showChooseApps() {

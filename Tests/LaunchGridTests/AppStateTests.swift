@@ -3802,8 +3802,8 @@ func installed(_ name: String) -> InstalledApp {
         let opener = FakeOpener()
         let state = state(with: [link, file], opener: opener)
         let titles = { (item: GridItem) in MenuEntry.item(item, state: state).map(\.title).filter { !$0.isEmpty } }
-        #expect(titles(.action(link)) == ["Open", "Rename…", "Move to Page", "Select", "Remove from Grid"])
-        #expect(titles(.action(file)) == ["Open", "Show in Finder", "Rename…", "Move to Page", "Select", "Remove from Grid"])
+        #expect(titles(.action(link)) == ["Open", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
+        #expect(titles(.action(file)) == ["Open", "Show in Finder", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
 
         // With an app selected too, everything but grouping.
         state.selection = [link.id, state.grid.allApps[0].id]
@@ -3911,5 +3911,88 @@ extension SandboxFileAccessTests {
         #expect(opener.opened.map(\.path) == [new], "followed to where it went")
         #expect(state.grid.item(file.id)?.action?.kind == .openFile(path: new, appPath: nil))
         #expect(!FileAccess.hasPendingBookmark(new))
+    }
+}
+
+@MainActor @Suite(.tempDir) struct ActionEditorTests {
+    let gh = Action(name: "Search GitHub", keywords: ["gh"], kind: .openURL(template: "https://github.com/search?q={query}"))
+
+    @Test func aNewLinkActionGoesToTheChosenPageAsOneUndoStep() throws {
+        let state = makeState(["A", "B"])
+        state.apply { $0.pages.append(Page(items: [.app(AppRef(bundleID: "c", path: "/Applications/C.app", name: "C"))])) }
+        let model = ActionEditorModel(action: nil, pageID: state.grid.pages[1].id, others: state.grid.allActions)
+        #expect(!model.save(to: state), "nothing saves without a name and a link")
+        #expect(model.errors.count == 2)
+        model.name = "Docs"
+        model.template = "https://example.com/{query}"
+        model.keywordsText = "Docs, d"
+        #expect(model.errors.isEmpty && model.save(to: state))
+        let saved = try #require(state.grid.pages[1].items.last?.action)
+        #expect(saved.name == "Docs" && saved.keywords == ["docs", "d"] && saved.icon == .symbol("link"))
+        state.undo()
+        #expect(state.grid.allActions.isEmpty)
+    }
+
+    @Test func validationNeedsANameAValidLinkAndKeywordsWithoutSpaces() {
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [gh])
+        model.name = "  "
+        model.template = "not a link"
+        model.keywordsText = "ok, two words"
+        #expect(model.errors == ["Enter a name.", "This isn't a valid link. Include its scheme, as in https://",
+                                 "Keywords can't contain spaces: “two words”"])
+        model.name = "Docs"
+        model.template = "https://example.com/?q={query}"
+        model.keywordsText = "GH"
+        #expect(model.errors.isEmpty)
+        #expect(model.warnings == ["“gh” is also a keyword of Search GitHub."], "a repeated keyword warns, not blocks")
+        #expect(model.canSave)
+        model.kind = .command
+        #expect(model.errors == ["Available in the next update"] && !model.canSave)
+        model.kind = .file
+        #expect(model.errors == ["Choose a file or folder."])
+        model.kind = .shortcut
+        #expect(model.errors == ["Enter the name of a Shortcut."])
+        model.shortcutName = "Make GIF"
+        #expect(model.draft?.kind == .shortcut(name: "Make GIF", input: nil))
+    }
+
+    @Test func editingKeepsItsPlaceAndIDAndIsOneUndoStep() throws {
+        let state = makeState(["A"])
+        state.apply { $0.pages[0].items.append(.action(gh)) }
+        let model = ActionEditorModel(action: gh, pageID: nil, others: state.grid.allActions)
+        #expect(model.warnings.isEmpty, "its own keywords aren't repeats")
+        #expect(model.iconChoice == .automatic && model.kind == .link && model.keywordsText == "gh")
+        model.keywordsText = "ghs"
+        model.fill("emoji", "🐙")
+        #expect(model.save(to: state))
+        #expect(state.grid.pages[0].items[1] == .action(Action(id: gh.id, name: gh.name, keywords: ["ghs"], icon: .emoji("🐙"), kind: gh.kind)))
+        state.undo()
+        #expect(state.grid.pages[0].items[1] == .action(gh))
+    }
+
+    @Test func searchOnlyMovesOffThePageAndBackAndAnEditedCommandKeepsItsKind() throws {
+        let state = makeState(["A"])
+        let shell = Action(name: "Build", kind: .shell(command: "make", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        state.apply { $0.pages[0].items += [.action(gh), .action(shell)] }
+        state.setShowsOnGrid(gh.id, false)
+        #expect(state.grid.pages[0].items.map(\.title) == ["A", "Build"] && state.grid.hiddenActions.map(\.name) == ["Search GitHub"])
+        state.undo()
+        #expect(state.grid.hiddenActions.isEmpty && state.grid.pages[0].items.count == 3)
+        let model = ActionEditorModel(action: shell, pageID: nil, others: [])
+        model.name = "Build All"
+        #expect(model.errors.isEmpty && model.save(to: state))
+        #expect(state.grid.item(shell.id)?.action?.kind == shell.kind)
+    }
+
+    @Test func testRunsTheUnsavedDraftWithItsArgument() async throws {
+        let state = makeState(["A"])
+        let opener = FakeOpener()
+        opener.install(on: state)
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model.template = "https://example.com/?q={query}"
+        model.testArgument = "a b"
+        await model.test(with: state)
+        #expect(opener.opened == [URL(string: "https://example.com/?q=a%20b")!])
+        #expect(model.testFailed == false && state.grid.allActions.isEmpty)
     }
 }

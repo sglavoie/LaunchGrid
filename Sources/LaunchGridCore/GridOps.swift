@@ -391,6 +391,19 @@ extension Grid {
         }
     }
 
+    /// Adds a new action: in the first free slot of page `page`, else (no such page, or it's
+    /// full) the grid's first free slot; to `hiddenActions` when it's search-only. Nothing
+    /// else moves.
+    public mutating func addAction(_ action: Action, page: Int? = nil) {
+        guard locateAction(action.id) == nil else { return updateAction(action) }
+        guard action.showsOnGrid else { return hiddenActions.append(action) }
+        if let page, pages.indices.contains(page), pages[page].items.count < capacity {
+            pages[page].items.append(.action(action))
+        } else {
+            appendToFirstFree([.action(action)])
+        }
+    }
+
     /// Replaces the action with `action.id`. One whose `showsOnGrid` changed moves between
     /// its page and `hiddenActions`; one becoming visible goes to the first free slot.
     public mutating func updateAction(_ action: Action) {
