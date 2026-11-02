@@ -757,10 +757,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier(key)
         window.delegate = self
-        window.center()
+        center(window)
         windows[key] = window
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Centres `window` as `center()` does, on the display with the pointer (where the grid
+    /// opens) rather than the main one.
+    private func center(_ window: NSWindow) {
+        window.center()
+        let mouse = NSEvent.mouseLocation
+        guard let target = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }),
+              let current = window.screen ?? NSScreen.main, target != current else { return }
+        let (from, to) = (current.visibleFrame, target.visibleFrame)
+        let size = window.frame.size
+        // The same place relative to the display, kept on it when it's smaller.
+        let x = to.minX + (to.width - size.width) * ((window.frame.minX - from.minX) / max(from.width - size.width, 1))
+        let y = to.minY + (to.height - size.height) * ((window.frame.minY - from.minY) / max(from.height - size.height, 1))
+        window.setFrameOrigin(NSPoint(x: max(to.minX, x), y: max(to.minY, y)))
     }
 
     /// Brings the open window for `key` to the front, over the grid. False when none is open.
