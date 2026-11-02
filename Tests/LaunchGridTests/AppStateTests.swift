@@ -3581,16 +3581,15 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.currentItems[state.focusIndex ?? -1].id == github.id)
     }
 
-    @Test func returnOnAnActionResultRunsIt() throws {
+    @Test func returnOnAnActionResultRunsItWithTheArgument() async throws {
         let state = makeState(["Notes"])
+        let opener = FakeOpener()
+        opener.install(on: state)
         state.apply { $0.hiddenActions = [github] }
-        state.query = "gh x"
+        state.query = "gh launch grid"
         state.activateResult(try #require(state.searchResults.first))
-        #if DEBUG
-        #expect(state.toast == "Actions arrive in a later step")
-        #else
-        #expect(state.toast == nil)
-        #endif
+        try await opener.waitForOpens(1)
+        #expect(opener.opened == [URL(string: "https://github.com/search?q=launch%20grid")!])
     }
 
     @Test func focusOnAnActionResultSurvivesAGridChange() throws {
@@ -3601,5 +3600,316 @@ func installed(_ name: String) -> InstalledApp {
         let focused = try #require(state.searchResults.first)
         state.apply { g in g.pages[0].items.insert(.app(AppRef(bundleID: "com.test.gh", path: "/Applications/gh.app", name: "gh")), at: 0) }
         #expect(state.searchResults[try #require(state.focusIndex)].id == focused.id)
+    }
+}
+
+/// Records what actions open, in place of the system.
+@MainActor final class FakeOpener {
+    private(set) var opened: [URL] = []
+    private(set) var openedWith: [(file: URL, app: URL)] = []
+    private(set) var activates: [Bool] = []
+    var failure: Error?
+
+    var lacksAccess: Set<String> = []
+
+    func system(existing: Set<String>? = nil) -> ActionRunner.System {
+        ActionRunner.System(
+            open: { [self] url, config in
+                activates.append(config.activates)
+                if let failure { throw failure }
+                opened.append(url)
+                return nil
+            },
+            openWith: { [self] url, app, config in
+                activates.append(config.activates)
+                if let failure { throw failure }
+                openedWith.append((url, app))
+                return nil
+            },
+            access: { URL(fileURLWithPath: $0) },
+            lacksAccess: { [self] in lacksAccess.contains($0) },
+            exists: { existing?.contains($0) ?? true }
+        )
+    }
+
+    func install(on state: AppState, existing: Set<String>? = nil) {
+        state.actionRunner = ActionRunner(system: system(existing: existing))
+    }
+
+    func waitForOpens(_ count: Int) async throws {
+        for _ in 0..<200 where opened.count + openedWith.count < count { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(opened.count + openedWith.count == count)
+    }
+}
+
+@MainActor @Suite struct ActionPlanTests {
+    func url(_ kind: ActionKind, _ argument: String? = nil) throws -> String {
+        guard case .open(let url) = try ActionRunner.plan(kind, argument: argument) else { return "" }
+        return url.absoluteString
+    }
+
+    @Test func theArgumentGoesIntoTheLinkEncodedAsAQueryValue() throws {
+        let kind = ActionKind.openURL(template: "https://example.com/s?q={query}&lang=en")
+        #expect(try url(kind, "swift & c++ #1/2") == "https://example.com/s?q=swift%20%26%20c%2B%2B%20%231%2F2&lang=en")
+        #expect(try url(kind, "café") == "https://example.com/s?q=caf%C3%A9&lang=en")
+        #expect(try url(kind) == "https://example.com/s?q=&lang=en", "no argument leaves it empty")
+        #expect(try url(.openURL(template: "obsidian://open?vault={query}"), "Notes") == "obsidian://open?vault=Notes")
+    }
+
+    @Test func aTemplateThatIsNotALinkFails() {
+        for template in ["not a link", "example.com", "", "https://exa mple.com", "{query}"] {
+            #expect(throws: ActionRunner.Failure.invalidLink, "\(template)") {
+                try ActionRunner.plan(.openURL(template: template), argument: nil)
+            }
+        }
+        #expect(ActionRunner.Failure.invalidLink.localizedDescription == "Not a valid link")
+    }
+
+    @Test func aShortcutRunsByNameWithItsInputOrTheArgument() throws {
+        #expect(try url(.shortcut(name: "Make GIF", input: nil)) == "shortcuts://run-shortcut?name=Make%20GIF")
+        #expect(try url(.shortcut(name: "Log", input: nil), "a&b") == "shortcuts://run-shortcut?name=Log&input=text&text=a%26b")
+        #expect(try url(.shortcut(name: "Log", input: "note: {query}"), "hi") == "shortcuts://run-shortcut?name=Log&input=text&text=note%3A%20hi")
+        #expect(try url(.shortcut(name: "Log", input: "fixed"), nil) == "shortcuts://run-shortcut?name=Log&input=text&text=fixed")
+        #expect(try url(.shortcut(name: "Log", input: "{query}"), nil) == "shortcuts://run-shortcut?name=Log", "an empty input is none")
+        #expect(throws: ActionRunner.Failure.noShortcut) { try ActionRunner.plan(.shortcut(name: " ", input: nil), argument: nil) }
+    }
+
+    @Test func aFileOpensWithItsAppAndCommandsCannotRunYet() throws {
+        #expect(try ActionRunner.plan(.openFile(path: "/Users/x/a.txt", appPath: "/Applications/TextEdit.app"), argument: "ignored")
+                == .openFile(path: "/Users/x/a.txt", appPath: "/Applications/TextEdit.app"))
+        #expect(try ActionRunner.plan(.openFile(path: "/Users/x/a.txt", appPath: ""), argument: nil) == .openFile(path: "/Users/x/a.txt", appPath: nil))
+        #expect(throws: ActionRunner.Failure.noFile) { try ActionRunner.plan(.openFile(path: "", appPath: nil), argument: nil) }
+        #expect(throws: ActionRunner.Failure.notAvailable) {
+            try ActionRunner.plan(.shell(command: "ls", runMode: .background, workingDirectory: nil, timeoutSeconds: nil), argument: nil)
+        }
+        #expect(throws: ActionRunner.Failure.notAvailable) {
+            try ActionRunner.plan(.userScript(fileName: "a.sh", arguments: [], runMode: .terminal), argument: nil)
+        }
+    }
+
+    @Test func aMissingFileOrAppIsSaidByName() async throws {
+        let opener = FakeOpener()
+        let runner = ActionRunner(system: opener.system(existing: ["/Users/x/a.txt"]))
+        await #expect(throws: ActionRunner.Failure.fileNotFound("/Users/x/gone.txt")) {
+            try await runner.perform(.openFile(path: "/Users/x/gone.txt", appPath: nil))
+        }
+        await #expect(throws: ActionRunner.Failure.appNotFound("/Applications/Gone.app")) {
+            try await runner.perform(.openFile(path: "/Users/x/a.txt", appPath: "/Applications/Gone.app"))
+        }
+        #expect(ActionRunner.Failure.fileNotFound("/Users/x/gone.txt").localizedDescription == "“gone.txt” could not be found.")
+
+        // Seen but not ours to hand on, in the sandbox: the system's vague failure becomes this.
+        opener.failure = CocoaError(.fileReadNoPermission)
+        opener.lacksAccess = ["/Users/x/a.txt"]
+        await #expect(throws: ActionRunner.Failure.noAccess("/Users/x/a.txt")) {
+            try await runner.perform(.openFile(path: "/Users/x/a.txt", appPath: nil))
+        }
+        opener.lacksAccess = []
+        await #expect(throws: CocoaError.self) { try await runner.perform(.openFile(path: "/Users/x/a.txt", appPath: nil)) }
+        #expect(opener.opened.isEmpty && opener.openedWith.isEmpty)
+    }
+}
+
+@MainActor @Suite(.tempDir) struct RunActionTests {
+    let link = Action(name: "Docs", kind: .openURL(template: "https://example.com/docs"))
+    let broken = Action(name: "Broken", kind: .openURL(template: "not a link"))
+    let file = Action(name: "Notes", kind: .openFile(path: "/Users/x/notes.txt", appPath: "/Applications/TextEdit.app"))
+
+    func state(with actions: [Action], opener: FakeOpener) -> AppState {
+        let state = makeState(["A"])
+        opener.install(on: state)
+        state.apply { $0.pages[0].items += actions.map(GridItem.action) }
+        state.isShown = true
+        return state
+    }
+
+    @Test func runningHidesTheGridFirstAndOpensInFront() async throws {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        var hid = 0
+        state.onHideForLaunch = { hid += 1 }
+        await state.run(link, argument: nil)?.value
+        #expect(hid == 1 && opener.opened == [URL(string: "https://example.com/docs")!] && opener.activates == [true])
+        #expect(state.toast == nil)
+    }
+
+    @Test func withTheGridStayingUpItOpensBehind() async throws {
+        let opener = FakeOpener()
+        let state = state(with: [file], opener: opener)
+        state.prefs.hideAfterLaunch = false
+        var hid = 0
+        state.onHideForLaunch = { hid += 1 }
+        await state.run(file, argument: nil)?.value
+        #expect(hid == 0 && opener.activates == [false])
+        #expect(opener.openedWith.map(\.file.path) == ["/Users/x/notes.txt"])
+        #expect(opener.openedWith.map(\.app.path) == ["/Applications/TextEdit.app"])
+    }
+
+    @Test func aLinkThatIsNotOneFailsInAToastBeforeHiding() async throws {
+        let opener = FakeOpener()
+        let state = state(with: [broken], opener: opener)
+        var hid = 0
+        state.onHideForLaunch = { hid += 1 }
+        #expect(state.run(broken, argument: nil) == nil)
+        #expect(hid == 0 && opener.activates.isEmpty)
+        #expect(state.toast == "Could not run Broken: Not a valid link")
+    }
+
+    @Test func aFailureOnceHiddenIsAnAlertAndWhileShownAToast() async throws {
+        let opener = FakeOpener()
+        opener.failure = ActionRunner.Failure(message: "No app can open it")
+        let state = state(with: [link], opener: opener)
+        var errors: [String] = []
+        state.onError = { title, detail in errors.append("\(title) | \(detail)") }
+        state.onHideForLaunch = { state.isShown = false }
+        await state.run(link, argument: nil)?.value
+        #expect(errors == ["Could not run Docs | No app can open it"] && state.toast == nil)
+
+        state.isShown = true
+        state.prefs.hideAfterLaunch = false
+        await state.run(link, argument: nil)?.value
+        #expect(state.toast == "Could not run Docs: No app can open it" && errors.count == 1)
+    }
+
+    @Test func anActionChangedSinceTheTileWasDrawnRunsAsItIsNow() async throws {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        var edited = link
+        edited.kind = .openURL(template: "https://example.com/new")
+        state.apply { $0.updateAction(edited) }
+        await state.run(link, argument: nil)?.value
+        #expect(opener.opened == [URL(string: "https://example.com/new")!])
+
+        state.apply { $0.remove([link.id], installed: []) }
+        #expect(state.run(link, argument: nil) == nil, "a removed action doesn't run")
+    }
+
+    @Test func clickingAnActionTileAndItsMenusOpenRunIt() async throws {
+        let opener = FakeOpener()
+        let state = state(with: [link, file], opener: opener)
+        state.activate(.action(link))
+        try await opener.waitForOpens(1)
+        let menu = MenuEntry.item(.action(link), state: state)
+        guard case .action(let open) = menu.first(where: { $0.title == "Open" })?.kind else {
+            Issue.record("expected Open")
+            return
+        }
+        open()
+        try await opener.waitForOpens(2)
+    }
+
+    @Test func anActionsMenuOffersWhatSuitsIt() {
+        let opener = FakeOpener()
+        let state = state(with: [link, file], opener: opener)
+        let titles = { (item: GridItem) in MenuEntry.item(item, state: state).map(\.title).filter { !$0.isEmpty } }
+        #expect(titles(.action(link)) == ["Open", "Rename…", "Move to Page", "Select", "Remove from Grid"])
+        #expect(titles(.action(file)) == ["Open", "Show in Finder", "Rename…", "Move to Page", "Select", "Remove from Grid"])
+
+        // With an app selected too, everything but grouping.
+        state.selection = [link.id, state.grid.allApps[0].id]
+        #expect(!titles(.action(link)).contains { $0.hasPrefix("Group") })
+        #expect(titles(.action(link)).contains("Move 2 Items to Page"))
+    }
+
+    @Test func aSelectionWithAnActionDoesNotGroup() {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        state.apply { $0.pages[0].items.append(.app(AppRef(bundleID: "com.test.B", path: "/Applications/B.app", name: "B"))) }
+        state.selection = Set(state.currentItems.map(\.id))
+        #expect(!state.canGroup(state.orderedSelection))
+        let before = state.grid
+        state.groupSelection()
+        #expect(state.grid == before)
+    }
+
+    @Test func renamingAnActionSaysSoAndIsUndoable() {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        state.beginRename(link.id)
+        #expect(state.textEdit?.title == "Rename Action" && state.textEdit?.text == "Docs")
+        state.commitTextEdit("Manual")
+        #expect(state.grid.item(link.id)?.title == "Manual")
+        state.undo()
+        #expect(state.grid.item(link.id)?.title == "Docs")
+    }
+
+    @Test func movingAnActionToAnotherPageAndRemovingItAreUndoable() {
+        let opener = FakeOpener()
+        let state = state(with: [link], opener: opener)
+        state.moveToPage([link.id], pageID: nil)
+        #expect(state.grid.pages.count == 2 && state.grid.pages[1].items.map(\.id) == [link.id])
+        state.remove([link.id])
+        #expect(state.grid.allActions.isEmpty && state.toast == "Removed Docs — ⌘Z to undo")
+        state.undo()
+        #expect(state.grid.allActions.map(\.id) == [link.id])
+    }
+}
+
+/// In the serialized sandbox suite: `FileAccess` is shared, and another suite's sandbox would
+/// swap its backend while a test here awaits.
+extension SandboxFileAccessTests {
+    @Test func filesPickedForActionsAreForgottenOnceNoActionUsesThem() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        prefs.customImagePath = "/Users/x/bg.jpg"
+        for path in ["/Users/x/notes.txt", "/Users/x/old.txt", "/Users/x/Editor.app", "/Users/x/bg.jpg"] {
+            #expect(FileAccess.rememberForAction(URL(fileURLWithPath: path)))
+        }
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/Tools"))
+        FileAccess.forgetUnused(notIn: ["/Users/x/notes.txt", "/Users/x/Editor.app"], prefs: prefs)
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Editor.app", "/Users/x/Tools", "/Users/x/bg.jpg", "/Users/x/notes.txt"],
+                "a folder setting's and the background picture's bookmarks stay")
+        #expect(sandbox.closed == ["/Users/x/old.txt"])
+        #expect(FileAccess.url(for: "/Users/x/notes.txt") == URL(fileURLWithPath: "/Users/x/notes.txt"))
+
+        prefs.customImagePath = nil
+        FileAccess.forgetUnused(notIn: [], prefs: prefs)
+        #expect(sandbox.saved.keys.sorted() == ["/Users/x/Tools", "/Users/x/bg.jpg"],
+                "the picture had stopped being an action's: its setting forgets it")
+    }
+
+    @Test func aMovedFilesBookmarkStaysAnActionsAtItsNewPlace() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let old = "/Users/x/notes.txt", new = "/Users/x/Archive/notes.txt"
+        FileAccess.rememberForAction(URL(fileURLWithPath: old))
+        FileAccess.reset()
+        sandbox.install()
+        sandbox.moves[old] = new
+        #expect(FileAccess.restore(prefs: prefs) == [old: new])
+        FileAccess.forgetUnused(notIn: [], prefs: prefs)
+        #expect(sandbox.saved.isEmpty, "still counted as an action's file, so it goes when unused")
+    }
+
+    @Test func actionFilesAndTheirAppsAreInUseThroughTheHistory() {
+        let state = makeState(["A"])
+        let file = Action(name: "Notes", kind: .openFile(path: "/Users/x/notes.txt", appPath: "/Users/x/Editor.app"))
+        state.apply { $0.pages[0].items.append(.action(file)) }
+        state.remove([file.id])
+        #expect(state.pathsInUse.isSuperset(of: ["/Users/x/notes.txt", "/Users/x/Editor.app", "/Applications/A.app"]),
+                "⌘Z can bring it back")
+        #expect(!state.appPathsInUse.contains("/Users/x/notes.txt"))
+    }
+
+    @Test func aPendingBookmarkIsRetriedWhenTheActionRuns() async throws {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let old = "/Volumes/Ext/notes.txt", new = "/Volumes/Ext/Moved/notes.txt"
+        FileAccess.rememberForAction(URL(fileURLWithPath: old))
+        FileAccess.reset()
+        sandbox.install()
+        #expect(FileAccess.hasPendingBookmark(old))
+        sandbox.moves[old] = new
+        let state = makeState(["A"])
+        let opener = FakeOpener()
+        opener.install(on: state)
+        let file = Action(name: "Notes", kind: .openFile(path: old, appPath: nil))
+        state.apply { $0.pages[0].items.append(.action(file)) }
+        await state.run(file, argument: nil)?.value
+        #expect(opener.opened.map(\.path) == [new], "followed to where it went")
+        #expect(state.grid.item(file.id)?.action?.kind == .openFile(path: new, appPath: nil))
+        #expect(!FileAccess.hasPendingBookmark(new))
     }
 }

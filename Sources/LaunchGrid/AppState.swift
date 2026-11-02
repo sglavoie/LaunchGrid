@@ -183,6 +183,8 @@ final class AppState {
     /// After each save, with the paths of every app the grid, its undo history or its
     /// recently pruned apps still refer to; access kept to any other app can go.
     @ObservationIgnored var onAppPathsInUse: (Set<String>) -> Void = { _ in }
+    /// Opens what actions name. Tests swap in one that records instead.
+    @ObservationIgnored var actionRunner = ActionRunner()
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -590,7 +592,7 @@ final class AppState {
             if reportingFailure { reportLastBackupFailure() }
         }
         // Before the first layout nothing is on the grid yet, so nothing is unused either.
-        if hasGridFile { onAppPathsInUse(appPathsInUse) }
+        if hasGridFile { onAppPathsInUse(pathsInUse) }
         return true
     }
 
@@ -632,6 +634,21 @@ final class AppState {
             paths.formUnion(g.allApps.map(\.path))
             let recent = g.recentlyPruned.filter { (0..<Reconciler.restoreWindow).contains(now.timeIntervalSince($0.prunedAt)) }
             paths.formUnion(recent.map(\.app.path))
+        }
+        return paths
+    }
+
+    /// `appPathsInUse`, and the files actions open and the apps they open them with, in the
+    /// undo and redo history too: what the sandbox must keep access to.
+    var pathsInUse: Set<String> {
+        var paths = appPathsInUse
+        for g in [grid] + undoStack + redoStack {
+            for action in g.allActions {
+                if case .openFile(let path, let appPath) = action.kind {
+                    paths.insert(path)
+                    if let appPath { paths.insert(appPath) }
+                }
+            }
         }
         return paths
     }
@@ -1238,12 +1255,49 @@ final class AppState {
         }
     }
 
-    /// Runs an action, with the argument typed after its keyword in search.
-    func run(_ action: Action, argument: String?) {
-        // Running actions comes in a later step; until then only debug builds say so.
-        #if DEBUG
-        showToast("Actions arrive in a later step")
-        #endif
+    /// Runs an action, with the argument typed after its keyword in search. As launching an
+    /// app: the grid gets out of the way first (when set to), and a failure is told in a toast
+    /// while it's up, in an alert otherwise. A link that isn't one fails before the grid hides.
+    /// Returns the work started, for the tests to wait on.
+    @discardableResult
+    func run(_ action: Action, argument: String?) -> Task<Void, Never>? {
+        // A SwiftUI tile or an open menu can still hold an action from before it was edited.
+        guard let action = grid.item(action.id)?.action else { return nil }
+        let plan: ActionRunner.Plan
+        do {
+            plan = try ActionRunner.plan(action.kind, argument: argument)
+        } catch {
+            reportRunFailure(of: action, error)
+            return nil
+        }
+        let hides = prefs.hideAfterLaunch
+        if hides { onHideForLaunch() }
+        return Task {
+            do {
+                var plan = plan
+                // Its bookmark didn't open at launch (a volume that wasn't connected): try it
+                // again now, following the file if it was moved.
+                if case .openFile(let path, _) = plan, FileAccess.hasPendingBookmark(path) {
+                    followMovedApps(await FileAccess.restoreInBackground(prefs: prefs))
+                    if let now = grid.item(action.id)?.action, let again = try? ActionRunner.plan(now.kind, argument: argument) {
+                        plan = again
+                    }
+                }
+                let running = try await actionRunner.perform(plan, activates: hides)
+                if !hides, let running { onLaunchedBehind(running) }
+            } catch {
+                if Launcher.isUserCancel(error) { return }
+                reportRunFailure(of: action, error)
+            }
+        }
+    }
+
+    private func reportRunFailure(of action: Action, _ error: Error) {
+        if isShown {
+            showToast(String(localized: "Could not run \(action.name): \(error.localizedDescription)"))
+        } else {
+            onError(String(localized: "Could not run \(action.name)"), error.localizedDescription)
+        }
     }
 
     /// Click / Return on an item.
@@ -1418,9 +1472,14 @@ final class AppState {
     /// Groups the selection into a folder where `anchor` is; without one, where the focused
     /// item is, if selected, else the first selected item on the page shown, so the folder
     /// opens where the person is looking.
+    /// Whether `ids` can make a folder: actions can't go in one yet.
+    func canGroup(_ ids: [UUID]) -> Bool {
+        !ids.contains { grid.item($0)?.action != nil }
+    }
+
     func groupSelection(anchor: UUID? = nil) {
         let ids = orderedSelection
-        guard selectionActionable, ids.count > 1 else { return }
+        guard selectionActionable, ids.count > 1, canGroup(ids) else { return }
         let name = GridBuilder.folderName(for: ids.compactMap { grid.item($0)?.app }.map { installedApp(for: $0) })
         let shown = openFolder.map { $0.apps.map(\.id) } ?? currentItems.map(\.id)
         let focused = focusIndex.flatMap { shown.indices.contains($0) ? shown[$0] : nil }
@@ -1501,7 +1560,12 @@ final class AppState {
 
     func beginRename(_ id: UUID) {
         guard let item = grid.item(id) else { return }
-        textEdit = TextEditRequest(target: .item(id), title: item.folder == nil ? String(localized: "Rename App") : String(localized: "Rename Folder"), text: item.title)
+        let title = switch item {
+        case .app: String(localized: "Rename App")
+        case .folder: String(localized: "Rename Folder")
+        case .action: String(localized: "Rename Action")
+        }
+        textEdit = TextEditRequest(target: .item(id), title: title, text: item.title)
     }
 
     func beginPageTitleEdit(_ page: Int) {

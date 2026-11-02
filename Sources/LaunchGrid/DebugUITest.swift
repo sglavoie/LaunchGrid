@@ -21,6 +21,9 @@ enum DebugUITest {
         /// Actions in the layout's own JSON form. One that shows on the grid is placed where
         /// its name appears in `pages`; a search-only one goes to the grid's hidden actions.
         var actions: [Action]?
+        /// Text files written, by name, into a `files` folder in the run's artifacts before the
+        /// steps start; `${FILES}` anywhere in the scenario stands for that folder's path.
+        var files: [String: String]?
 
         func grid() throws -> Grid {
             guard rows > 0, columns > 0, !pages.isEmpty, pageTitles.count == pages.count,
@@ -94,7 +97,7 @@ enum DebugUITest {
         "fdrag", "finside", "fhold", "hold", "release", "page", "folder", "focus",
         "edit", "select", "fselect", "search", "type", "group", "undo", "redo",
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
-        "movetopage", "titleedit", "autoadd", "windowsize",
+        "movetopage", "titleedit", "autoadd", "windowsize", "addaction", "runaction",
     ]
 
     static func snapshot(_ state: AppState, overlay: OverlayController) -> [String: Value] {
@@ -150,9 +153,18 @@ enum DebugUITest {
             var expected: [String: Value] = [:]
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                var data = try Data(contentsOf: URL(fileURLWithPath: path))
                 try data.write(to: dir.appendingPathComponent("scenario.json"))
+                let files = dir.appendingPathComponent("files")
+                data = Data(String(decoding: data, as: UTF8.self).replacingOccurrences(of: "${FILES}", with: files.path).utf8)
                 let scenario = try JSONDecoder().decode(Scenario.self, from: data)
+                if let fixtureFiles = scenario.fixture.files {
+                    try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+                    for (name, text) in fixtureFiles {
+                        guard !name.contains("/"), !name.hasPrefix(".") else { throw Failure("Fixture file names must be plain: \(name)") }
+                        try Data(text.utf8).write(to: files.appendingPathComponent(name))
+                    }
+                }
                 guard !NSScreen.screens.isEmpty else {
                     throw Failure("UI tests need a logged-in graphical macOS session")
                 }

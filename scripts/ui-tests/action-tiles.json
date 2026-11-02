@@ -1,0 +1,45 @@
+{
+  "name": "Action tiles rename, reorder, move between pages and leave as apps do, but never merge into folders",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Docs", "Alpha", "Beta"], ["Gamma"]],
+    "pageTitles": ["First", "Second"],
+    "folders": {},
+    "actions": [
+      {"name": "Docs", "keywords": ["dc"], "kind": {"type": "openURL", "template": "https://example.com/docs"}}
+    ]
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "keys:cmd+e@14"},
+    {"run": "keys:125"},
+    {"expect": {"focus": "Docs", "editing": true}},
+    {"run": "menuhold"},
+    {"run": "menurun:Rename…"},
+    {"expect": {"textEdit": "item:Docs"}},
+    {"run": "keys:m,a,n,u,a,l"},
+    {"run": "keys:36"},
+    {"expect": {"textEdit": "", "pages": [["manual", "Alpha", "Beta"], ["Gamma"]]}},
+    {"run": "merge:0,1"},
+    {"expect": {"folders": {}, "dragging": false, "apps": ["Alpha", "Beta", "Gamma"]}},
+    {"run": "merge:1,0"},
+    {"expect": {"folders": {}, "dragging": false, "apps": ["Alpha", "Beta", "Gamma"]}},
+    {"run": "keys:cmd+z@6"},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {"pages": [["manual", "Alpha", "Beta"], ["Gamma"]]}},
+    {"run": "drag:0,2"},
+    {"expect": {"pages": [["Alpha", "Beta", "manual"], ["Gamma"]], "dragging": false}},
+    {"run": "click:2"},
+    {"expect": {"selection": ["manual"], "editing": true}},
+    {"run": "keys:51"},
+    {"expect": {"pages": [["Alpha", "Beta"], ["Gamma"]], "toast": "Removed manual — ⌘Z to undo"}},
+    {"run": "keys:cmd+z@6"},
+    {"expect": {"pages": [["Alpha", "Beta", "manual"], ["Gamma"]]}},
+    {"run": "drag:2,0"},
+    {"expect": {"pages": [["manual", "Alpha", "Beta"], ["Gamma"]], "dragging": false}},
+    {"run": "menuhold"},
+    {"run": "menurun:2 — Second"},
+    {"expect": {"pages": [["Alpha", "Beta"], ["Gamma", "manual"]], "editing": true}}
+  ]
+}

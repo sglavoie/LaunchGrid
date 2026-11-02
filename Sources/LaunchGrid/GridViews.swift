@@ -173,7 +173,7 @@ struct TopBar: View {
                 // With part of it on other pages, the count says what they act on.
                 let count = state.selection.count
                 let counted = state.selectionOutOfView > 0
-                if state.selectionActionable && count > 1 {
+                if state.selectionActionable && count > 1 && state.canGroup(state.orderedSelection) {
                     Button(counted ? "Group \(count)" : "Group") { state.groupSelection() }
                         .buttonStyle(PillButtonStyle())
                 }
@@ -636,8 +636,8 @@ struct ItemView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
-        // VoiceOver reads a folder's size after its name.
-        .accessibilityValue(item.folder.map { Text("\($0.apps.count) apps") } ?? Text(verbatim: ""))
+        // VoiceOver reads a folder's size after its name, and says an action is one.
+        .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
@@ -648,11 +648,19 @@ struct ItemView: View {
         return Text(verbatim: item.title)
     }
 
+    private var accessibilityValue: Text {
+        switch item {
+        case .folder(let f): Text("\(f.apps.count) apps")
+        case .action: Text("Action")
+        case .app: Text(verbatim: "")
+        }
+    }
+
     @ViewBuilder private var icon: some View {
         switch item {
         case .app(let a): AppIcon(path: a.path, size: iconSize)
         case .folder(let f): FolderIcon(folder: f, size: iconSize, open: mergeTarget)
-        case .action(let a): ActionIconPlaceholder(action: a, size: iconSize)
+        case .action(let a): ActionTile(action: a, size: iconSize)
         }
     }
 }
@@ -771,7 +779,7 @@ struct DragGhost: View {
                 switch item {
                 case .app(let a): AppIcon(path: a.path, size: size)
                 case .folder(let f): FolderIcon(folder: f, size: size)
-                case .action(let a): ActionIconPlaceholder(action: a, size: size)
+                case .action(let a): ActionTile(action: a, size: size)
                 }
             }
             .scaleEffect(1.1)
@@ -1182,6 +1190,18 @@ struct MenuEntry {
                 // Finder comes forward like a launched app: an app opened behind mustn't cover it.
                 state.onHideForLaunch()
             })
+        } else if case .action(let a) = item {
+            entries.append(.button(String(localized: "Open")) {
+                guard let current = state.grid.item(a.id)?.action else { return }
+                state.run(current, argument: nil)
+            })
+            if case .openFile = a.kind {
+                entries.append(.button(String(localized: "Show in Finder")) {
+                    guard case .openFile(let path, _) = state.grid.item(a.id)?.action?.kind else { return }
+                    NSWorkspace.shared.activateFileViewerSelecting([FileAccess.url(for: path)])
+                    state.onHideForLaunch()
+                })
+            }
         } else if case .folder(let f) = item {
             entries.append(.button(String(localized: "Open Folder")) { state.openFolder(f.id) })
             entries.append(.button(String(localized: "Ungroup")) { state.apply { $0.ungroup(f.id) } })
@@ -1198,7 +1218,8 @@ struct MenuEntry {
         let newPage = MenuEntry.button(String(localized: "New Page")) { state.moveToPage(targets, pageID: nil) }
         entries.append(.submenu(multi ? String(localized: "Move \(targets.count) Items to Page") : String(localized: "Move to Page"),
                                 pages + [.divider, newPage]))
-        if multi {
+        // Actions don't go in folders yet.
+        if multi && state.canGroup(targets) {
             entries.append(.button(String(localized: "Group \(targets.count) Items")) { state.groupSelection(anchor: item.id) })
         }
         // Not from search results: the selection would stay behind, out of sight, once the
@@ -1317,22 +1338,118 @@ struct BackgroundMenu: View {
     var body: some View { MenuEntries(entries: MenuEntry.page(state: state)) }
 }
 
-/// Stand-in icon so a layout holding actions still draws; the real action tile comes later.
-struct ActionIconPlaceholder: View {
+/// An action's icon, the size of an app's: its SF Symbol or emoji on a rounded square, or
+/// the picture chosen for it, loaded off the main thread and cached as app icons are.
+struct ActionTile: View {
     let action: Action
     let size: CGFloat
 
     var body: some View {
-        let symbol: String = {
-            if case .symbol(let name) = action.icon { return name }
-            if case .symbol(let name) = action.kind.defaultIcon { return name }
-            return "questionmark.square"
-        }()
-        Image(systemName: symbol)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size * 0.6, height: size * 0.6)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        Group {
+            if case .image(let path) = action.icon {
+                ActionPicture(path: path, size: size, fallback: action.kind.defaultIcon)
+            } else {
+                ActionGlyph(icon: action.icon, size: size, hue: ActionTile.hue(for: action.id))
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+
+    /// A steady hue per action, so tiles side by side tell apart (not `hashValue`, which
+    /// changes from launch to launch).
+    static func hue(for id: UUID) -> Double {
+        let bytes = withUnsafeBytes(of: id.uuid) { Array($0) }
+        return Double(bytes.reduce(0) { ($0 &* 31 &+ Int($1)) % 360 }) / 360
+    }
+}
+
+/// A symbol or an emoji on a rounded square shaped like an app icon's.
+struct ActionGlyph: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+    let icon: ActionIcon
+    let size: CGFloat
+    let hue: Double
+
+    var body: some View {
+        // Inset like the artwork of a macOS app icon, which leaves a margin inside its frame.
+        let side = size * 0.82
+        ZStack {
+            RoundedRectangle(cornerRadius: side * 0.225, style: .continuous)
+                .fill(LinearGradient(colors: [Color(hue: hue, saturation: 0.55, brightness: 0.82),
+                                              Color(hue: hue, saturation: 0.7, brightness: 0.55)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(RoundedRectangle(cornerRadius: side * 0.225, style: .continuous)
+                    .strokeBorder(.white.opacity(contrast == .increased ? 0.6 : 0.18), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: size * 0.03, y: size * 0.015)
+            switch icon {
+            case .symbol(let name):
+                Image(systemName: NSImage(systemSymbolName: name, accessibilityDescription: nil) == nil ? "questionmark" : name)
+                    .resizable()
+                    .scaledToFit()
+                    .fontWeight(.medium)
+                    .foregroundStyle(.white)
+                    .frame(width: side * 0.52, height: side * 0.52)
+            case .emoji(let value):
+                Text(verbatim: value)
+                    .font(.system(size: side * 0.58))
+                    .minimumScaleFactor(0.3)
+                    .lineLimit(1)
+            case .image:
+                EmptyView()
+            }
+        }
+        .frame(width: side, height: side)
+    }
+}
+
+/// The picture chosen as an action's icon. Until it loads, or when it can't be read, the
+/// action's default symbol stands in.
+struct ActionPicture: View {
+    let path: String
+    let size: CGFloat
+    let fallback: ActionIcon
+    @State private var loaded: NSImage?
+
+    var body: some View {
+        Group {
+            if let image = ActionPictureCache.shared.cached(path) ?? loaded {
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
+            } else {
+                ActionGlyph(icon: fallback, size: size, hue: 0.6)
+            }
+        }
+        .task(id: path) {
+            let image = await ActionPictureCache.shared.image(path)
+            guard !Task.isCancelled else { return }
+            if image !== loaded { loaded = image }
+        }
+    }
+}
+
+/// Pictures chosen as action icons, read off the main thread, scaled down once and kept.
+@MainActor
+final class ActionPictureCache {
+    static let shared = ActionPictureCache()
+    private let cache = NSCache<NSString, NSImage>()
+
+    func cached(_ path: String) -> NSImage? { cache.object(forKey: path as NSString) }
+
+    func image(_ path: String) async -> NSImage? {
+        if let image = cached(path) { return image }
+        // Through its bookmark in the sandbox, whose access is in use.
+        let url = FileAccess.url(for: path)
+        let pixels = IconProvider.pixelSize
+        let image = await Disk.run { () -> SendableImage? in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: pixels,
+                  ] as CFDictionary) else { return nil }
+            return SendableImage(image: NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
+        }?.image
+        if let image { cache.setObject(image, forKey: path as NSString) }
+        return image
     }
 }

@@ -430,6 +430,14 @@ extension Grid {
             a.path = movedPath(a.path)
             return a
         }
+        // The file an action opens, and the app it opens it with, follow too: their sandbox
+        // bookmarks moved with them.
+        func moved(_ a: Action) -> Action {
+            guard case .openFile(let path, let appPath) = a.kind else { return a }
+            var a = a
+            a.kind = .openFile(path: movedPath(path), appPath: appPath.map(movedPath))
+            return a
+        }
         for p in pages.indices {
             for i in pages[p].items.indices {
                 switch pages[p].items[i] {
@@ -438,11 +446,12 @@ extension Grid {
                 case .folder(var f):
                     f.apps = f.apps.map(moved)
                     pages[p].items[i] = .folder(f)
-                case .action:
-                    break
+                case .action(let a):
+                    pages[p].items[i] = .action(moved(a))
                 }
             }
         }
+        hiddenActions = hiddenActions.map(moved)
         for i in recentlyPruned.indices { recentlyPruned[i].app = moved(recentlyPruned[i].app) }
         removedBundleIDs = Set(removedBundleIDs.map(movedPath))
     }

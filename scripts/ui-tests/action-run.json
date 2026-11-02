@@ -1,0 +1,41 @@
+{
+  "name": "Running link actions hides the grid, and a template that isn't a link says so",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Delta", "Notes File"]],
+    "pageTitles": [""],
+    "folders": {},
+    "files": {"note.txt": "LaunchGrid UI test fixture: an action opened this file.\n"},
+    "actions": [
+      {"name": "Notes File", "keywords": ["nf"],
+       "kind": {"type": "openURL", "template": "file://${FILES}/note.txt"}},
+      {"name": "Read Me", "keywords": ["rd"], "showsOnGrid": false,
+       "kind": {"type": "openURL", "template": "file://${FILES}/{query}"}}
+    ]
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "keys:n,f"},
+    {"expect": {"query": "nf", "searchResults": ["Notes File"], "focus": "Notes File"}},
+    {"run": "keys:36"},
+    {"expect": {"shown": false, "toast": ""}},
+    {"run": "show"},
+    {"expect": {"shown": true, "keyWindow": true}},
+    {"run": "search:rd note.txt"},
+    {"expect": {"searchResults": ["Read Me"], "searchArguments": ["note.txt"]}},
+    {"run": "keys:36"},
+    {"expect": {"shown": false, "toast": ""}},
+    {"run": "show"},
+    {"expect": {"shown": true, "keyWindow": true}},
+    {"run": "addaction:{\"name\": \"Broken Link\", \"keywords\": [\"bl\"], \"kind\": {\"type\": \"openURL\", \"template\": \"not a link {query}\"}}"},
+    {"run": "search:bl"},
+    {"expect": {"searchResults": ["Broken Link"], "pages": [["Delta", "Notes File", "Broken Link"]]}},
+    {"run": "keys:36"},
+    {"expect": {"shown": true, "toast": "Could not run Broken Link: Not a valid link"}},
+    {"run": "search:"},
+    {"expect": {"query": "", "pagerReady": true}},
+    {"run": "click:1"},
+    {"expect": {"shown": false}}
+  ]
+}

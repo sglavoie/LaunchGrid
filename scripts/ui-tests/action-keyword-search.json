@@ -19,8 +19,6 @@
     {"expect": {"query": "gh", "searchResults": ["Search GitHub", "GitHub Home", "Ghostty"], "searchArguments": ["", "", ""], "focus": "Search GitHub"}},
     {"run": "keys: @49,l,a,u,n,c,h"},
     {"expect": {"query": "gh launch", "searchResults": ["Search GitHub"], "searchArguments": ["launch"]}},
-    {"run": "keys:36"},
-    {"expect": {"query": "gh launch", "toast": "Actions arrive in a later step"}},
     {"run": "search:ghh launch"},
     {"expect": {"searchResults": []}},
     {"run": "keys:cmd+e@14"},

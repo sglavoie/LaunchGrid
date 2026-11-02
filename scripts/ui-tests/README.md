@@ -41,6 +41,12 @@ An optional `actions` array holds actions in the layout's JSON form (`name`, `ke
 `kind`, `showsOnGrid`). One shown on the grid is placed where its name appears in `pages`;
 a search-only one (`"showsOnGrid": false`) is kept off every page.
 
+An optional `files` object maps plain file names to text. They are written into a `files`
+folder in the scenario's artifacts before the first step, and `${FILES}` anywhere in the
+scenario stands for that folder's path, e.g. a link action whose template is
+`file://${FILES}/note.txt`. Running it opens the file in its default app (TextEdit for
+`.txt`) without any network access. The path must not contain spaces, which a link can't hold.
+
 Fixture names must be unique, including folder names, their apps and search-only actions. A name in `pages`
 whose key exists in `folders` represents that folder. Page titles correspond to pages in order.
 Every page must fit the specified rows and columns.
@@ -63,6 +69,7 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | `menuhold`, `pagemenuhold`, `menurun:Sort This Page` | Capture an item/page menu, then run a captured callback |
 | `fakeinstall:Echo`, `autoadd:on` | Simulate a catalog update using the reconciler |
 | `pagetitle:First`, `titleedit` | Set a page title or open its editor |
+| `addaction:{"name": "X", "kind": {...}}`, `runaction:X,argument` | Add an action from its layout JSON (no `;` inside), or run one by name |
 
 Prefer events for the behavior under test; direct state commands are useful for setup.
 Indices are zero-based. Key codes are macOS virtual key codes; literal characters can include

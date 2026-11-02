@@ -476,6 +476,59 @@ enum DebugScript {
                 case "folders":
                     print("folders: \(state.prefs.extraFolders)")
                     fflush(stdout)
+                case "addaction":
+                    // "addaction:<json>": an action in the layout's JSON form, on the first free slot
+                    // (or kept off the pages when "showsOnGrid" is false), as one undoable change.
+                    guard let action = try? JSONDecoder().decode(Action.self, from: Data(arg.utf8)) else {
+                        let message = "addaction: not an action: \(arg)"
+                        print(message); fflush(stdout)
+                        if strict { completion?(message); return }
+                        break
+                    }
+                    state.apply { g in
+                        if action.showsOnGrid { g.appendToFirstFree([.action(action)]) } else { g.hiddenActions.append(action) }
+                    }
+                    print("addaction: \(action.name)")
+                    fflush(stdout)
+                case "runaction":
+                    // "runaction:<name>[,argument]": runs the action named, as Return on its search result.
+                    let n = arg.split(separator: ",", maxSplits: 1).map(String.init)
+                    guard let name = n.first, let action = state.grid.allActions.first(where: { $0.name == name }) else {
+                        let message = "runaction: no action named \(arg)"
+                        print(message); fflush(stdout)
+                        if strict { completion?(message); return }
+                        break
+                    }
+                    state.run(action, argument: n.count > 1 ? n[1] : nil)
+                case "actions":
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                    for action in state.grid.allActions {
+                        print("actions: \(String(decoding: (try? encoder.encode(action)) ?? Data(), as: UTF8.self))")
+                    }
+                    fflush(stdout)
+                case "pickactionfile", "pickactionapp":
+                    // "pickactionfile:<name>": the open panel, then the file picked set as what the
+                    // action named opens, with its sandbox bookmark (the action editor's job, to come);
+                    // "pickactionapp:<name>" sets the app it opens it with.
+                    guard let action = state.grid.allActions.first(where: { $0.name == arg }),
+                          case .openFile(let path, let appPath) = action.kind else {
+                        let message = "\(parts[0]): no file action named \(arg)"
+                        print(message); fflush(stdout)
+                        if strict { completion?(message); return }
+                        break
+                    }
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = parts[0] == "pickactionfile"
+                    if parts[0] == "pickactionapp" { panel.allowedContentTypes = [.application] }
+                    if panel.runModal() == .OK, let url = panel.url, FileAccess.rememberForAction(url) {
+                        var changed = action
+                        changed.kind = parts[0] == "pickactionfile" ? .openFile(path: url.path, appPath: appPath)
+                            : .openFile(path: path, appPath: url.path)
+                        state.apply { $0.updateAction(changed) }
+                    }
+                    print("\(parts[0]): \(String(describing: state.grid.item(action.id)?.action?.kind))")
+                    fflush(stdout)
                 case "extrafolder":
                     // Adds a scan folder without the open panel, as Settings › Library does.
                     state.prefs.extraFolders.append(arg)

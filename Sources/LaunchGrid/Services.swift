@@ -741,6 +741,7 @@ enum FileAccess {
 
     static var backend = Backend.system
     private static let key = "bookmarks"
+    private static let actionKey = "actionBookmarks"
     /// Bookmarked items in use, by the path they were picked at (or have moved to since).
     private static var granted: [String: URL] = [:]
     /// Called when an item just picked couldn't be bookmarked: access to it ends when
@@ -760,6 +761,25 @@ enum FileAccess {
     private static var saved: [String: Data] {
         get { backend.defaults().dictionary(forKey: key) as? [String: Data] ?? [:] }
         set { backend.defaults().set(newValue, forKey: key) }
+    }
+
+    /// The bookmarked paths that were picked for actions (a file to open, the app to open it
+    /// with). Unlike folders and pictures, which go when their setting changes, these go
+    /// when no action uses them any longer, like apps added with Browse.
+    private static var actionPaths: Set<String> {
+        get { Set(backend.defaults().stringArray(forKey: actionKey) ?? []) }
+        set { backend.defaults().set(newValue.sorted(), forKey: actionKey) }
+    }
+
+    /// The URL to open `path` through: the bookmark's, whose access is in use, when there is one.
+    static func url(for path: String) -> URL {
+        granted[path] ?? URL(fileURLWithPath: path)
+    }
+
+    /// Whether `path` has a saved bookmark that isn't in use yet (it didn't resolve at launch,
+    /// e.g. on a volume that wasn't mounted): `restore` may open it now.
+    static func hasPendingBookmark(_ path: String) -> Bool {
+        backend.isActive() && granted[path] == nil && saved[path] != nil
     }
 
     /// Starts using the saved bookmarks not yet in use. At launch, and when a volume mounts:
@@ -828,6 +848,11 @@ enum FileAccess {
         }
         self.saved = saved
         migrate(prefs, moves: moves)
+        // A file picked for an action stays one at its new place; the action follows it too.
+        let actions = actionPaths
+        if !moves.isEmpty, !actions.isDisjoint(with: moves.keys) {
+            actionPaths = Set(actions.map { moves[$0] ?? $0 })
+        }
         return moves
     }
 
@@ -952,10 +977,35 @@ enum FileAccess {
         remember(url) || saved[url.path] != nil
     }
 
+    /// Remembers a file (or the app to open it with) picked for an action, as `remember`
+    /// does. `forgetUnused` lets it go once no action uses it.
+    @discardableResult
+    static func rememberForAction(_ url: URL) -> Bool {
+        guard backend.isActive() else { return true }
+        let kept = remember(url) || saved[url.path] != nil
+        if kept { actionPaths.insert(url.path) }
+        return kept
+    }
+
     static func forget(_ path: String) {
         guard backend.isActive() else { return }
         if let url = granted.removeValue(forKey: path) { backend.close(url) }
         saved[path] = nil
+        actionPaths.remove(path)
+    }
+
+    /// Forgets the bookmarks of apps added with Browse and of files picked for actions that
+    /// aren't in `inUse`. A path a setting names too (an extra folder, the background picture)
+    /// keeps its bookmark: that setting still needs it.
+    static func forgetUnused(notIn inUse: Set<String>, prefs: Preferences) {
+        guard backend.isActive() else { return }
+        let settings = Set(prefs.extraFolders).union(prefs.customImagePath.map { [$0] } ?? [])
+        forgetApps(notIn: inUse.union(settings))
+        let unused = actionPaths.subtracting(inUse)
+        guard !unused.isEmpty else { return }
+        for path in unused.subtracting(settings) { forget(path) }
+        // No longer an action's, but its bookmark stays for the setting.
+        actionPaths.subtract(unused)
     }
 
     /// Forgets the bookmarks of apps added with Browse that are no longer in `inUse`.

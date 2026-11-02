@@ -325,8 +325,8 @@ extension AppState {
     }
 
     private var mergeAllowed: Bool {
-        // Folders cannot go inside folders.
-        !drag.ids.contains { grid.item($0)?.folder != nil }
+        // Folders cannot go inside folders, and actions not in any yet.
+        !drag.ids.contains { grid.item($0)?.folder != nil || grid.item($0)?.action != nil }
     }
 
     private func updateTargets() {
@@ -404,7 +404,7 @@ extension AppState {
         let center = iconCenter(cell, inFolder: false)
         let radius = pageIconSize * 0.42
         let nearCenter = hypot(local.x - center.x, local.y - center.y) < radius
-        if let shown, nearCenter, mergeAllowed {
+        if let shown, nearCenter, mergeAllowed, shown.action == nil {
             drag.pendingGap = nil
             if drag.candidate != shown.id {
                 drag.candidate = shown.id

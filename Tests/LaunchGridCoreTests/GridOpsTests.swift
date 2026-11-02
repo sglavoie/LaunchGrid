@@ -406,6 +406,21 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.allApps.map(\.path) == ["/Users/x/New/A.app", "/Users/x/Separate/B.app", "/Users/x/Chosen.app"])
     }
 
+    @Test func filesActionsOpenFollowTheirMovesOnPagesAndOffThem() {
+        let shown = Action(name: "Notes", kind: .openFile(path: "/Users/x/Docs/notes.txt", appPath: "/Users/x/Apps/Editor.app"))
+        let hidden = Action(name: "Plan", kind: .openFile(path: "/Users/x/plan.md", appPath: nil), showsOnGrid: false)
+        let link = Action(name: "Link", kind: .openURL(template: "file:///Users/x/Docs/notes.txt"))
+        var g = Grid(pages: [Page(items: [.action(shown), .action(link)])], hiddenActions: [hidden])
+        g.followMoves(["/Users/x/Docs": "/Users/x/Archive", "/Users/x/Apps/Editor.app": "/Applications/Editor.app",
+                       "/Users/x/plan.md": "/Users/x/Old/plan.md"])
+        #expect(g.allActions.map(\.kind) == [
+            .openFile(path: "/Users/x/Archive/notes.txt", appPath: "/Applications/Editor.app"),
+            link.kind, // a link is the person's text, not a bookmarked file
+            .openFile(path: "/Users/x/Old/plan.md", appPath: nil),
+        ])
+        #expect(g.allActions.map(\.id) == [shown.id, link.id, hidden.id])
+    }
+
     @Test func exclusionsFollowMovesWithoutChangingBundleIDs() {
         let a = "/Applications/A.app", b = "/Applications/B.app"
         var g = Grid(removedBundleIDs: [a, b, "com.test.excluded"])
