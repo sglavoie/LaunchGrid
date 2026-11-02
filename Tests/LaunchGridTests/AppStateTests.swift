@@ -4152,6 +4152,12 @@ extension SandboxFileAccessTests {
         FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
         #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil)
 
+        // Each of them alone keeps it: the file, the app that opens it, the picture.
+        for path in [notes, viewer, icon] {
+            FileAccess.forgetUnused(notIn: state.appPathsInUse.union([path]), actionsInUse: [path], prefs: prefs)
+            #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil, "\(path) still needs it")
+        }
+
         // Once nothing inside it is referred to, even in the history, it goes.
         FileAccess.forgetUnused(notIn: state.appPathsInUse.union([sibling]), actionsInUse: [sibling], prefs: prefs)
         #expect(!FileAccess.isGranted(tools) && sandbox.saved[tools] == nil && sandbox.closed.contains(tools))
