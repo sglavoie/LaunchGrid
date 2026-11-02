@@ -427,7 +427,8 @@ extension Grid {
     }
 
     /// Replaces the action with `action.id`. One whose `showsOnGrid` changed moves between
-    /// its page and `hiddenActions`; one becoming visible goes to the first free slot.
+    /// its page and `hiddenActions`; one becoming visible goes to the first free slot. A page
+    /// that hiding it empties is removed, as when removing it.
     public mutating func updateAction(_ action: Action) {
         switch locateAction(action.id) {
         case nil:
@@ -440,9 +441,11 @@ extension Grid {
                 pages[loc.page].items[loc.index] = .action(action)
             }
         case .page:
-            detach([action.id])
-            hiddenActions.append(action)
-            normalize()
+            removingEmptiedPages {
+                $0.detach([action.id])
+                $0.hiddenActions.append(action)
+                $0.normalize()
+            }
         case .hidden(let k) where action.showsOnGrid:
             hiddenActions.remove(at: k)
             appendToFirstFree([.action(action)])

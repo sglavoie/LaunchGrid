@@ -1388,6 +1388,15 @@ func action(_ name: String, showsOnGrid: Bool = true, kind: ActionKind? = nil) -
         #expect(titles(g.pages[0]) == expected)
     }
 
+    @Test func hidingAnActionRemovesThePageItEmpties() {
+        var a = action("A")
+        var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("X"))]), Page(items: [.action(a)]), Page()])
+        a.showsOnGrid = false
+        g.updateAction(a)
+        #expect(g.pages.map(titles) == [["X"], []], "the emptied page goes; one already empty stays")
+        #expect(g.hiddenActions == [a])
+    }
+
     @Test func groupingAndAddingToAFolderTakeActionsAlong() throws {
         let act = action("Act"), other = action("Other"), hidden = action("Hidden", showsOnGrid: false)
         var g = Grid(rows: 1, columns: 6, pages: [Page(items: [
