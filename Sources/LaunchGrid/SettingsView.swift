@@ -131,6 +131,11 @@ struct GeneralSettings: View {
                 Toggle("Hide when clicking an empty area", isOn: $prefs.hideOnEmptyClick)
                 Toggle("Hide when switching Spaces", isOn: $prefs.hideOnSpaceChange)
             }
+            #if !APP_STORE
+            Section("Actions") {
+                TerminalPicker()
+            }
+            #endif
         }
         .formStyle(.grouped)
         // The login item can change in System Settings while this window stays open.
@@ -503,6 +508,48 @@ struct LayoutSettings: View {
 
 /// Every action, search-only ones too (the only place besides search to reach those), with
 /// what can be done to each. Each change is one step ⌘Z in the grid undoes.
+#if !APP_STORE
+/// The terminal app commands set to run in a terminal open in: Terminal, or iTerm or Ghostty
+/// when installed, or any app chosen with Browse.
+struct TerminalPicker: View {
+    @Environment(AppState.self) private var state
+
+    /// The well-known terminals installed here, by path.
+    private var known: [(name: String, path: String)] {
+        [("com.googlecode.iterm2", "iTerm"), ("com.mitchellh.ghostty", "Ghostty")].compactMap { id, name in
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { (name, $0.path) }
+        }
+    }
+
+    var body: some View {
+        let prefs = state.prefs
+        let chosen = prefs.terminalAppPath ?? ""
+        let options = known
+        Picker("Open commands in", selection: Binding(get: { chosen }, set: { path in
+            if path == "browse" { browse() } else { prefs.terminalAppPath = path.isEmpty ? nil : path }
+        })) {
+            Text("Terminal").tag("")
+            ForEach(options, id: \.path) { Text($0.name).tag($0.path) }
+            if !chosen.isEmpty && !options.contains(where: { $0.path == chosen }) {
+                Text(FileManager.default.displayName(atPath: chosen)).tag(chosen)
+            }
+            Divider()
+            Text("Browse…").tag("browse")
+        }
+        Text("Commands and scripts set to run in a terminal open in this app.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func browse() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = String(localized: "Choose")
+        if panel.runModal() == .OK, let url = panel.url { state.prefs.terminalAppPath = url.path }
+    }
+}
+#endif
+
 struct ActionsSection: View {
     @Environment(AppState.self) private var state
 

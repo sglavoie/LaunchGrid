@@ -21,8 +21,8 @@ final class ActionEditorModel {
             }
         }
 
-        /// Commands and scripts can't be made here yet; one already in the layout keeps its own.
-        var isAvailable: Bool { self != .command && self != .script }
+        /// A sandboxed build can't run commands; one already in the layout keeps its own.
+        var isAvailable: Bool { self != .command || ActionRunner.commandsAvailable }
 
         init(_ kind: ActionKind) {
             self = switch kind {
@@ -75,6 +75,18 @@ final class ActionEditorModel {
     var appPath: String?
     var shortcutName = ""
     var shortcutInput = ""
+    var command = ""
+    var runMode: RunMode = .background
+    /// Empty for the home folder.
+    var workingDirectory = ""
+    var timeout = CodeJob.defaultTimeout
+    var scriptName = ""
+    /// One argument per line, as typed.
+    var argumentsText = ""
+    /// The scripts in the Application Scripts folder, for the picker.
+    var scripts: [String] = []
+    /// Where the scripts are; tests point it elsewhere.
+    var scriptsDirectory = ActionRunner.applicationScriptsDirectory
     var iconChoice: IconChoice = .automatic
     var symbol = "star"
     var emoji = "" { didSet { if emoji.count > 1 { emoji = String(emoji.suffix(1)) } } }
@@ -109,7 +121,12 @@ final class ActionEditorModel {
         case .openURL(let t): template = t
         case .openFile(let path, let app): (filePath, appPath) = (path, app)
         case .shortcut(let n, let input): (shortcutName, shortcutInput) = (n, input ?? "")
-        case .shell, .userScript: break
+        case .shell(let c, let mode, let directory, let seconds):
+            (command, runMode, workingDirectory) = (c, mode, directory ?? "")
+            timeout = CodeJob.timeout(seconds)
+        case .userScript(let file, let arguments, let mode):
+            (scriptName, runMode) = (file, mode)
+            argumentsText = arguments.joined(separator: "\n")
         }
         switch action.icon {
         case action.kind.defaultIcon: iconChoice = .automatic
@@ -126,16 +143,32 @@ final class ActionEditorModel {
         keywordsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
     }
 
-    /// The kind as filled in, or nil for a command or script the editor can't make yet.
+    /// The script's arguments: one per line, blank lines left out.
+    var arguments: [String] {
+        argumentsText.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    /// The kind as filled in; nil for a command in the sandboxed build, unless the action
+    /// already was one (it keeps it).
     var actionKind: ActionKind? {
         switch kind {
-        case .link: .openURL(template: template.trimmingCharacters(in: .whitespacesAndNewlines))
-        case .file: .openFile(path: filePath, appPath: appPath)
-        case .shortcut: .shortcut(name: shortcutName.trimmingCharacters(in: .whitespaces),
-                                  input: shortcutInput.isEmpty ? nil : shortcutInput)
-        case .command, .script: original.map(\.kind).flatMap { KindChoice($0) == kind ? $0 : nil }
+        case .link: return .openURL(template: template.trimmingCharacters(in: .whitespacesAndNewlines))
+        case .file: return .openFile(path: filePath, appPath: appPath)
+        case .shortcut: return .shortcut(name: shortcutName.trimmingCharacters(in: .whitespaces),
+                                         input: shortcutInput.isEmpty ? nil : shortcutInput)
+        case .command:
+            guard kind.isAvailable else { return original.map(\.kind).flatMap { KindChoice($0) == kind ? $0 : nil } }
+            return .shell(command: command, runMode: runMode,
+                          workingDirectory: workingDirectory.isEmpty ? nil : workingDirectory,
+                          timeoutSeconds: timeout == CodeJob.defaultTimeout ? nil : CodeJob.timeout(timeout))
+        case .script:
+            return .userScript(fileName: scriptName, arguments: arguments, runMode: runMode)
         }
     }
+
+    /// Whether the run mode can be In Terminal: the sandboxed build can't open a terminal.
+    var terminalAvailable: Bool { !Sandbox.isActive }
 
     var icon: ActionIcon? {
         switch iconChoice {
@@ -168,8 +201,14 @@ final class ActionEditorModel {
             return filePath.isEmpty ? String(localized: "Choose a file or folder.") : nil
         case .shortcut:
             return shortcutName.trimmingCharacters(in: .whitespaces).isEmpty ? String(localized: "Enter the name of a Shortcut.") : nil
-        case .command, .script:
-            return actionKind == nil ? String(localized: "Available in the next update") : nil
+        case .command:
+            // One already in the layout can still be renamed and given keywords.
+            guard kind.isAvailable else { return actionKind == nil ? ActionRunner.Failure.commandsUnavailable.message : nil }
+            return command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? String(localized: "Enter a command.") : nil
+        case .script:
+            if scriptName.isEmpty { return String(localized: "Choose a script.") }
+            if runMode == .terminal && !terminalAvailable { return ActionRunner.Failure.terminalUnavailable.message }
+            return nil
         }
     }
 
@@ -189,9 +228,45 @@ final class ActionEditorModel {
     /// Worth knowing, but no reason not to save: a keyword another action has too. Search lists
     /// both.
     var warnings: [String] {
-        keywords.compactMap { k in
+        var warnings = keywords.compactMap { k in
             otherKeywords[k].map { String(localized: "“\(k)” is also a keyword of \($0).") }
         }
+        // It may be put in the folder later: the tile says so meanwhile.
+        if kind == .script, !scriptName.isEmpty, scriptsLoaded, !scripts.contains(scriptName) {
+            warnings.append(ActionRunner.Failure.scriptNotFound(scriptName).message)
+        }
+        return warnings
+    }
+
+    /// Whether `scripts` was read yet.
+    var scriptsLoaded = false
+
+    /// Reads the Application Scripts folder off the main thread, for the picker.
+    func loadScripts() async {
+        let dir = scriptsDirectory
+        scripts = await Disk.run { ActionRunner.scripts(in: dir) }
+        scriptsLoaded = true
+    }
+
+    /// Creates the Application Scripts folder when it's missing and shows it in Finder.
+    func openScriptsFolder() {
+        let dir = scriptsDirectory
+        // The sandboxed build may only ask for it to be made, not make it itself.
+        _ = try? FileManager.default.url(for: .applicationScriptsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: dir.path) {
+            NSWorkspace.shared.open(dir)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([dir.deletingLastPathComponent()])
+        }
+    }
+
+    func chooseWorkingDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = String(localized: "Choose")
+        if panel.runModal() == .OK, let url = panel.url { workingDirectory = url.path }
     }
 
     var canSave: Bool { errors.isEmpty && draft != nil }
@@ -286,6 +361,13 @@ final class ActionEditorModel {
         case "app": appPath = value.isEmpty ? nil : value
         case "shortcut": shortcutName = value
         case "input": shortcutInput = value
+        case "command": command = value
+        case "runmode": guard let m = RunMode(rawValue: value) else { return false }; runMode = m
+        case "workdir": workingDirectory = value
+        case "timeout": guard let t = Int(value) else { return false }; timeout = t
+        case "script": scriptName = value
+        // "\n" between arguments: a debug script's step can't hold a newline.
+        case "arguments": argumentsText = value.replacingOccurrences(of: "\\n", with: "\n")
         case "showongrid": guard let b = Bool(value) else { return false }; showsOnGrid = b
         case "argument": testArgument = value
         case "symbol": (iconChoice, symbol) = (.symbol, value)
@@ -357,6 +439,7 @@ struct ActionEditor: View {
         .frame(width: 520)
         .frame(minHeight: 520, idealHeight: 640)
         .task { await model.loadShortcuts() }
+        .task { await model.loadScripts() }
     }
 
     @ViewBuilder private var iconFields: some View {
@@ -440,13 +523,109 @@ struct ActionEditor: View {
             TextField("Input", text: $model.shortcutInput, prompt: Text("Optional"))
             Text("Use {query} in the input for what you type after a keyword.")
                 .font(.caption).foregroundStyle(.secondary)
-        case .command, .script:
-            if let kind = model.actionKind {
-                // Made outside the editor (a grid file): shown as it is, kept on saving.
-                Text(Self.describe(kind)).font(.callout.monospaced()).textSelection(.enabled)
+        case .command:
+            if model.kind.isAvailable {
+                commandFields
+            } else {
+                if let kind = model.actionKind {
+                    // Made in the downloadable build: shown as it is, kept on saving.
+                    Text(Self.describe(kind)).font(.callout.monospaced()).textSelection(.enabled)
+                }
+                Text("Commands run only in the version of LaunchGrid from its website. Use a script in the Application Scripts folder, or a Shortcut, instead.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Available in the next update").font(.caption).foregroundStyle(.secondary)
+        case .script:
+            scriptFields
         }
+    }
+
+    @ViewBuilder private var commandFields: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Command").font(.callout)
+            TextEditor(text: $model.command)
+                .font(.body.monospaced())
+                .autocorrectionDisabled()
+                .frame(minHeight: 64, maxHeight: 140)
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: .separatorColor)))
+                .accessibilityLabel(Text("Command"))
+                .accessibilityHint(Text("Run by zsh as a login shell. {query} becomes what you type after a keyword, quoted."))
+            Text("Runs with zsh -l. {query} becomes what you type after a keyword, quoted as one word; it's also in $LAUNCHGRID_QUERY.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        runModeField
+        LabeledContent("Working folder") {
+            HStack {
+                Text(model.workingDirectory.isEmpty ? String(localized: "Home folder") : FileManager.default.displayName(atPath: model.workingDirectory))
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(model.workingDirectory)
+                Button("Choose…") { model.chooseWorkingDirectory() }
+                    .accessibilityLabel(Text("Choose working folder"))
+                if !model.workingDirectory.isEmpty {
+                    Button("Use Home") { model.workingDirectory = "" }
+                }
+            }
+        }
+        if model.runMode == .background { timeoutField }
+    }
+
+    @ViewBuilder private var scriptFields: some View {
+        LabeledContent("Script") {
+            HStack {
+                Picker("Script", selection: $model.scriptName) {
+                    if model.scriptName.isEmpty { Text("Choose…").tag("") }
+                    if !model.scriptName.isEmpty && !model.scripts.contains(model.scriptName) {
+                        Text(model.scriptName).tag(model.scriptName)
+                    }
+                    ForEach(model.scripts, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                Button {
+                    Task { await model.loadScripts() }
+                } label: { Image(systemName: "arrow.clockwise") }
+                .help(String(localized: "Look for scripts again"))
+                .accessibilityLabel(Text("Look for scripts again"))
+            }
+        }
+        HStack {
+            Text("Scripts go in ~/Library/Application Scripts/com.sglavoie.launchgrid.")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Open Scripts Folder") { model.openScriptsFolder() }
+        }
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Arguments").font(.callout)
+            TextEditor(text: $model.argumentsText)
+                .font(.body.monospaced())
+                .autocorrectionDisabled()
+                .frame(minHeight: 44, maxHeight: 90)
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(nsColor: .separatorColor)))
+                .accessibilityLabel(Text("Arguments"))
+                .accessibilityHint(Text("One per line. {query} becomes what you type after a keyword."))
+            Text("One per line. {query} becomes what you type after a keyword.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        runModeField
+        // Scripts stop after the default timeout: the layout keeps no timeout for them.
+    }
+
+    @ViewBuilder private var runModeField: some View {
+        Picker("Run", selection: $model.runMode) {
+            Text("In the background").tag(RunMode.background)
+            Text("In a terminal").tag(RunMode.terminal)
+        }
+        if model.runMode == .terminal && !model.terminalAvailable {
+            Text("This version of LaunchGrid can't open scripts in a terminal. Run it in the background instead.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var timeoutField: some View {
+        let timeoutText = String(localized: "\(model.timeout) s")
+        Stepper(value: $model.timeout, in: 1...CodeJob.maximumTimeout, step: 10) {
+            LabeledContent("Stop after", value: timeoutText)
+        }
+        .accessibilityLabel(Text("Stop after"))
+        .accessibilityValue(Text("\(model.timeout) seconds"))
     }
 
     @ViewBuilder private func testFields(_ draft: Action) -> some View {
@@ -497,6 +676,67 @@ struct KeywordTokens: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("Keywords: \(keywords.formatted(.list(type: .and)))"))
+        }
+    }
+}
+
+/// What an action's last background run printed (the last 4 KB of each output) and how it
+/// ended, from the tile's Show Last Output….
+struct LastOutputView: View {
+    let name: String
+    let result: RunResult
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label {
+                Text(status)
+            } icon: {
+                Image(systemName: result.succeeded ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(result.succeeded ? .green : .orange)
+            }
+            .font(.headline)
+            .accessibilityElement(children: .combine)
+            OutputBox(title: String(localized: "Output"), text: result.output)
+            OutputBox(title: String(localized: "Errors"), text: result.errorOutput)
+            HStack {
+                Text("Only the last 4 KB of each is kept.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Close") { close() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 480, idealWidth: 560, minHeight: 360, idealHeight: 460)
+    }
+
+    private var status: String {
+        let time = result.endedAt.formatted(date: .omitted, time: .standard)
+        return switch result.ending {
+        case .exited(0): String(localized: "\(name) finished at \(time)")
+        case .stopped: String(localized: "\(name) was stopped at \(time)")
+        default: String(localized: "\(name) failed at \(time): \(result.summary)")
+        }
+    }
+
+    private struct OutputBox: View {
+        let title: String
+        let text: String
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold))
+                ScrollView {
+                    Text(verbatim: text.isEmpty ? String(localized: "(none)") : text)
+                        .font(.callout.monospaced())
+                        .foregroundStyle(text.isEmpty ? .secondary : .primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)))
+                .accessibilityLabel(Text(title))
+            }
         }
     }
 }

@@ -189,6 +189,17 @@ final class AppState {
     @ObservationIgnored var onAppPathsInUse: (Set<String>) -> Void = { _ in }
     /// Opens what actions name. Tests swap in one that records instead.
     @ObservationIgnored var actionRunner = ActionRunner()
+    /// Commands and scripts running in the background, by action. Not saved in the layout.
+    private(set) var runningActions: [UUID: RunHandle] = [:]
+    /// How each action's last background run ended, by action. Not saved in the layout.
+    private(set) var lastRun: [UUID: RunResult] = [:]
+    /// The scripts in the Application Scripts folder, looked at each time the grid shows; nil
+    /// until then. A script action whose file isn't among them shows as unavailable.
+    var scriptNames: Set<String>?
+    /// Asked before running another copy of an action that's still running; true runs it.
+    @ObservationIgnored var onConfirmRunAgain: (Action) -> Bool = { _ in false }
+    /// Shows the last output of an action's run.
+    @ObservationIgnored var onShowLastOutput: (Action) -> Void = { _ in }
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -1275,6 +1286,12 @@ final class AppState {
             reportRunFailure(of: action, error)
             return nil
         }
+        if case .code(let job) = plan, job.mode == .background {
+            // It stays in view while it runs: the tile's badge and a toast say how it went.
+            if runningActions[action.id] != nil, !onConfirmRunAgain(action) { return nil }
+            startInBackground(action, job)
+            return nil
+        }
         let hides = prefs.hideAfterLaunch
         if hides { onHideForLaunch() }
         return Task {
@@ -1295,6 +1312,82 @@ final class AppState {
                 reportRunFailure(of: action, error)
             }
         }
+    }
+
+    /// Starts a command or script in the background and follows it to its end.
+    private func startInBackground(_ action: Action, _ job: CodeJob) {
+        let id = action.id
+        // `onEnd` always comes in a later main-actor turn, once `start` has returned.
+        let started = StartedRun()
+        do {
+            let run = try actionRunner.start(job) { [weak self] result in
+                self?.ended(started.id, of: id, result)
+            }
+            started.id = run.id
+            runningActions[id, default: RunHandle()].runs.append(run)
+            if isShown { AccessibilityNotification.Announcement(String(localized: "Running \(action.name)")).post() }
+        } catch {
+            reportRunFailure(of: action, error)
+        }
+    }
+
+    /// The run `startInBackground` started, for its end to find.
+    private final class StartedRun: @unchecked Sendable {
+        var id: UUID?
+    }
+
+    private func ended(_ runID: UUID?, of actionID: UUID, _ result: RunResult) {
+        if var handle = runningActions[actionID] {
+            handle.runs.removeAll { $0.id == runID }
+            runningActions[actionID] = handle.runs.isEmpty ? nil : handle
+        }
+        lastRun[actionID] = result
+        let name = grid.item(actionID)?.action?.name ?? String(localized: "the action")
+        switch result.ending {
+        case .exited(0):
+            // Nothing to say once the grid is gone: it did what it was asked.
+            if isShown { showToast(String(localized: "\(name) finished")) }
+        case .stopped:
+            if isShown { showToast(String(localized: "Stopped \(name)")) }
+        default:
+            if isShown {
+                showToast(String(localized: "\(name) failed: \(result.summary)"))
+            } else {
+                onError(String(localized: "\(name) failed"), result.summary)
+            }
+        }
+    }
+
+    /// Stops an action's background runs (every copy).
+    func stopRuns(of actionID: UUID) {
+        runningActions[actionID]?.stop()
+    }
+
+    /// Stops every background run, as LaunchGrid quits: they aren't left running on their own.
+    func stopAllRuns() {
+        for handle in runningActions.values { handle.stop() }
+    }
+
+    /// Why an action can't run here, said on its tile: a command in the Mac App Store build, or a
+    /// script that isn't in the Application Scripts folder.
+    func unavailableReason(_ action: Action) -> String? {
+        switch action.kind {
+        case .shell:
+            return ActionRunner.commandsAvailable ? nil : String(localized: "Commands run only in the version of LaunchGrid from its website")
+        case .userScript(let fileName, _, let mode):
+            if Sandbox.isActive && mode == .terminal { return ActionRunner.Failure.terminalUnavailable.message }
+            guard let scriptNames, !scriptNames.contains(fileName) else { return nil }
+            return ActionRunner.Failure.scriptNotFound(fileName).message
+        default:
+            return nil
+        }
+    }
+
+    /// Looks at the Application Scripts folder again, off the main thread.
+    func refreshScripts() async {
+        let dir = actionRunner.scriptsDirectory
+        let names = await Disk.run { Set(ActionRunner.scripts(in: dir)) }
+        if names != scriptNames { scriptNames = names }
     }
 
     private func reportRunFailure(of action: Action, _ error: Error) {
@@ -1675,6 +1768,9 @@ final class AppState {
     func didShow() {
         isShown = true
         showCount &+= 1
+        if grid.allActions.contains(where: { if case .userScript = $0.kind { true } else { false } }) {
+            Task { await refreshScripts() }
+        }
         guard toast != nil, toastTask == nil else { return }
         if Date().timeIntervalSince(toastPostedAt) > 60 {
             toast = nil

@@ -1,0 +1,419 @@
+import Foundation
+import Testing
+@testable import LaunchGrid
+@testable import LaunchGridCore
+
+/// Commands and user scripts: planning, quoting, running in the background, timeouts and output.
+@MainActor
+@Suite struct ActionRunnerTests {
+    private func shell(_ command: String, timeout: Int? = nil, directory: String? = nil,
+                       mode: RunMode = .background) -> ActionKind {
+        .shell(command: command, runMode: mode, workingDirectory: directory, timeoutSeconds: timeout)
+    }
+
+    // MARK: Planning
+
+    @Test func aTimeoutIsKeptWithinAnHour() {
+        #expect(CodeJob.timeout(nil) == 60)
+        #expect(CodeJob.timeout(0) == 1)
+        #expect(CodeJob.timeout(5000) == 3600)
+        #expect(CodeJob.timeout(90) == 90)
+    }
+
+    @Test func aScriptTakesTheArgumentInItsArgumentsAsTheyAre() throws {
+        let plan = try ActionRunner.plan(.userScript(fileName: "tag.sh", arguments: ["--name", "{query}", "x{query}y"], runMode: .background),
+                                         argument: "it's; $(x)")
+        #expect(plan == .code(CodeJob(program: .script(fileName: "tag.sh", arguments: ["--name", "it's; $(x)", "xit's; $(x)y"]),
+                                      argument: "it's; $(x)", workingDirectory: nil, timeout: 60, mode: .background)))
+        #expect(throws: ActionRunner.Failure.noScript) {
+            try ActionRunner.plan(.userScript(fileName: "", arguments: [], runMode: .background), argument: nil)
+        }
+    }
+
+    @Test func aScriptOutsideTheFolderIsNotFound() throws {
+        let runner = ActionRunner(scriptsDirectory: URL(fileURLWithPath: NSTemporaryDirectory()))
+        for name in ["../x.sh", "/bin/ls", "..", "missing.sh"] {
+            #expect(throws: ActionRunner.Failure.scriptNotFound(name)) { try runner.scriptURL(name) }
+        }
+        #expect(ActionRunner.Failure.scriptNotFound("tag.sh").localizedDescription == "Script not found: tag.sh")
+    }
+
+    @Test func theScriptsAreTheFolderRunnableFiles() throws {
+        let dir = try temporaryFolder()
+        try script(dir, "b.sh", "#!/bin/sh\n")
+        try script(dir, "A.sh", "#!/bin/sh\n")
+        try Data("not run".utf8).write(to: dir.appendingPathComponent("notes.txt"))
+        try Data().write(to: dir.appendingPathComponent("Hello.applescript"))
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try script(dir, ".hidden.sh", "#!/bin/sh\n")
+        #expect(ActionRunner.scripts(in: dir) == ["A.sh", "b.sh", "Hello.applescript"])
+        #expect(ActionRunner.scripts(in: dir.appendingPathComponent("missing")) == [])
+    }
+
+    #if APP_STORE
+    @Test func commandsAreUnavailableInTheSandboxedBuild() {
+        #expect(throws: ActionRunner.Failure.commandsUnavailable) { try ActionRunner.plan(shell("ls"), argument: nil) }
+    }
+    #else
+    @Test func commandsRunWithTheirArgumentQuoted() throws {
+        let plan = try ActionRunner.plan(shell("echo {query}", timeout: 9000, directory: "", mode: .terminal), argument: "a b")
+        #expect(plan == .code(CodeJob(program: .shell("echo 'a b'"), argument: "a b", workingDirectory: nil, timeout: 3600, mode: .terminal)))
+        #expect(throws: ActionRunner.Failure.noCommand) { try ActionRunner.plan(shell("  \n"), argument: nil) }
+    }
+
+    // MARK: Quoting
+
+    @Test(arguments: ["it's", "a; rm -rf /tmp/nothing", "$(echo pwned)", "`echo pwned`", "two\nlines", "  spaced  out ",
+                      "'", "''", "\\'", "$HOME", "*", "", "end\\"])
+    func anArgumentReachesTheCommandAsOneWord(_ argument: String) async throws {
+        let runner = ActionRunner()
+        let plan = try ActionRunner.plan(shell("printf '%s|' {query}; printf '%s' \"$#\""), argument: argument)
+        guard case .code(let job) = plan else { Issue.record("not code"); return }
+        let result = await runner.runToEnd(job)
+        #expect(result.ending == .exited(0), "\(result.errorOutput)")
+        #expect(result.output == "\(argument)|0")
+    }
+
+    @Test func quotingEscapesEmbeddedQuotes() {
+        #expect(ActionRunner.shellQuoted("it's") == #"'it'\''s'"#)
+        #expect(ActionRunner.substitutingQuoted("open {query} {query}", argument: nil) == "open '' ''")
+    }
+
+    // MARK: Running
+
+    private func run(_ command: String, timeout: Int? = nil, directory: String? = nil, argument: String? = nil) async throws -> RunResult {
+        guard case .code(let job) = try ActionRunner.plan(shell(command, timeout: timeout, directory: directory), argument: argument) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        return await ActionRunner().runToEnd(job)
+    }
+
+    @Test func trueSucceeds() async throws {
+        let result = try await run("true")
+        #expect(result.ending == .exited(0))
+        #expect(result.succeeded)
+    }
+
+    @Test func falseFailsWithItsExitStatus() async throws {
+        let result = try await run("echo 'went wrong' >&2; echo more >&2; false")
+        #expect(result.ending == .exited(1))
+        #expect(result.exitStatus == 1)
+        #expect(!result.succeeded)
+        #expect(result.errorOutput == "went wrong\nmore\n")
+        #expect(result.summary == "exit status 1: went wrong")
+    }
+
+    @Test func outputIsCapturedAndKeptToItsLast4KB() async throws {
+        let short = try await run("printf hello")
+        #expect(short.output == "hello")
+        let long = try await run("printf 'a%.0s' {1..5000}; printf END; printf 'e%.0s' {1..6000} >&2")
+        #expect(long.output.utf8.count == RunResult.tailLimit)
+        #expect(long.output.hasSuffix("aaaEND"))
+        #expect(long.errorOutput.utf8.count == RunResult.tailLimit)
+    }
+
+    @Test func aCutInsideACharacterStartsAtTheNextOne() async throws {
+        // 4097 bytes, "é" then 2048 more: keeping 4096 starts inside the first; it's dropped.
+        let result = try await run(#"printf '\303\251%.0s' {1..2049}"#)
+        #expect(result.output.count == 2048, "\(result.output.count) \(result.ending)")
+        #expect(result.output == String(repeating: "é", count: 2048))
+    }
+
+    @Test func aRunOverItsTimeoutIsStopped() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = try await run("sleep 5", timeout: 1)
+        #expect(result.ending == .timedOut)
+        #expect(clock.now - start < .seconds(4))
+        #expect(result.summary == "timed out")
+    }
+
+    @Test func stoppingEndsWhatTheCommandStartedToo() async throws {
+        let marker = try temporaryFolder().appendingPathComponent("survived")
+        let runner = ActionRunner()
+        guard case .code(let job) = try ActionRunner.plan(shell("(sleep 2; touch \(ActionRunner.shellQuoted(marker.path))) & wait"), argument: nil) else {
+            Issue.record("not code"); return
+        }
+        let result = await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
+            do {
+                let run = try runner.start(job) { c.resume(returning: $0) }
+                #expect(run.canStop)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { run.stop() }
+            } catch { Issue.record(error) }
+        }
+        #expect(result.ending == .stopped)
+        try await Task.sleep(for: .seconds(2.5))
+        #expect(!FileManager.default.fileExists(atPath: marker.path), "the background child kept running")
+    }
+
+    @Test func theArgumentIsInTheEnvironment() async throws {
+        let result = try await run("printf '%s' \"$LAUNCHGRID_QUERY\"", argument: "it's $(x)")
+        #expect(result.output == "it's $(x)")
+        let none = try await run("printf '[%s]' \"${LAUNCHGRID_QUERY-unset}\"")
+        #expect(none.output == "[]")
+    }
+
+    @Test func itRunsInTheWorkingFolderOrHome() async throws {
+        let dir = try temporaryFolder()
+        let inFolder = try await run("pwd", directory: dir.path)
+        #expect(inFolder.output.hasSuffix("/\(dir.lastPathComponent)\n"), "\(inFolder)")
+        let inHome = try await run("pwd")
+        #expect(inHome.output == NSHomeDirectory() + "\n", "\(inHome)")
+        let missing = try await run("pwd", directory: dir.appendingPathComponent("gone").path)
+        #expect(missing.ending == .failed(ActionRunner.Failure.folderNotFound(dir.appendingPathComponent("gone").path).message))
+    }
+
+    @Test func aTerminalCommandFileDeletesItselfAndKeepsTheArgumentQuoted() throws {
+        let file = try ActionRunner.writeCommandFile("echo {query}", directory: "/tmp/it's", argument: "a'b")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+        #expect(file.pathExtension == "command")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(text.contains(#"rm -f -- "$0""#))
+        #expect(text.contains(#"cd -- '/tmp/it'\''s'"#))
+        #expect(text.contains(#"export LAUNCHGRID_QUERY='a'\''b'"#))
+    }
+    #endif
+
+    // MARK: User scripts (both builds)
+
+    @Test func aUserScriptRunsFromTheScriptsFolderWithItsArguments() async throws {
+        let dir = try temporaryFolder()
+        try script(dir, "greet.sh", "#!/bin/sh\nprintf '%s|' \"$@\"\necho oops >&2\nexit 0\n")
+        try script(dir, "fail.sh", "#!/bin/sh\necho 'no luck' >&2\nexit 4\n")
+        let runner = ActionRunner(scriptsDirectory: dir)
+        let plan = try ActionRunner.plan(.userScript(fileName: "greet.sh", arguments: ["hi", "{query}"], runMode: .background), argument: "it's me")
+        guard case .code(let job) = plan else { Issue.record("not code"); return }
+        let result = await runner.runToEnd(job)
+        #expect(result.ending == .exited(0))
+        #expect(result.output == "hi|it's me|")
+        #expect(result.errorOutput == "oops\n")
+
+        let failed = await runner.runToEnd(CodeJob(program: .script(fileName: "fail.sh", arguments: []), argument: nil,
+                                                    workingDirectory: nil, timeout: 60, mode: .background))
+        #expect(!failed.succeeded)
+        #expect(failed.firstErrorLine == "no luck")
+
+        let missing = await runner.runToEnd(CodeJob(program: .script(fileName: "gone.sh", arguments: []), argument: nil,
+                                                     workingDirectory: nil, timeout: 60, mode: .background))
+        #expect(missing.ending == .failed("Script not found: gone.sh"))
+    }
+
+    // MARK: Helpers
+
+    private func temporaryFolder() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ActionRunnerTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func script(_ dir: URL, _ name: String, _ text: String) throws {
+        let url = dir.appendingPathComponent(name)
+        try Data(text.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+}
+
+/// What `AppState` keeps and says about commands and scripts running in the background.
+@MainActor @Suite(.tempDir) struct RunStateTests {
+    private func state(with actions: [Action]) -> AppState {
+        let state = makeState(["Notes"])
+        state.apply { g in for a in actions { g.appendToFirstFree([.action(a)]) } }
+        state.toastDuration = .seconds(60)
+        return state
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool, seconds: Double = 10) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition() {
+            guard Date() < deadline else { Issue.record("timed out waiting"); return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    @Test func aMissingScriptShowsAsUnavailable() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("RunState-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("here.sh")
+        try Data("#!/bin/sh\n".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        let here = Action(name: "Here", kind: .userScript(fileName: "here.sh", arguments: [], runMode: .background))
+        let gone = Action(name: "Gone", kind: .userScript(fileName: "gone.sh", arguments: [], runMode: .background))
+        let s = state(with: [here, gone])
+        s.actionRunner = ActionRunner(scriptsDirectory: dir)
+        #expect(s.unavailableReason(gone) == nil, "not looked at yet")
+        await s.refreshScripts()
+        #expect(s.unavailableReason(here) == nil)
+        #expect(s.unavailableReason(gone) == "Script not found: gone.sh")
+    }
+
+    #if APP_STORE
+    @Test func aCommandStaysInTheLayoutButCannotRun() {
+        let ls = Action(name: "List", kind: .shell(command: "ls", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        let s = state(with: [ls])
+        #expect(s.grid.allActions.map(\.name) == ["List"])
+        #expect(s.unavailableReason(ls) != nil)
+        s.isShown = true
+        s.run(ls, argument: nil)
+        #expect(s.toast?.hasPrefix("Could not run List: Commands run only") == true)
+        #expect(s.runningActions.isEmpty)
+    }
+    #else
+    private func command(_ name: String, _ command: String, timeout: Int? = nil) -> Action {
+        Action(name: name, kind: .shell(command: command, runMode: .background, workingDirectory: nil, timeoutSeconds: timeout))
+    }
+
+    @Test func aRunIsFollowedToItsEndAndKept() async throws {
+        let ok = command("Fine", "sleep 0.3; printf done")
+        let s = state(with: [ok])
+        s.isShown = true
+        s.run(ok, argument: nil)
+        #expect(s.runningActions[ok.id]?.runs.count == 1)
+        try await waitUntil { s.runningActions.isEmpty }
+        #expect(s.lastRun[ok.id]?.ending == .exited(0))
+        #expect(s.lastRun[ok.id]?.output == "done")
+        #expect(s.toast == "Fine finished")
+        #expect(MenuEntry.item(.action(ok), state: s).map(\.title).contains("Show Last Output…"))
+        #expect(!MenuEntry.item(.action(ok), state: s).map(\.title).contains("Stop"))
+    }
+
+    @Test func aSuccessWhileHiddenSaysNothing() async throws {
+        let ok = command("Fine", "true")
+        let s = state(with: [ok])
+        var errors: [String] = []
+        s.onError = { title, _ in errors.append(title) }
+        s.run(ok, argument: nil)
+        try await waitUntil { s.lastRun[ok.id] != nil }
+        #expect(s.toast == nil)
+        #expect(errors.isEmpty)
+    }
+
+    @Test func aFailureSaysTheFirstLineOfItsErrors() async throws {
+        let bad = command("Broken", "echo 'no such thing' >&2; echo second >&2; exit 2")
+        let s = state(with: [bad])
+        s.isShown = true
+        s.run(bad, argument: nil)
+        try await waitUntil { s.lastRun[bad.id] != nil }
+        #expect(s.toast == "Broken failed: exit status 2: no such thing")
+        // Hidden: an alert instead.
+        var errors: [(String, String)] = []
+        s.onError = { errors.append(($0, $1)) }
+        s.isShown = false
+        s.run(bad, argument: nil)
+        try await waitUntil { !errors.isEmpty }
+        #expect(errors.first?.0 == "Broken failed")
+        #expect(errors.first?.1 == "exit status 2: no such thing")
+    }
+
+    @Test func stopFromTheMenuEndsItAsStopped() async throws {
+        let long = command("Long", "sleep 30")
+        let s = state(with: [long])
+        s.isShown = true
+        s.run(long, argument: nil)
+        let menu = MenuEntry.item(.action(long), state: s)
+        guard case .action(let stop)? = menu.first(where: { $0.title == "Stop" })?.kind else {
+            Issue.record("no Stop in \(menu.map(\.title))"); return
+        }
+        stop()
+        try await waitUntil { s.runningActions.isEmpty }
+        #expect(s.lastRun[long.id]?.ending == .stopped)
+        #expect(s.toast == "Stopped Long")
+    }
+
+    @Test func runningAgainAsksFirst() async throws {
+        let long = command("Long", "sleep 30")
+        let s = state(with: [long])
+        var asked = 0
+        var answer = false
+        s.onConfirmRunAgain = { _ in asked += 1; return answer }
+        s.run(long, argument: nil)
+        s.run(long, argument: nil)
+        #expect(asked == 1)
+        #expect(s.runningActions[long.id]?.runs.count == 1)
+        answer = true
+        s.run(long, argument: nil)
+        #expect(asked == 2)
+        #expect(s.runningActions[long.id]?.runs.count == 2)
+        s.stopAllRuns()
+        try await waitUntil { s.runningActions.isEmpty }
+        #expect(s.lastRun[long.id]?.ending == .stopped)
+    }
+
+    @Test func aTimeoutIsAFailure() async throws {
+        let slow = command("Slow", "sleep 5", timeout: 1)
+        let s = state(with: [slow])
+        s.isShown = true
+        s.run(slow, argument: nil)
+        try await waitUntil { s.lastRun[slow.id] != nil }
+        #expect(s.lastRun[slow.id]?.ending == .timedOut)
+        #expect(s.toast == "Slow failed: timed out")
+    }
+
+    @Test func theEditorTestWaitsForABackgroundRun() async throws {
+        let s = state(with: [])
+        let error = await s.test(command("Bad", "exit 3"), argument: nil)
+        #expect(error?.localizedDescription == "exit status 3")
+        #expect(await s.test(command("Good", "true"), argument: nil) == nil)
+    }
+    #endif
+}
+
+/// The editor's Command and Script kinds.
+@MainActor @Suite struct CodeEditorTests {
+    @Test func aScriptIsChosenWithItsArgumentsOnePerLine() {
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model.fill("name", "Tag")
+        model.fill("kind", "script")
+        #expect(model.errors == ["Choose a script."])
+        model.fill("script", "tag.sh")
+        model.fill("arguments", "--name\\n{query}\\n\\n")
+        #expect(model.errors.isEmpty)
+        #expect(model.draft?.kind == .userScript(fileName: "tag.sh", arguments: ["--name", "{query}"], runMode: .background))
+        #expect(model.draft?.kind.takesArgument == true)
+        model.scripts = ["other.sh"]
+        model.scriptsLoaded = true
+        #expect(model.warnings == ["Script not found: tag.sh"])
+        let reopened = ActionEditorModel(action: model.draft, pageID: nil, others: [])
+        #expect(reopened.kind == .script)
+        #expect(reopened.argumentsText == "--name\n{query}")
+    }
+
+    #if APP_STORE
+    @Test func aCommandCannotBeMadeButOneInTheLayoutIsKept() {
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model.fill("name", "List")
+        model.fill("kind", "command")
+        #expect(model.errors.contains(ActionRunner.Failure.commandsUnavailable.message))
+        let existing = Action(name: "List", kind: .shell(command: "ls", runMode: .terminal, workingDirectory: nil, timeoutSeconds: 5))
+        let editing = ActionEditorModel(action: existing, pageID: nil, others: [])
+        editing.fill("name", "List All")
+        #expect(editing.errors.isEmpty)
+        #expect(editing.draft?.kind == existing.kind)
+        editing.fill("runmode", "terminal")
+        editing.fill("kind", "script")
+        editing.fill("script", "a.sh")
+        // The test runner isn't sandboxed, so a terminal is still on offer here.
+        #expect(editing.errors == (Sandbox.isActive ? [ActionRunner.Failure.terminalUnavailable.message] : []))
+    }
+    #else
+    @Test func aCommandKeepsItsFields() {
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model.fill("name", "Build")
+        model.fill("kind", "command")
+        #expect(model.errors == ["Enter a command."])
+        model.fill("command", "make {query}")
+        model.fill("runmode", "terminal")
+        model.fill("workdir", "/tmp")
+        model.fill("timeout", "120")
+        #expect(model.errors.isEmpty)
+        let kind = ActionKind.shell(command: "make {query}", runMode: .terminal, workingDirectory: "/tmp", timeoutSeconds: 120)
+        #expect(model.draft?.kind == kind)
+        model.fill("timeout", "60")
+        model.fill("workdir", "")
+        #expect(model.draft?.kind == .shell(command: "make {query}", runMode: .terminal, workingDirectory: nil, timeoutSeconds: nil))
+        let reopened = ActionEditorModel(action: Action(name: "Build", kind: kind), pageID: nil, others: [])
+        #expect((reopened.command, reopened.runMode, reopened.workingDirectory, reopened.timeout) == ("make {query}", .terminal, "/tmp", 120))
+    }
+    #endif
+}

@@ -1,0 +1,42 @@
+{
+  "name": "Commands run in the background with their state on the tile, stop, run another copy and keep the last output",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Long", "Delta", "Write File", "Fails"]],
+    "pageTitles": [""],
+    "folders": {},
+    "files": {"readme.txt": "Commands in this scenario write next to this file.\n"},
+    "actions": [
+      {"name": "Long", "kind": {"type": "shell", "command": "sleep 30"}},
+      {"name": "Write File", "keywords": ["wf"],
+       "kind": {"type": "shell", "command": "printf '%s' {query} > '${FILES}/out.txt' && cat '${FILES}/out.txt'"}},
+      {"name": "Fails", "kind": {"type": "shell", "command": "echo 'boom: no such thing' >&2; exit 3"}}
+    ]
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "search:wf it's $(x) && echo pwned"},
+    {"expect": {"searchResults": ["Write File"], "searchArguments": ["it's $(x) && echo pwned"]}},
+    {"run": "keys:36"},
+    {"expect": {"shown": true, "running": [], "lastRuns": {"Write File": "exit:0"},
+                "lastOutput": {"Write File": "it's $(x) && echo pwned"}, "toast": "Write File finished"}},
+    {"run": "search:"},
+    {"expect": {"query": "", "pagerReady": true}},
+    {"run": "click:3"},
+    {"expect": {"shown": true, "lastRuns": {"Write File": "exit:0", "Fails": "exit:3"},
+                "toast": "Fails failed: exit status 3: boom: no such thing"}},
+    {"run": "click:0"},
+    {"expect": {"running": ["Long"]}},
+    {"run": "runagain:no"},
+    {"run": "click:0"},
+    {"expect": {"running": ["Long"]}},
+    {"run": "runagain:yes"},
+    {"run": "click:0"},
+    {"expect": {"running": ["Long", "Long"]}},
+    {"run": "menuhold"},
+    {"run": "menurun:Stop"},
+    {"expect": {"running": [], "lastRuns": {"Write File": "exit:0", "Fails": "exit:3", "Long": "stopped"},
+                "toast": "Stopped Long"}}
+  ]
+}

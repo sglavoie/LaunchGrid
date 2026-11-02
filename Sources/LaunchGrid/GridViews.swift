@@ -651,7 +651,13 @@ struct ItemView: View {
     private var accessibilityValue: Text {
         switch item {
         case .folder(let f): Text("\(f.apps.count) apps")
-        case .action: Text("Action")
+        case .action(let a):
+            switch runStatus(a) {
+            case .running: Text("Action, running")
+            case .failed: Text("Action, last run failed")
+            case .unavailable: Text("Action, unavailable: \(state.unavailableReason(a) ?? "")")
+            case nil: Text("Action")
+            }
         case .app: Text(verbatim: "")
         }
     }
@@ -660,8 +666,18 @@ struct ItemView: View {
         switch item {
         case .app(let a): AppIcon(path: a.path, size: iconSize)
         case .folder(let f): FolderIcon(folder: f, size: iconSize, open: mergeTarget)
-        case .action(let a): ActionTile(action: a, size: iconSize)
+        case .action(let a):
+            ActionTile(action: a, size: iconSize)
+                .opacity(state.unavailableReason(a) == nil ? 1 : 0.45)
+                .overlay(alignment: .bottomTrailing) { RunBadge(status: runStatus(a), size: iconSize) }
         }
+    }
+
+    private func runStatus(_ action: Action) -> RunBadge.Status? {
+        if state.runningActions[action.id] != nil { return .running }
+        if state.unavailableReason(action) != nil { return .unavailable }
+        if let last = state.lastRun[action.id], !last.succeeded, last.ending != .stopped { return .failed }
+        return nil
     }
 }
 
@@ -1202,6 +1218,15 @@ struct MenuEntry {
                     state.onHideForLaunch()
                 })
             }
+            if let running = state.runningActions[a.id], running.canStop {
+                entries.append(.button(String(localized: "Stop")) { state.stopRuns(of: a.id) })
+            }
+            if state.lastRun[a.id] != nil {
+                entries.append(.button(String(localized: "Show Last Output…")) {
+                    guard let current = state.grid.item(a.id)?.action else { return }
+                    state.onShowLastOutput(current)
+                })
+            }
             if !multi {
                 entries.append(.button(String(localized: "Edit Action…")) { state.editAction(a.id) })
             }
@@ -1340,6 +1365,37 @@ struct BackgroundMenu: View {
     @Environment(AppState.self) private var state
 
     var body: some View { MenuEntries(entries: MenuEntry.page(state: state)) }
+}
+
+/// A command or script's state on its tile: a spinner while it runs, a warning after a
+/// failed run, a slash when it can't run here. Said in the tile's accessibility value instead.
+struct RunBadge: View {
+    enum Status { case running, failed, unavailable }
+
+    @Environment(\.colorSchemeContrast) private var contrast
+    let status: Status?
+    let size: CGFloat
+
+    var body: some View {
+        if let status {
+            let side = min(22, max(12, size * 0.32))
+            ZStack {
+                Circle().fill(.black.opacity(contrast == .increased ? 0.9 : 0.6))
+                switch status {
+                case .running:
+                    ProgressView().controlSize(.small).scaleEffect(side / 22).tint(.white)
+                case .failed:
+                    Image(systemName: "exclamationmark").font(.system(size: side * 0.55, weight: .heavy)).foregroundStyle(.orange)
+                case .unavailable:
+                    Image(systemName: "nosign").font(.system(size: side * 0.55, weight: .bold)).foregroundStyle(.white)
+                }
+            }
+            .frame(width: side, height: side)
+            .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 1))
+            .offset(x: -size * 0.04, y: -size * 0.04)
+            .accessibilityHidden(true)
+        }
+    }
 }
 
 /// An action's icon, the size of an app's: its SF Symbol or emoji on a rounded square, or

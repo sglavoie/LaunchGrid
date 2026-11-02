@@ -99,7 +99,20 @@ enum DebugUITest {
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
         "movetopage", "titleedit", "autoadd", "windowsize", "addaction", "runaction",
         "neweditor", "editaction", "editorfill", "editorsave", "editorcancel",
+        "stopaction", "runagain",
     ]
+
+    /// How a run ended, as the snapshot's `lastRuns` says it: "exit:0", "signal:15",
+    /// "timedOut", "stopped" or "failed".
+    static func describe(_ ending: RunResult.Ending) -> String {
+        switch ending {
+        case .exited(let s): "exit:\(s)"
+        case .signalled(let n): "signal:\(n)"
+        case .timedOut: "timedOut"
+        case .stopped: "stopped"
+        case .failed: "failed"
+        }
+    }
 
     static func snapshot(_ state: AppState, overlay: OverlayController) -> [String: Value] {
         func name(_ id: UUID) -> String {
@@ -140,6 +153,17 @@ enum DebugUITest {
             "actionEditor": .string(state.actionEditor.map { $0.original.map { "edit:\($0.name)" } ?? "new" } ?? ""),
             "editorErrors": .strings(state.actionEditor?.errors ?? []),
             "editorWarnings": .strings(state.actionEditor?.warnings ?? []),
+            // Actions running in the background (a name per copy), and how each one's last run
+            // ended, with what it printed.
+            "running": .strings(state.grid.allActions.flatMap { a in
+                Array(repeating: a.name, count: state.runningActions[a.id]?.runs.count ?? 0)
+            }.sorted()),
+            "lastRuns": .object(Dictionary(state.grid.allActions.compactMap { a in
+                state.lastRun[a.id].map { (a.name, Value.string(describe($0.ending))) }
+            }, uniquingKeysWith: { a, _ in a })),
+            "lastOutput": .object(Dictionary(state.grid.allActions.compactMap { a in
+                state.lastRun[a.id].map { (a.name, Value.string($0.output)) }
+            }, uniquingKeysWith: { a, _ in a })),
             "keyWindow": .bool(overlay.window?.isKeyWindow == true),
             "pagerReady": .bool(state.drag.pagerFrame.width > 0 && state.drag.pagerFrame.height > 0),
             "folderReady": .bool(state.openFolder != nil && state.drag.folderGridFrame.width > 0 && state.drag.folderGridFrame.height > 0),

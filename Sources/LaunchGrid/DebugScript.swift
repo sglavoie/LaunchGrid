@@ -17,6 +17,8 @@ enum DebugScript {
     static var drawnPages: ClosedRange<Int>?
     /// The menu "menuhold" built, for "menurun".
     private static var heldMenu: [MenuEntry] = []
+    /// What "runagain:yes|no" answers in place of asking whether to run another copy.
+    static var runAgainAnswer: Bool?
 
     static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate,
                     strict: Bool = false, completion: (@MainActor (String?) -> Void)? = nil) {
@@ -500,6 +502,40 @@ enum DebugScript {
                         break
                     }
                     state.run(action, argument: n.count > 1 ? n[1] : nil)
+                case "runagain":
+                    // "runagain:yes|no" answers "run another copy?" without asking; "runagain:ask" asks again.
+                    runAgainAnswer = arg == "ask" ? nil : arg == "yes"
+                case "stopaction", "lastoutput":
+                    // "stopaction:<name>" and "lastoutput:<name>": the tile menu's Stop and Show Last Output….
+                    guard let action = state.grid.allActions.first(where: { $0.name == arg }) else {
+                        let message = "\(parts[0]): no action named \(arg)"
+                        print(message); fflush(stdout)
+                        if strict { completion?(message); return }
+                        break
+                    }
+                    if parts[0] == "stopaction" { state.stopRuns(of: action.id) } else { state.onShowLastOutput(action) }
+                case "runstatus":
+                    // Each action that ran or runs: "running" (copies), or how its last run ended and its output.
+                    for action in state.grid.allActions {
+                        if let handle = state.runningActions[action.id] {
+                            print("runstatus: \(action.name) running \(handle.runs.count)")
+                        } else if let last = state.lastRun[action.id] {
+                            print("runstatus: \(action.name) \(DebugUITest.describe(last.ending)) out=\(last.output.debugDescription) err=\(last.errorOutput.debugDescription)")
+                        }
+                        if let reason = state.unavailableReason(action) { print("runstatus: \(action.name) unavailable: \(reason)") }
+                    }
+                    fflush(stdout)
+                case "scripts":
+                    // Looks at the Application Scripts folder as the grid does when shown, and prints it.
+                    await state.refreshScripts()
+                    print("scripts: \(state.actionRunner.scriptsDirectory.path) \(state.scriptNames.map { $0.sorted() } ?? [])")
+                    fflush(stdout)
+                case "openscripts":
+                    // The editor's Open Scripts Folder.
+                    state.actionEditor?.openScriptsFolder()
+                case "terminalapp":
+                    // "terminalapp:<path>" (or empty for Terminal), as Settings › General's picker.
+                    state.prefs.terminalAppPath = arg.isEmpty ? nil : arg
                 case "actions":
                     let encoder = JSONEncoder()
                     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

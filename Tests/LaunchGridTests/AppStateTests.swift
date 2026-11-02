@@ -3674,17 +3674,11 @@ func installed(_ name: String) -> InstalledApp {
         #expect(throws: ActionRunner.Failure.noShortcut) { try ActionRunner.plan(.shortcut(name: " ", input: nil), argument: nil) }
     }
 
-    @Test func aFileOpensWithItsAppAndCommandsCannotRunYet() throws {
+    @Test func aFileOpensWithItsApp() throws {
         #expect(try ActionRunner.plan(.openFile(path: "/Users/x/a.txt", appPath: "/Applications/TextEdit.app"), argument: "ignored")
                 == .openFile(path: "/Users/x/a.txt", appPath: "/Applications/TextEdit.app"))
         #expect(try ActionRunner.plan(.openFile(path: "/Users/x/a.txt", appPath: ""), argument: nil) == .openFile(path: "/Users/x/a.txt", appPath: nil))
         #expect(throws: ActionRunner.Failure.noFile) { try ActionRunner.plan(.openFile(path: "", appPath: nil), argument: nil) }
-        #expect(throws: ActionRunner.Failure.notAvailable) {
-            try ActionRunner.plan(.shell(command: "ls", runMode: .background, workingDirectory: nil, timeoutSeconds: nil), argument: nil)
-        }
-        #expect(throws: ActionRunner.Failure.notAvailable) {
-            try ActionRunner.plan(.userScript(fileName: "a.sh", arguments: [], runMode: .terminal), argument: nil)
-        }
     }
 
     @Test func aMissingFileOrAppIsSaidByName() async throws {
@@ -3947,7 +3941,8 @@ extension SandboxFileAccessTests {
         #expect(model.warnings == ["“gh” is also a keyword of Search GitHub."], "a repeated keyword warns, not blocks")
         #expect(model.canSave)
         model.kind = .command
-        #expect(model.errors == ["Available in the next update"] && !model.canSave)
+        #expect(model.errors == [Sandbox.isActive || !ActionEditorModel.KindChoice.command.isAvailable
+                                 ? ActionRunner.Failure.commandsUnavailable.message : "Enter a command."] && !model.canSave)
         model.kind = .file
         #expect(model.errors == ["Choose a file or folder."])
         model.kind = .shortcut

@@ -216,6 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
         state.onEditAction = { [weak self] action, pageID in self?.showActionEditor(action, pageID: pageID) }
+        state.onConfirmRunAgain = { [weak self] action in self?.confirmRunAgain(action) ?? false }
+        state.onShowLastOutput = { [weak self] action in self?.showLastOutput(action) }
+        state.actionRunner.terminalApp = { [prefs] in prefs.terminalApp }
 
         #if !APP_STORE
         if let scenario = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_UI_TEST"] {
@@ -399,6 +402,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Commands and scripts still running aren't left behind on their own.
+        state?.stopAllRuns()
         state?.saveNow(reportingFailure: false)
     }
 
@@ -788,6 +793,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             ActionEditor(model: model, close: close)
         }
     }
+
+    /// Asked when an action still running is run again: over the grid, which stays up.
+    func confirmRunAgain(_ action: Action) -> Bool {
+        #if !APP_STORE
+        if let answer = DebugScript.runAgainAnswer { return answer }
+        #endif
+        let alert = NSAlert()
+        alert.messageText = String(localized: "“\(action.name)” is still running")
+        alert.informativeText = String(localized: "Run another copy of it at the same time?")
+        alert.addButton(withTitle: String(localized: "Run Another Copy"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        if let panel = overlay.window, panel.isVisible {
+            alert.window.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
+        }
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// What an action's last background run printed, in its own window.
+    func showLastOutput(_ action: Action) {
+        guard let result = state.lastRun[action.id] else { return }
+        windows["lastOutput"]?.close()
+        present("lastOutput", title: String(localized: "Last Output of \(action.name)"), resizable: true) { close in
+            LastOutputView(name: action.name, result: result, close: close)
+        }
+    }
+
+    func closeLastOutput() { windows["lastOutput"]?.close() }
 
     @objc func showChooseApps() {
         present("chooseApps", title: String(localized: "Choose Apps"), resizable: true) { close in ChooseAppsView(close: close) }
