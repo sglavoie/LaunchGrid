@@ -169,7 +169,8 @@ final class Preferences {
 
     var solidColor: NSColor {
         get { NSColor(hex: solidColorHex) ?? .black }
-        set { solidColorHex = newValue.hexString }
+        // A colour with no sRGB value (a pattern from the colour panel) leaves the setting as it was.
+        set { if let hex = newValue.hexString { solidColorHex = hex } }
     }
 }
 
@@ -184,13 +185,14 @@ extension NSColor {
 
     /// WCAG relative luminance, 0 (black) to 1 (white).
     var luminance: Double {
-        let c = usingColorSpace(.sRGB) ?? self
+        guard let c = usingColorSpace(.sRGB) else { return 0 }
         func linear(_ v: CGFloat) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
         return 0.2126 * linear(c.redComponent) + 0.7152 * linear(c.greenComponent) + 0.0722 * linear(c.blueComponent)
     }
 
-    var hexString: String {
-        let c = usingColorSpace(.sRGB) ?? self
+    /// Nil for a colour with no sRGB value, such as a pattern, whose components can't be read.
+    var hexString: String? {
+        guard let c = usingColorSpace(.sRGB) else { return nil }
         return String(format: "#%02X%02X%02X", Int(round(c.redComponent * 255)), Int(round(c.greenComponent * 255)),
                       Int(round(c.blueComponent * 255)))
     }

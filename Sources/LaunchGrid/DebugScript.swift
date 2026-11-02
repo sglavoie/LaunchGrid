@@ -228,6 +228,26 @@ enum DebugScript {
                 case "closewin":
                     // Closes the window titled `arg`, as its close button does.
                     NSApp.windows.first { $0.title == arg && $0.isVisible }?.performClose(nil)
+                case "patterncolor":
+                    // Picks a pattern (a colour with no sRGB value) for Settings' open colour well
+                    // through the colour panel, as dragging an image there does; prints the hex kept.
+                    let image = NSImage(size: NSSize(width: 4, height: 4))
+                    if let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4, bitsPerSample: 8,
+                                                  samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) {
+                        for x in 0..<4 { for y in 0..<4 { rep.setColor(.systemBlue, atX: x, y: y) } }
+                        image.addRepresentation(rep)
+                    }
+                    func wells(in view: NSView) -> [NSColorWell] {
+                        (view as? NSColorWell).map { [$0] } ?? view.subviews.flatMap(wells)
+                    }
+                    let found = NSApp.windows.compactMap(\.contentView).flatMap(wells)
+                    found.first?.activate(true)
+                    NSColorPanel.shared.color = NSColor(patternImage: image)
+                    try? await Task.sleep(for: .milliseconds(300))
+                    print("patterncolor: wells=\(found.count) hex=\(state.prefs.solidColorHex)"); fflush(stdout)
+                    found.first?.deactivate()
+                    NSColorPanel.shared.close()
                 case "bg":
                     // "bg:wallpaper", or "bg:/path/to/picture" for a custom image.
                     if arg.hasPrefix("/") {

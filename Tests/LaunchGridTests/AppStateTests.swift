@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import CoreServices
 import Foundation
@@ -61,6 +62,17 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @MainActor @Suite(.tempDir) struct PreferencesTests {
+    @Test func aPatternColourLeavesTheSolidColourAsItWas() {
+        let prefs = testPreferences()
+        prefs.solidColor = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        let image = NSImage(size: NSSize(width: 2, height: 2))
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        image.addRepresentation(rep)
+        prefs.solidColor = NSColor(patternImage: image)
+        #expect(prefs.solidColorHex == "#FF0000")
+    }
+
     @Test(arguments: [-1, 65_536, Int(UInt32.max), Int.max])
     func outOfRangeShortcutKeyCodesFallBackToSpace(code: Int) {
         let defaults = UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!
