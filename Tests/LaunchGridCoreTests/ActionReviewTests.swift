@@ -53,6 +53,18 @@ import Testing
         #expect(!ActionKind.openFile(path: plain.path, appPath: nil).isRunnableCode)
         #expect(!ActionKind.openFile(path: dir.path, appPath: nil).isRunnableCode, "a folder is searchable, not run")
 
+        // Scripts, whose default app may run them, and links to them, whatever they're named.
+        for path in ["/Users/x/setup.sh", "/Users/x/a.pl", "/Users/x/b.py", "/Users/x/c.applescript", "/Users/x/d.zsh"] {
+            #expect(ActionKind.openFile(path: path, appPath: nil).isRunnableCode, "\(path)")
+        }
+        let shScript = dir.appendingPathComponent("run.sh"), disguised = dir.appendingPathComponent("notes.txt")
+        try Data("#!/bin/sh\n".utf8).write(to: shScript)
+        try FileManager.default.createSymbolicLink(at: disguised, withDestinationURL: tool)
+        #expect(ActionKind.openFile(path: disguised.path, appPath: nil).isRunnableCode, "a link to an executable")
+        let linkedPlain = dir.appendingPathComponent("plain-link.txt")
+        try FileManager.default.createSymbolicLink(at: linkedPlain, withDestinationURL: plain)
+        #expect(!ActionKind.openFile(path: linkedPlain.path, appPath: nil).isRunnableCode, "a link to a plain file")
+
         let script = Action(name: "Script", kind: .openFile(path: "/Users/x/Notes.command", appPath: nil))
         let shared = Grid(rows: 3, columns: 4, pages: [Page(items: [.action(file), .action(script)])])
         #expect(shared.needsActionReview)

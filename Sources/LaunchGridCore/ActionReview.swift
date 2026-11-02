@@ -1,4 +1,6 @@
+import CoreServices
 import Foundation
+import UniformTypeIdentifiers
 
 /// Grid files can be shared, and an action in one runs on Return. A file someone opens is
 /// treated as untrusted: its actions are listed before it loads and need a look in the editor
@@ -25,13 +27,25 @@ extension ActionKind {
     ]
 
     static func opensAsCode(_ path: String) -> Bool {
+        // A link opens what it points to: `notes.txt` can be a link to a script.
         let url = URL(fileURLWithPath: path)
-        let ext = url.pathExtension.lowercased()
-        if runnableExtensions.contains(ext) { return true }
-        // An executable without an extension opens in Terminal, which runs it.
+        let target = url.resolvingSymlinksInPath()
+        for candidate in Set([url, target]) {
+            let ext = candidate.pathExtension.lowercased()
+            if runnableExtensions.contains(ext) { return true }
+            // Shell, Perl, Python, AppleScript and other scripts: their default app may well
+            // be a terminal or a launcher that runs them.
+            if !ext.isEmpty, let type = UTType(filenameExtension: ext), type.conforms(to: .script) { return true }
+        }
         var isFolder: ObjCBool = false
-        return ext.isEmpty && FileManager.default.fileExists(atPath: path, isDirectory: &isFolder)
-            && !isFolder.boolValue && FileManager.default.isExecutableFile(atPath: path)
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isFolder), !isFolder.boolValue else { return false }
+        // An executable without an extension opens in Terminal, which runs it.
+        if target.pathExtension.isEmpty && FileManager.default.isExecutableFile(atPath: target.path) { return true }
+        // Any other file opened by a terminal by default runs too.
+        if let app = LSCopyDefaultApplicationURLForURL(target as CFURL, .all, nil)?.takeRetainedValue() as URL? {
+            return isTerminal(app.path)
+        }
+        return false
     }
 
     /// Terminal apps run a file they open as a script.

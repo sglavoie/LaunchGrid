@@ -1,5 +1,5 @@
 {
-  "name": "Files that run something when opened are listed for review and left out by Remove Them",
+  "name": "Files that run something when opened are listed for review and left out by Remove Them, with the pages they empty",
   "fixture": {
     "rows": 3,
     "columns": 4,
@@ -13,9 +13,10 @@
     ],
     "folders": {},
     "files": {
-      "shared.launchgrid": "{\"version\": 2, \"rows\": 3, \"columns\": 4, \"pages\": [{\"items\": [{\"type\": \"action\", \"action\": {\"name\": \"Notes\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/Notes.command\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"Readme\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/readme.txt\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"In Terminal\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/readme.txt\", \"appPath\": \"/System/Applications/Utilities/Terminal.app\"}}}]}]}\n",
+      "shared.launchgrid": "{\"version\": 2, \"rows\": 3, \"columns\": 4, \"pages\": [{\"items\": [{\"type\": \"action\", \"action\": {\"name\": \"Notes\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/Notes.command\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"Readme\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/readme.txt\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"In Terminal\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/readme.txt\", \"appPath\": \"/System/Applications/Utilities/Terminal.app\"}}}, {\"type\": \"action\", \"action\": {\"name\": \"Setup\", \"kind\": {\"type\": \"openFile\", \"path\": \"${FILES}/setup.sh\"}}}]}, {\"items\": [{\"type\": \"action\", \"action\": {\"name\": \"Wipe\", \"kind\": {\"type\": \"shell\", \"command\": \"touch ${FILES}/wiped\"}}}]}]}\n",
       "readme.txt": "Plain text.\n",
-      "Notes.command": "touch \"$(dirname \"$0\")/ran\"\n"
+      "Notes.command": "touch \"$(dirname \"$0\")/ran\"\n",
+      "setup.sh": "touch \"$(dirname \"$0\")/ran\"\n"
     }
   },
   "steps": [
@@ -61,13 +62,19 @@
           [
             "Notes",
             "Readme",
-            "In Terminal"
+            "In Terminal",
+            "Setup"
+          ],
+          [
+            "Wipe"
           ]
         ],
         "reviewActions": [
           "In Terminal",
           "Notes",
-          "Readme"
+          "Readme",
+          "Setup",
+          "Wipe"
         ]
       }
     },
