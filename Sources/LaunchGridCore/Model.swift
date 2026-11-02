@@ -227,15 +227,19 @@ public struct Action: Codable, Equatable, Identifiable, Sendable {
     public var kind: ActionKind
     /// False for a search-only action, which lives in `Grid.hiddenActions` instead of on a page.
     public var showsOnGrid: Bool
+    /// True for an action that came from a grid file someone opened: it doesn't run until it
+    /// has been looked at, and saved, in the editor.
+    public var needsReview: Bool
 
     public init(id: UUID = UUID(), name: String, keywords: [String] = [], icon: ActionIcon? = nil,
-                kind: ActionKind, showsOnGrid: Bool = true) {
+                kind: ActionKind, showsOnGrid: Bool = true, needsReview: Bool = false) {
         self.id = id
         self.name = name
         self.keywords = Action.normalizedKeywords(keywords)
         self.icon = icon ?? kind.defaultIcon
         self.kind = kind
         self.showsOnGrid = showsOnGrid
+        self.needsReview = needsReview
     }
 
     public var title: String { name }
@@ -489,7 +493,7 @@ extension Folder {
 }
 
 extension Action {
-    private enum CodingKeys: String, CodingKey { case id, name, keywords, icon, kind, showsOnGrid }
+    private enum CodingKeys: String, CodingKey { case id, name, keywords, icon, kind, showsOnGrid, needsReview }
 
     /// Only `kind` is required; a kind this build doesn't know fails the action alone.
     public init(from decoder: Decoder) throws {
@@ -501,8 +505,21 @@ extension Action {
             keywords: ((try? c.decodeIfPresent([String?].self, forKey: .keywords)) ?? []).compactMap { $0 },
             icon: try? c.decodeIfPresent(ActionIcon.self, forKey: .icon),
             kind: kind,
-            showsOnGrid: (try? c.decodeIfPresent(Bool.self, forKey: .showsOnGrid)) ?? true
+            showsOnGrid: (try? c.decodeIfPresent(Bool.self, forKey: .showsOnGrid)) ?? true,
+            needsReview: (try? c.decodeIfPresent(Bool.self, forKey: .needsReview)) ?? false
         )
+    }
+
+    /// `needsReview` is written only when set, so layouts without it stay as they were.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(keywords, forKey: .keywords)
+        try c.encode(icon, forKey: .icon)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(showsOnGrid, forKey: .showsOnGrid)
+        if needsReview { try c.encode(true, forKey: .needsReview) }
     }
 }
 

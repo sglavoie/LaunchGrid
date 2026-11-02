@@ -19,6 +19,12 @@ enum DebugScript {
     private static var heldMenu: [MenuEntry] = []
     /// What "runagain:yes|no" answers in place of asking whether to run another copy.
     static var runAgainAnswer: Bool?
+    /// What "review:keep|remove|cancel" answers in place of the grid file review sheet.
+    static var reviewAnswer: NSApplication.ModalResponse?
+    /// What "exportcommands:on|off" sets the save panel's "Include commands and scripts" to.
+    static var includeCommandsAnswer: Bool?
+    /// What "replacelayout:yes|no" answers in place of asking to replace the layout with a file.
+    static var replaceAnswer: Bool?
 
     static func run(_ script: String, state: AppState, overlay: OverlayController, delegate: AppDelegate,
                     strict: Bool = false, completion: (@MainActor (String?) -> Void)? = nil) {
@@ -142,7 +148,7 @@ enum DebugScript {
                 case "open":
                     // As if Finder opened the file. Async, so the script goes on while an alert is up.
                     let url = URL(fileURLWithPath: arg)
-                    DispatchQueue.main.async { delegate.application(NSApp, open: [url]) }
+                    DispatchQueue.main.async { delegate.debugOpen(url) }
                 case "loadfile":
                     // Load Grid File… (menu bar or Settings), its panel and any alert driven from outside.
                     DispatchQueue.main.async { delegate.loadGridFile(done: nil) }
@@ -502,6 +508,21 @@ enum DebugScript {
                         break
                     }
                     state.run(action, argument: n.count > 1 ? n[1] : nil)
+                case "review":
+                    // "review:keep|remove|cancel" answers the grid file review sheet (printing its
+                    // list as "review: [...]"); "review:ask" shows it again.
+                    reviewAnswer = switch arg {
+                    case "keep": .alertFirstButtonReturn
+                    case "remove": .alertSecondButtonReturn
+                    case "cancel": .alertThirdButtonReturn
+                    default: nil
+                    }
+                case "replacelayout":
+                    // "replacelayout:yes|no" answers "Replace your layout with …?"; "replacelayout:ask" asks.
+                    replaceAnswer = arg == "ask" ? nil : arg == "yes"
+                case "exportcommands":
+                    // "exportcommands:on|off" presets the save panel's checkbox; "exportcommands:ask" doesn't.
+                    includeCommandsAnswer = arg == "ask" ? nil : arg == "on"
                 case "runagain":
                     // "runagain:yes|no" answers "run another copy?" without asking; "runagain:ask" asks again.
                     runAgainAnswer = arg == "ask" ? nil : arg == "yes"

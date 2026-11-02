@@ -99,7 +99,7 @@ enum DebugUITest {
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
         "movetopage", "titleedit", "autoadd", "windowsize", "addaction", "runaction",
         "neweditor", "editaction", "editorfill", "editorsave", "editorcancel",
-        "stopaction", "runagain",
+        "stopaction", "runagain", "open", "review", "replacelayout",
     ]
 
     /// How a run ended, as the snapshot's `lastRuns` says it: "exit:0", "signal:15",
@@ -149,6 +149,8 @@ enum DebugUITest {
             // Every action's keywords by name, and the search-only ones' names.
             "actions": .object(Dictionary(state.grid.allActions.map { ($0.name, Value.strings($0.keywords)) }, uniquingKeysWith: { a, _ in a })),
             "hiddenActions": .strings(state.grid.hiddenActions.map(\.name)),
+            // The actions from a grid file that still need a look in the editor, sorted.
+            "reviewActions": .strings(state.grid.allActions.filter(\.needsReview).map(\.name).sorted()),
             // "" with no editor open, else "new" or "edit:<name>", and what keeps it from saving.
             "actionEditor": .string(state.actionEditor.map { $0.original.map { "edit:\($0.name)" } ?? "new" } ?? ""),
             "editorErrors": .strings(state.actionEditor?.errors ?? []),

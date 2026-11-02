@@ -329,6 +329,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         layoutOpenQueue.enqueue(urls)
     }
 
+    #if !APP_STORE
+    /// The debug `open` step: as Finder opening a file, without the launch-time queue, which
+    /// debug runs never make ready.
+    func debugOpen(_ url: URL) { openLayout(url) }
+    #endif
+
     /// A completed layout may have no apps but still contain pages, titles or grid size
     /// choices worth keeping. Welcome-screen exclusions precede the first layout.
     static func shouldConfirmReplacingLayout(_ state: AppState) -> Bool { state.hasGridFile }
@@ -351,8 +357,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 // Asks once the database is read, and only when apps in it were found.
                 handedOn = true
                 importDatabase(url, from: url.lastPathComponent, done: done, finished: finished)
-            case .grid(let grid, let skipped):
+            case .grid(let read, let skipped):
                 let name = url.deletingPathExtension().lastPathComponent
+                // Nothing in the file runs while it loads; its actions wait for a look in the editor.
+                guard let grid = reviewActions(in: read, name: name) else { return }
                 // Said before replacing anything, as an unreadable saved layout is.
                 let leftOut = skipped > 0 ? String(localized: "\(skipped) entries in “\(name)” could not be read and will be left out.") : nil
                 if Self.shouldConfirmReplacingLayout(state) {
@@ -365,7 +373,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                         .compactMap { $0 }.joined(separator: "\n\n")
                     alert.addButton(withTitle: String(localized: "Replace"))
                     alert.addButton(withTitle: String(localized: "Cancel"))
+                    #if !APP_STORE
+                    if let preset = DebugScript.replaceAnswer {
+                        guard preset else { return }
+                    } else {
+                        guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    }
+                    #else
                     guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    #endif
                 } else if let leftOut {
                     showError(String(localized: "Some of “\(name)” couldn't be read"), leftOut)
                 }
@@ -993,8 +1009,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.launchGridLayout]
         panel.nameFieldStringValue = String(localized: "LaunchGrid Layout") + ".launchgrid"
+        // A grid file gets shared: commands stay out of it unless asked for.
+        var include: NSButton?
+        if state.grid.hasCommands {
+            let box = NSButton(checkboxWithTitle: String(localized: "Include commands and scripts"), target: nil, action: nil)
+            box.state = .off
+            box.setAccessibilityHelp(String(localized: "When off, commands and scripts are saved as placeholders with their names and icons."))
+            let holder = NSView(frame: NSRect(x: 0, y: 0, width: box.fittingSize.width + 40, height: box.fittingSize.height + 16))
+            box.frame.origin = NSPoint(x: 20, y: 8)
+            holder.addSubview(box)
+            panel.accessoryView = holder
+            include = box
+        }
+        #if !APP_STORE
+        if let preset = DebugScript.includeCommandsAnswer { include?.state = preset ? .on : .off }
+        #endif
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let grid = state.grid
+        let grid = include == nil || include?.state == .on ? state.grid : state.grid.removingCommands()
         Task {
             // Off the main thread: a stalled network or USB volume mustn't hang the app.
             let written = await Disk.run { Result { try GridStore.encode(grid).write(to: url, options: .atomic) } }
@@ -1003,6 +1034,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             case .failure(let error): showError(String(localized: "Could not save the grid file"), error.localizedDescription)
             }
         }
+    }
+
+    /// The layout a grid file someone opened goes in as: every action in it needs review
+    /// before it runs. One with commands, scripts or links to other apps is shown first, each
+    /// in full, to keep for review or leave out. Nil when they cancel loading.
+    private func reviewActions(in grid: Grid, name: String) -> Grid? {
+        guard grid.needsActionReview else { return grid.applyingReview(.keepForReview) }
+        let entries = grid.actionReview
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "“\(name)” contains commands or links to other apps")
+        alert.informativeText = String(localized: "Nothing in it has run. Actions you keep don't run until you've checked them in the editor. Remove Them leaves out the commands, scripts and links to other apps listed first.")
+        alert.accessoryView = Self.reviewList(entries)
+        alert.addButton(withTitle: String(localized: "Keep for Review"))
+        alert.addButton(withTitle: String(localized: "Remove Them"))
+        let cancel = alert.addButton(withTitle: String(localized: "Cancel Loading"))
+        cancel.keyEquivalent = "\u{1b}"
+        let answer: NSApplication.ModalResponse
+        #if !APP_STORE
+        if let preset = DebugScript.reviewAnswer {
+            print("review: \(entries.map { "\($0.isRunnableCode ? "!" : "-")\($0.action.name)=\($0.detail)" })")
+            fflush(stdout)
+            answer = preset
+        } else {
+            answer = alert.runModal()
+        }
+        #else
+        answer = alert.runModal()
+        #endif
+        switch answer {
+        case .alertFirstButtonReturn: return grid.applyingReview(.keepForReview)
+        case .alertSecondButtonReturn: return grid.applyingReview(.removeRunnable)
+        default: return nil
+        }
+    }
+
+    /// Each action's name and what it does in full, the commands, scripts and app links first.
+    private static func reviewList(_ entries: [ActionReviewEntry]) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        let width: CGFloat = 380
+        func add(_ heading: String, _ group: [ActionReviewEntry]) {
+            guard !group.isEmpty else { return }
+            let title = NSTextField(labelWithString: heading)
+            title.font = .boldSystemFont(ofSize: NSFont.smallSystemFontSize)
+            title.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(title)
+            for entry in group {
+                let name = NSTextField(labelWithString: entry.action.name)
+                name.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+                let detail = NSTextField(wrappingLabelWithString: entry.detail)
+                detail.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+                detail.isSelectable = true
+                detail.preferredMaxLayoutWidth = width - 16
+                detail.setAccessibilityLabel(String(localized: "\(entry.action.name): \(entry.detail)"))
+                stack.addArrangedSubview(name)
+                stack.addArrangedSubview(detail)
+                stack.setCustomSpacing(2, after: name)
+            }
+        }
+        add(String(localized: "Commands, scripts and links to other apps"), entries.filter(\.isRunnableCode))
+        add(String(localized: "Also kept for review"), entries.filter { !$0.isRunnableCode })
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.drawsBackground = false
+        let document = FlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(stack)
+        scroll.documentView = document
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: document.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            document.widthAnchor.constraint(equalToConstant: width - 4),
+        ])
+        document.layoutSubtreeIfNeeded()
+        scroll.frame.size.height = min(260, document.fittingSize.height + 4)
+        return scroll
+    }
+
+    /// Scroll content laid out from the top.
+    private final class FlippedView: NSView {
+        override var isFlipped: Bool { true }
     }
 
     @objc func loadGridFile() {

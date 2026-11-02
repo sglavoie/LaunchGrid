@@ -138,6 +138,10 @@ final class ActionEditorModel {
 
     var isNew: Bool { original == nil }
 
+    /// It came from a grid file and hasn't run yet: the editor says to check it, and saving it
+    /// (which the draft does, without the flag) lets it run.
+    var needsReview: Bool { original?.needsReview ?? false }
+
     /// The keywords as saved: split at commas, trimmed and lowercased, without blanks.
     var keywords: [String] {
         keywordsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
@@ -390,6 +394,16 @@ struct ActionEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                if model.needsReview {
+                    Section {
+                        Label {
+                            Text("This action came from a grid file. Check what it does before running it.")
+                        } icon: {
+                            Image(systemName: "exclamationmark.shield").foregroundStyle(.yellow)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
                 Section {
                     TextField("Name", text: $model.name)
                     VStack(alignment: .leading, spacing: 6) {

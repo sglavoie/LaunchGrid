@@ -3991,3 +3991,57 @@ extension SandboxFileAccessTests {
         #expect(model.testFailed == false && state.grid.allActions.isEmpty)
     }
 }
+
+@MainActor @Suite(.tempDir) struct ActionReviewRunTests {
+    let link = Action(name: "Docs", kind: .openURL(template: "https://example.com/docs"), needsReview: true)
+
+    @Test func anActionNeedingReviewOpensTheEditorInsteadOfRunning() async throws {
+        let opener = FakeOpener()
+        let state = makeState(["A"])
+        opener.install(on: state)
+        state.apply { $0.pages[0].items.append(.action(link)) }
+        state.isShown = true
+        var edited: [Action?] = []
+        state.onEditAction = { action, _ in edited.append(action) }
+        var hid = 0
+        state.onHideForLaunch = { hid += 1 }
+
+        #expect(state.run(link, argument: nil) == nil)
+        state.activate(.action(link))
+        #expect(edited.map { $0?.id } == [link.id, link.id] && hid == 0 && opener.opened.isEmpty)
+
+        // Saving it from the editor clears the flag, and then it runs.
+        let model = ActionEditorModel(action: try #require(edited.first ?? nil), pageID: nil, others: state.grid.allActions)
+        #expect(model.needsReview)
+        #expect(model.save(to: state))
+        let saved = try #require(state.grid.item(link.id)?.action)
+        #expect(!saved.needsReview && saved.kind == link.kind && saved.name == link.name)
+        await state.run(saved, argument: nil)?.value
+        #expect(opener.opened == [URL(string: "https://example.com/docs")!] && edited.count == 2)
+        state.undo()
+        #expect(state.grid.item(link.id)?.action?.needsReview == true, "undo brings the review back")
+    }
+
+    @Test func aCommandNeedingReviewDoesNotStart() throws {
+        let state = makeState(["A"])
+        let command = Action(name: "Touch", kind: .shell(command: "touch \(TempDir.url.path)/ran", runMode: .background,
+                                                          workingDirectory: nil, timeoutSeconds: nil), needsReview: true)
+        state.apply { $0.pages[0].items.append(.action(command)) }
+        var edited = 0
+        state.onEditAction = { _, _ in edited += 1 }
+        #expect(state.run(command, argument: nil) == nil)
+        #expect(edited == 1 && state.runningActions.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: TempDir.url.appendingPathComponent("ran").path))
+    }
+
+    @Test func theAppsOwnLayoutLoadsWithoutReview() throws {
+        let dir = TempDir.url
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let command = Action(name: "Build", kind: .shell(command: "make", runMode: .background, workingDirectory: nil, timeoutSeconds: nil))
+        try store.save(Grid(rows: 3, columns: 4, pages: [Page(items: [.action(command)])],
+                            hiddenActions: [Action(name: "Deep", kind: .openURL(template: "obsidian://x"), showsOnGrid: false)]))
+        let state = AppState(prefs: testPreferences(), store: store)
+        #expect(state.grid.allActions.count == 2 && state.grid.allActions.allSatisfy { !$0.needsReview })
+    }
+}

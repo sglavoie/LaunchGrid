@@ -654,6 +654,7 @@ struct ItemView: View {
         case .action(let a):
             switch runStatus(a) {
             case .running: Text("Action, running")
+            case .needsReview: Text("Action, needs review before it runs")
             case .failed: Text("Action, last run failed")
             case .unavailable: Text("Action, unavailable: \(state.unavailableReason(a) ?? "")")
             case nil: Text("Action")
@@ -675,6 +676,7 @@ struct ItemView: View {
 
     private func runStatus(_ action: Action) -> RunBadge.Status? {
         if state.runningActions[action.id] != nil { return .running }
+        if action.needsReview { return .needsReview }
         if state.unavailableReason(action) != nil { return .unavailable }
         if let last = state.lastRun[action.id], !last.succeeded, last.ending != .stopped { return .failed }
         return nil
@@ -1370,7 +1372,7 @@ struct BackgroundMenu: View {
 /// A command or script's state on its tile: a spinner while it runs, a warning after a
 /// failed run, a slash when it can't run here. Said in the tile's accessibility value instead.
 struct RunBadge: View {
-    enum Status { case running, failed, unavailable }
+    enum Status { case running, needsReview, failed, unavailable }
 
     @Environment(\.colorSchemeContrast) private var contrast
     let status: Status?
@@ -1384,6 +1386,8 @@ struct RunBadge: View {
                 switch status {
                 case .running:
                     ProgressView().controlSize(.small).scaleEffect(side / 22).tint(.white)
+                case .needsReview:
+                    Image(systemName: "eye").font(.system(size: side * 0.5, weight: .bold)).foregroundStyle(.yellow)
                 case .failed:
                     Image(systemName: "exclamationmark").font(.system(size: side * 0.55, weight: .heavy)).foregroundStyle(.orange)
                 case .unavailable:

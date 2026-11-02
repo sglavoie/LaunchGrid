@@ -1279,6 +1279,11 @@ final class AppState {
     func run(_ action: Action, argument: String?) -> Task<Void, Never>? {
         // A SwiftUI tile or an open menu can still hold an action from before it was edited.
         guard let action = grid.item(action.id)?.action else { return nil }
+        // From a grid file someone opened: it runs once it has been looked at in the editor.
+        if action.needsReview {
+            onEditAction(action, nil)
+            return nil
+        }
         let plan: ActionRunner.Plan
         do {
             plan = try ActionRunner.plan(action.kind, argument: argument)

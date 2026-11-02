@@ -1,0 +1,28 @@
+{
+  "name": "A grid file with a command is listed first, runs nothing, and its actions open the editor until saved",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Delta"]],
+    "pageTitles": [""],
+    "folders": {},
+    "files": {
+      "shared.launchgrid": "{\"version\": 2, \"rows\": 3, \"columns\": 4, \"pages\": [{\"items\": [{\"type\": \"action\", \"action\": {\"name\": \"Touch\", \"kind\": {\"type\": \"shell\", \"command\": \"touch ${FILES}/ran\", \"runMode\": \"background\"}, \"needsReview\": false}}, {\"type\": \"action\", \"action\": {\"name\": \"Docs\", \"kind\": {\"type\": \"openURL\", \"template\": \"https://example.com\"}}}]}]}\n"
+    }
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "replacelayout:yes"},
+    {"expect": {"reviewActions": []}},
+    {"run": "review:remove"},
+    {"run": "open:${FILES}/shared.launchgrid"},
+    {"expect": {"pages": [["Docs"]], "reviewActions": ["Docs"]}},
+    {"run": "review:keep"},
+    {"run": "open:${FILES}/shared.launchgrid"},
+    {"expect": {"pages": [["Touch", "Docs"]], "reviewActions": ["Docs", "Touch"]}},
+    {"run": "runaction:Touch"},
+    {"expect": {"actionEditor": "edit:Touch", "running": [], "lastRuns": {}}},
+    {"run": "editorsave"},
+    {"expect": {"actionEditor": "", "reviewActions": ["Docs"], "running": []}}
+  ]
+}
