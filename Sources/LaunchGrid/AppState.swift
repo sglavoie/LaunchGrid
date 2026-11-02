@@ -659,8 +659,13 @@ final class AppState {
 
     /// `appPathsInUse`, and the files actions open, the apps they open them with and their
     /// pictures, in the undo and redo history too: what the sandbox must keep access to.
-    var pathsInUse: Set<String> {
-        var paths = appPathsInUse
+    var pathsInUse: Set<String> { appPathsInUse.union(actionPathsInUse) }
+
+    /// The files actions open, the apps they open them with and their pictures, in the undo
+    /// and redo history too. Unlike the grid's apps, these keep a folder's bookmark when they
+    /// are inside it: a scan folder full of grid apps can still be removed.
+    var actionPathsInUse: Set<String> {
+        var paths = Set<String>()
         for g in [grid] + undoStack + redoStack {
             for action in g.allActions {
                 if case .openFile(let path, let appPath) = action.kind {

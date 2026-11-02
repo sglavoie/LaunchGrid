@@ -4101,28 +4101,36 @@ extension SandboxFileAccessTests {
         let notes = "\(tools)/notes.txt", viewer = "\(tools)/Viewer.app", icon = "\(tools)/icon.png"
         // Starts like `docs`, but isn't inside it.
         let sibling = "/Users/x/Docsets/a.txt"
-        // Access comes only from settings: two scan folders.
-        for path in [tools, docs] { #expect(PickedFileAccess.addFolder(URL(fileURLWithPath: path), prefs: prefs)) }
+        // Holds the grid's apps, which don't keep it.
+        let apps = "/Applications"
+        // Access comes only from settings: three scan folders.
+        for path in [tools, docs, apps] { #expect(PickedFileAccess.addFolder(URL(fileURLWithPath: path), prefs: prefs)) }
 
         // A loaded layout's actions use a file, an app and a picture inside `tools`, and a file
         // next to `docs`, none of them picked in the action editor.
         let state = makeState(["A"])
-        let wire = { FileAccess.pathsInUse = { [weak state] in state?.pathsInUse ?? [] } }
+        let wire = {
+            FileAccess.pathsInUse = { [weak state] in state?.pathsInUse ?? [] }
+            FileAccess.actionPathsInUse = { [weak state] in state?.actionPathsInUse ?? [] }
+        }
         wire()
         let openNotes = Action(name: "Notes", icon: .image(path: icon), kind: .openFile(path: notes, appPath: viewer))
         let openSibling = Action(name: "Docset", kind: .openFile(path: sibling, appPath: nil))
         state.apply { $0.pages[0].items += [.action(openNotes), .action(openSibling)] }
 
         // The settings change: `tools` stays for the actions inside it, `docs` goes.
-        prefs.extraFolders.removeAll { [tools, docs].contains($0) }
-        for path in [tools, docs] { FileAccess.releaseSetting(path, prefs: prefs) }
+        #expect(state.appPathsInUse.contains { $0.hasPrefix(apps + "/") })
+        prefs.extraFolders.removeAll { [tools, docs, apps].contains($0) }
+        for path in [tools, docs, apps] { FileAccess.releaseSetting(path, prefs: prefs) }
         #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil, "the actions inside it still need it")
         #expect(!sandbox.closed.contains(tools))
-        #expect(sandbox.saved[docs] == nil && sandbox.closed == [docs], "a similarly named sibling doesn't keep it")
+        #expect(sandbox.saved[docs] == nil && sandbox.closed.contains(docs), "a similarly named sibling doesn't keep it")
+        #expect(sandbox.saved[apps] == nil && sandbox.closed.contains(apps), "the grid's apps inside it don't keep it")
+        #expect(sandbox.closed.count == 2)
         for path in [notes, viewer, icon, sibling] {
             #expect(sandbox.saved[path] == nil && !FileAccess.isGranted(path), "\(path) gets no access of its own")
         }
-        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
         #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil)
 
         // It comes back at the next launch.
@@ -4131,21 +4139,21 @@ extension SandboxFileAccessTests {
         FileAccess.restore(prefs: prefs)
         #expect(FileAccess.isGranted(tools))
         wire()
-        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
         #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil)
 
         // Removed, undone and redone, the action can still come back: the history keeps access.
         state.remove([openNotes.id])
-        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
         #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil)
         state.undo()
-        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
         state.redo()
-        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        FileAccess.forgetUnused(notIn: state.pathsInUse, actionsInUse: state.actionPathsInUse, prefs: prefs)
         #expect(FileAccess.isGranted(tools) && sandbox.saved[tools] != nil)
 
         // Once nothing inside it is referred to, even in the history, it goes.
-        FileAccess.forgetUnused(notIn: state.appPathsInUse.union([sibling]), prefs: prefs)
+        FileAccess.forgetUnused(notIn: state.appPathsInUse.union([sibling]), actionsInUse: [sibling], prefs: prefs)
         #expect(!FileAccess.isGranted(tools) && sandbox.saved[tools] == nil && sandbox.closed.contains(tools))
         FileAccess.reset()
         sandbox.install()
@@ -4154,9 +4162,10 @@ extension SandboxFileAccessTests {
     }
 
     @Test func aFolderBookmarkCoversOnlyWhatIsInsideIt() {
-        #expect(FileAccess.isUsed("/Users/x/Tools", by: ["/Users/x/Tools"]))
-        #expect(FileAccess.isUsed("/Users/x/Tools", by: ["/Users/x/Tools/a/b.txt"]))
-        #expect(!FileAccess.isUsed("/Users/x/Tools", by: ["/Users/x/ToolsOld/a.txt", "/Users/x"]))
+        #expect(FileAccess.isUsed("/Users/x/Tools", exactly: ["/Users/x/Tools"], inside: []))
+        #expect(FileAccess.isUsed("/Users/x/Tools", exactly: [], inside: ["/Users/x/Tools/a/b.txt"]))
+        #expect(!FileAccess.isUsed("/Users/x/Tools", exactly: ["/Users/x/Tools/a/b.txt"], inside: []), "only actions keep a folder")
+        #expect(!FileAccess.isUsed("/Users/x/Tools", exactly: [], inside: ["/Users/x/ToolsOld/a.txt", "/Users/x"]))
     }
 
     @Test func aSettingSharedWithALoadedActionOutlivesItAfterASave() {

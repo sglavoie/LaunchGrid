@@ -203,8 +203,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         #endif
         // Only the sandboxed build keeps bookmarks, so only it needs telling which apps are in use.
         if Sandbox.isActive {
-            state.onAppPathsInUse = { [prefs] in FileAccess.forgetUnused(notIn: $0, prefs: prefs) }
+            state.onAppPathsInUse = { [prefs, weak state = state as AppState?] in
+                FileAccess.forgetUnused(notIn: $0, actionsInUse: state?.actionPathsInUse ?? [], prefs: prefs)
+            }
             FileAccess.pathsInUse = { [weak state = state as AppState?] in state?.pathsInUse ?? [] }
+            FileAccess.actionPathsInUse = { [weak state = state as AppState?] in state?.actionPathsInUse ?? [] }
         }
         FileAccess.onBookmarkFailure = { [weak self] url in
             self?.showError(String(localized: "LaunchGrid can't keep access to “\(url.lastPathComponent)”"),
