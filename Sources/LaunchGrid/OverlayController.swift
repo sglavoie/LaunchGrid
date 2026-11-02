@@ -93,10 +93,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.makeFirstResponder(textInput)
         launchedBehind = nil
         state.didShow()
+        // Shown again mid-fade, whose completion now won't run: a save that already ended
+        // there is reported here (one still running reports itself, now the grid is shown).
+        if let progress = hideProgress, !progress.gone {
+            if progress.saved == false { state.reportLastSaveFailure() }
+            if progress.saved == true { state.reportLastBackupFailure() }
+        }
+        hideProgress = nil
     }
 
     /// Whether ←/→ moved keyboard focus onto the empty page shown, which has nothing to focus.
     private var arrowedOntoEmptyPage = false
+
+    /// The last hide's save and fade, while it fades out.
+    private var hideProgress: HideProgress?
 
     /// - Parameter saving: false when the caller has just saved (quitting), so a failure
     ///   isn't reported twice.
@@ -109,6 +119,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // Written off the main thread, so the fade doesn't wait for the disk. A failure is told
         // once the panel is gone, whichever ends first: an alert would open behind it.
         let progress = HideProgress()
+        hideProgress = progress
         if saving {
             state.saveInBackground(reportingFailure: false) { [weak self] saved in
                 progress.saved = saved

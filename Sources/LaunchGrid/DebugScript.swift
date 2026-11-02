@@ -194,6 +194,11 @@ enum DebugScript {
                 case "toast":
                     print("toast: \(state.toast ?? "-")")
                     fflush(stdout)
+                case "hideshow":
+                    // "hideshow:ms": hides the grid and shows it again ms later, within its fade.
+                    overlay.hide()
+                    try? await Task.sleep(for: .milliseconds(Int(arg) ?? 50))
+                    overlay.show()
                 case "problem":
                     print("problem: \(state.hotkeyProblem ?? "-")")
                     fflush(stdout)
