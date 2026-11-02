@@ -2353,6 +2353,19 @@ func installed(_ name: String) -> InstalledApp {
         #expect(warnings.count == 1, "a successful refresh clears the old warning")
     }
 
+    @Test func aBackupFailureOnAQuitBySignalIsOnlyLogged() throws {
+        let state = makeState(["A"])
+        #expect(state.saveNow())
+        try FileManager.default.createDirectory(at: state.store.backupURL, withIntermediateDirectories: false)
+        let a = try #require(state.grid.allApps.first)
+        var warnings = 0
+        state.onError = { _, _ in warnings += 1 }
+        state.apply { $0.rename(a.id, to: "B") }
+        #expect(state.saveNow(reportingFailure: false))
+        state.reportLastBackupFailure(forceAlert: true, logOnly: true)
+        #expect(warnings == 0)
+    }
+
     @Test func anOlderBackupWarningCannotArriveAfterANewerSuccessfulSave() async throws {
         let state = makeState(["A"])
         #expect(state.saveNow())

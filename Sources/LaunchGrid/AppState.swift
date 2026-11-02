@@ -650,10 +650,14 @@ final class AppState {
     }
 
     /// Called after a hidden save's fade, or before quitting, when a backup warning waited.
-    func reportLastBackupFailure(forceAlert: Bool = false) {
+    /// `logOnly` writes it to the log instead: a quit by a signal (a script quitting the app)
+    /// mustn't wait on an alert when the layout itself was saved.
+    func reportLastBackupFailure(forceAlert: Bool = false, logOnly: Bool = false) {
         guard let detail = lastBackupFailureDetail, !backupFailureReported else { return }
         backupFailureReported = true
-        if isShown && !forceAlert {
+        if logOnly {
+            NSLog("LaunchGrid: %@", detail)
+        } else if isShown && !forceAlert {
             showToast(String(localized: "Layout saved, but its backup could not be updated"))
         } else {
             onError(String(localized: "Layout backup could not be updated"), detail)

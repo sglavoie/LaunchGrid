@@ -419,8 +419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         if state.saveNow(reportingFailure: false) {
             // A failed backup refresh is separate from saving the current layout. Make the
-            // warning visible even when this was the only save made before quitting.
-            state.reportLastBackupFailure(forceAlert: true)
+            // warning visible even when this was the only save made before quitting, unless a
+            // script is waiting for the app to quit.
+            state.reportLastBackupFailure(forceAlert: true, logOnly: fromSignal)
             return .terminateNow
         }
         // Saving again on the way out would fail again, and tell it a second time.
