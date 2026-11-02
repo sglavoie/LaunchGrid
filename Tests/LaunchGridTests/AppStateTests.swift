@@ -4093,11 +4093,13 @@ extension SandboxFileAccessTests {
         #expect(!used.contains(where: FileAccess.isGranted) && FileAccess.isGranted(newPicture))
     }
 
-    @Test func changingSettingsKeepsFolderBookmarksUsedByLoadedActionDescendants() {
+    // A folder whose name ends in .app looks like a Browse-added app to save-time cleanup.
+    @Test(arguments: ["/Users/x/Tools", "/Users/x/Tools.app"])
+    func changingSettingsKeepsFolderBookmarksUsedByLoadedActionDescendants(tools: String) {
         sandbox.install()
         defer { FileAccess.reset() }
         let prefs = testPreferences()
-        let tools = "/Users/x/Tools", docs = "/Users/x/Docs"
+        let docs = "/Users/x/Docs"
         let notes = "\(tools)/notes.txt", viewer = "\(tools)/Viewer.app", icon = "\(tools)/icon.png"
         // Starts like `docs`, but isn't inside it.
         let sibling = "/Users/x/Docsets/a.txt"

@@ -1028,7 +1028,9 @@ enum FileAccess {
     static func forgetUnused(notIn inUse: Set<String>, actionsInUse: Set<String> = [], prefs: Preferences) {
         guard backend.isActive() else { return }
         let settings = Set(prefs.extraFolders).union(prefs.customImagePath.map { [$0] } ?? [])
-        forgetApps(notIn: inUse.union(settings))
+        // Apps that are an action's are released below, by what actions still use: a settings
+        // folder ending in .app that an action uses something inside is one of them.
+        forgetApps(notIn: inUse.union(settings).union(actionPaths))
         // A setting's bookmark an action also uses, itself or a file, app or picture inside a
         // folder, is the action's too, so it outlives the setting. Only bookmarks already saved:
         // an imported path gets no access this way.
