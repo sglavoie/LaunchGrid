@@ -748,6 +748,11 @@ enum FileAccess {
     /// LaunchGrid quits.
     static var onBookmarkFailure: (URL) -> Void = { _ in }
 
+    /// The paths the grid uses now, in its undo and redo history too (`AppState.pathsInUse`).
+    /// A setting let go of keeps its bookmark while one of them names it: a loaded action can
+    /// open a scan folder or show the background without having been picked in the editor.
+    static var pathsInUse: () -> Set<String> = { [] }
+
     /// Whether access to `path` is held, including after a bookmark was reopened.
     static func isGranted(_ path: String) -> Bool { granted[path] != nil }
 
@@ -756,6 +761,7 @@ enum FileAccess {
         for url in granted.values { backend.close(url) }
         granted = [:]
         backend = .system
+        pathsInUse = { [] }
     }
 
     private static var saved: [String: Data] {
@@ -1002,6 +1008,11 @@ enum FileAccess {
     static func releaseSetting(_ path: String, prefs: Preferences) {
         guard backend.isActive(), !actionPaths.contains(path),
               !prefs.extraFolders.contains(path), prefs.customImagePath != path else { return }
+        // Still used by an action: it becomes the action's, for `forgetUnused` to release later.
+        if saved[path] != nil, pathsInUse().contains(path) {
+            actionPaths.insert(path)
+            return
+        }
         forget(path)
     }
 
@@ -1012,6 +1023,10 @@ enum FileAccess {
         guard backend.isActive() else { return }
         let settings = Set(prefs.extraFolders).union(prefs.customImagePath.map { [$0] } ?? [])
         forgetApps(notIn: inUse.union(settings))
+        // A setting's bookmark an action also uses is the action's too, so it outlives the
+        // setting. Only bookmarks already saved: an imported path gets no access this way.
+        let shared = inUse.intersection(settings).filter { saved[$0] != nil }
+        if !shared.isSubset(of: actionPaths) { actionPaths.formUnion(shared) }
         let unused = actionPaths.subtracting(inUse)
         guard !unused.isEmpty else { return }
         for path in unused.subtracting(settings) { forget(path) }
