@@ -1,0 +1,28 @@
+{
+  "name": "Arrowing across an empty page focuses nothing there and carries on to the next page's nearest item",
+  "fixture": {
+    "rows": 3, "columns": 4,
+    "pages": [["Alpha", "Beta"], [], ["Delta", "Echo"]],
+    "pageTitles": ["First", "Empty", "Third"], "folders": {}
+  },
+  "steps": [
+    {"run": "show"},
+    {"expect": {"keyWindow": true, "pagerReady": true}},
+    {"run": "keys:124"},
+    {"expect": {"currentPage": 1, "focus": ""}},
+    {"run": "keys:124"},
+    {"expect": {"currentPage": 2, "focus": ""}},
+    {"run": "keys:cmd+1@18"},
+    {"expect": {"currentPage": 0}},
+    {"run": "focus:1"},
+    {"expect": {"focus": "Beta"}},
+    {"run": "keys:124"},
+    {"expect": {"currentPage": 1, "focus": ""}},
+    {"run": "keys:124"},
+    {"expect": {"currentPage": 2, "focus": "Delta"}},
+    {"run": "keys:123"},
+    {"expect": {"currentPage": 1, "focus": ""}},
+    {"run": "keys:123"},
+    {"expect": {"currentPage": 0, "focus": "Beta"}}
+  ]
+}

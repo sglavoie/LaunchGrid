@@ -81,6 +81,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let panel = makePanelIfNeeded()
         placePanel()
         state.focusIndex = nil
+        arrowedOntoEmptyPage = false
         visibilityGeneration += 1
         // A fade-out still running would otherwise carry on to 0 after this; replace it.
         NSAnimationContext.runAnimationGroup { ctx in
@@ -93,6 +94,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         launchedBehind = nil
         state.didShow()
     }
+
+    /// Whether ←/→ moved keyboard focus onto the empty page shown, which has nothing to focus.
+    private var arrowedOntoEmptyPage = false
 
     /// - Parameter saving: false when the caller has just saved (quitting), so a failure
     ///   isn't reported twice.
@@ -602,10 +606,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard count > 0 else {
             // Pages are hidden behind search results, even when there are none.
             guard state.query.isEmpty else { return }
+            let before = state.currentPage
             if code == kVK_LeftArrow { state.flipPage(-1) }
             if code == kVK_RightArrow { state.flipPage(1) }
+            // Arrowed onto this empty page from an item: carry on to the next page's nearest item.
+            let next = focusableCount
+            if arrowedOntoEmptyPage, state.openFolder == nil, state.currentPage != before, next > 0 {
+                state.focusIndex = code == kVK_LeftArrow ? next - 1 : 0
+                arrowedOntoEmptyPage = false
+            }
             return
         }
+        arrowedOntoEmptyPage = false
         guard let i = state.focusIndex else {
             // First arrow press: ←/→ flip pages, ↑/↓ start focusing.
             switch code {
@@ -634,7 +646,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let after = state.query.isEmpty ? state.currentPage : state.searchPage
             if after != before {
                 let count = state.query.isEmpty ? state.currentItems.count : state.searchResults.count
-                state.focusIndex = code == kVK_LeftArrow ? max(0, count - 1) : 0
+                // An empty page has nothing to focus, so its own menu (⌃Return) can open; the
+                // next arrow carries on from it.
+                state.focusIndex = count == 0 ? nil : (code == kVK_LeftArrow ? count - 1 : 0)
+                arrowedOntoEmptyPage = count == 0
             }
             return
         }
