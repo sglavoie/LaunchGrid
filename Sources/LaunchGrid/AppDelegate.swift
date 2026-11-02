@@ -407,9 +407,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // The last changes would be lost on the way out: say so, so they can be kept open.
         guard let state else { return .terminateNow }
+        // Only this quit came from a signal: one cancelled below leaves a later ⌘Q asking again.
+        let fromSignal = quittingOnSignal
+        quittingOnSignal = false
         // An action editor with changes asks first, as its close button does; a signal (a script
         // quitting the app) doesn't wait for an answer.
-        if !quittingOnSignal, let open = state.actionEditor, open.hasChanges, windows["actionEditor"] != nil,
+        if !fromSignal, let open = state.actionEditor, open.hasChanges, windows["actionEditor"] != nil,
            !confirmDiscardEditor(open) {
             bringForward("actionEditor")
             return .terminateCancel
