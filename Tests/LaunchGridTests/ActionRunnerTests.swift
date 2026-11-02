@@ -241,6 +241,74 @@ import Testing
         }
     }
 
+    /// The shell joins a backslash-newline before it reads tokens, so an operator or delimiter
+    /// split across lines that way is the same operator: `{query}` there is refused just like on
+    /// one line, in the background, in a terminal and in the editor. A plain continuation next
+    /// to `{query}` still delivers the argument as it is.
+    @Test func lineContinuedArithmeticCommandPlaceholdersCannotExecuteArgumentSyntax() async throws {
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let arguments = ["a[$(printf INJECTED >&2)0]", "a[`printf INJECTED >&2`0]"]
+        // Each backslash-n after a backslash in these literals is a real backslash, then a real newline.
+        let refused: [(String, ActionRunner.Failure)] = [
+            ("a=(0); [[ 1 -e\\\nq {query} ]]", .placeholderInNumericTest),
+            ("a=(0); [\\\n[ 1 -eq {query} ]]", .placeholderInNumericTest),
+            ("a=(0); echo $(\\\n( \"{query}\" ))", .placeholderInArithmetic),
+            ("a=(0); echo \"$(\\\n( {query} ))\"", .placeholderInArithmetic),
+            ("a=(0); echo $\\\n[ {query} ]", .placeholderInArithmetic),
+        ]
+        for (template, failure) in refused {
+            #expect(template.contains("\\\n"))
+            for argument in arguments {
+                for mode in [RunMode.background, .terminal] {
+                    #expect(throws: failure, "\(template) \(mode)") {
+                        try ActionRunner.plan(shell(template, mode: mode), argument: argument)
+                    }
+                }
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [failure.message], "\(template)")
+        }
+
+        // Continuations that join ordinary text: the argument arrives once, as it is.
+        let accepted = [
+            "exec 2>&1; a=(0); printf '[%s]' \\\n{query}",
+            "exec 2>&1; a=(0); printf '[%s]' \"\\\n{query}\"",
+            "exec 2>&1; a=(0); [[ -n {query} ]] \\\n&& printf '[%s]' {query}",
+        ]
+        let runner = ActionRunner()
+        for template in accepted {
+            for argument in arguments {
+                let expected = "[\(argument)]"
+                let plan = try ActionRunner.plan(shell(template), argument: argument)
+                guard case .code(let job) = plan, case .shell(let command) = job.program else {
+                    Issue.record("not a command: \(template)"); continue
+                }
+                #expect(!command.contains(argument))
+                let background = await runner.runToEnd(job)
+                #expect(background.ending == .exited(0), "\(template) \(argument): \(background.output)")
+                #expect(background.output == expected, "\(template) with \(argument)")
+                #expect(!background.output.replacingOccurrences(of: expected, with: "").contains("INJECTED"))
+
+                let terminalPlan = try ActionRunner.plan(shell(template, mode: .terminal), argument: argument)
+                guard case .code(let terminalJob) = terminalPlan, case .shell(let terminalCommand) = terminalJob.program else {
+                    Issue.record("not a command: \(template)"); continue
+                }
+                #expect(terminalCommand == command)
+                let file = try ActionRunner.writeCommandFile(terminalCommand, directory: dir.path, argument: argument)
+                let terminal = try runZsh(file)
+                #expect(terminal.status == 0, "\(template) \(argument) in a terminal")
+                #expect(terminal.output == expected, "\(template) with \(argument) in a terminal")
+                #expect(!terminal.output.replacingOccurrences(of: expected, with: "").contains("INJECTED"))
+            }
+        }
+        // Inside '…' a backslash-newline is kept as typed.
+        #expect(try ActionRunner.substitutingArgument(in: "echo 'a\\\nb' {query}") == "echo 'a\\\nb' \"${LAUNCHGRID_QUERY}\"")
+    }
+
     /// Runs a terminal command file the way the terminal would, through zsh.
     private func runZsh(_ file: URL) throws -> (status: Int32, output: String) {
         let process = Process()

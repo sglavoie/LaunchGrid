@@ -1008,8 +1008,9 @@ enum FileAccess {
     static func releaseSetting(_ path: String, prefs: Preferences) {
         guard backend.isActive(), !actionPaths.contains(path),
               !prefs.extraFolders.contains(path), prefs.customImagePath != path else { return }
-        // Still used by an action: it becomes the action's, for `forgetUnused` to release later.
-        if saved[path] != nil, pathsInUse().contains(path) {
+        // Still used by an action, itself or something inside it: it becomes the action's, for
+        // `forgetUnused` to release later.
+        if saved[path] != nil, isUsed(path, by: pathsInUse()) {
             actionPaths.insert(path)
             return
         }
@@ -1023,15 +1024,25 @@ enum FileAccess {
         guard backend.isActive() else { return }
         let settings = Set(prefs.extraFolders).union(prefs.customImagePath.map { [$0] } ?? [])
         forgetApps(notIn: inUse.union(settings))
-        // A setting's bookmark an action also uses is the action's too, so it outlives the
-        // setting. Only bookmarks already saved: an imported path gets no access this way.
-        let shared = inUse.intersection(settings).filter { saved[$0] != nil }
+        // A setting's bookmark an action also uses, itself or a file, app or picture inside a
+        // folder, is the action's too, so it outlives the setting. Only bookmarks already saved:
+        // an imported path gets no access this way.
+        let shared = settings.filter { saved[$0] != nil && isUsed($0, by: inUse) }
         if !shared.isSubset(of: actionPaths) { actionPaths.formUnion(shared) }
-        let unused = actionPaths.subtracting(inUse)
+        let unused = actionPaths.filter { !isUsed($0, by: inUse) }
         guard !unused.isEmpty else { return }
         for path in unused.subtracting(settings) { forget(path) }
         // No longer an action's, but its bookmark stays for the setting.
         actionPaths.subtract(unused)
+    }
+
+    /// Whether the bookmark of `path` gives access to something in `inUse`: `path` itself, or
+    /// an item inside it when it's a folder. `/Users/x/Tools` covers `/Users/x/Tools/a.txt`,
+    /// not `/Users/x/ToolsOld/a.txt`.
+    nonisolated static func isUsed(_ path: String, by inUse: Set<String>) -> Bool {
+        if inUse.contains(path) { return true }
+        let folder = path.hasSuffix("/") ? path : path + "/"
+        return inUse.contains { $0.hasPrefix(folder) }
     }
 
     /// Forgets the bookmarks of apps added with Browse that are no longer in `inUse`.

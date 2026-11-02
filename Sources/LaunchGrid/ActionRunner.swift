@@ -220,6 +220,21 @@ final class ActionRunner {
     /// refused however deeply the placeholder sits inside it, quoted or in a `$(…)`: zsh still
     /// evaluates a quoted value in arithmetic, and the output of a `$(…)` there too.
     nonisolated static func substitutingArgument(in command: String) throws -> String {
+        // The shell drops a backslash-newline before reading tokens, except inside '…', $'…' and
+        // comments, so `-e\⏎q` is `-eq` and `$(\⏎(` is `$((`. Join them the same way first, until
+        // none is left where the shell would join it, so every check sees the shell's tokens.
+        var joined = command
+        while true {
+            let (text, changed) = try scan(joined, joiningOnly: true)
+            if !changed { break }
+            joined = text
+        }
+        return try scan(joined, joiningOnly: false).text
+    }
+
+    /// One pass over `command`. With `joiningOnly`, only joins backslash-newlines where the shell
+    /// does and returns the joined text; otherwise substitutes `{query}` or throws.
+    private nonisolated static func scan(_ command: String, joiningOnly: Bool) throws -> (text: String, changed: Bool) {
         enum Context: Equatable {
             case top, substitution(depth: Int), backtick, parameter(depth: Int), arithmetic(depth: Int)
             case single, double, ansiSingle, comment
@@ -237,9 +252,10 @@ final class ActionRunner {
             }
         }
         let placeholder = Array(ActionKind.argumentPlaceholder.unicodeScalars)
-        let text = Array(command.unicodeScalars)
+        var text = Array(command.unicodeScalars)
         var out = String.UnicodeScalarView()
         var stack: [Context] = [.top]
+        var changed = false
         var afterHereDocument = false
         var i = 0
         func at(_ offset: Int) -> Unicode.Scalar? { i + offset < text.count ? text[i + offset] : nil }
@@ -320,9 +336,14 @@ final class ActionRunner {
         }
         while i < text.count {
             let context = stack.last ?? .top
+            if text[i] == "\\", at(1) == "\n", ![.single, .ansiSingle, .comment].contains(context) {
+                text.removeSubrange(i...(i + 1))
+                changed = true
+                continue
+            }
             if text[i] == placeholder[0], i + placeholder.count <= text.count,
                Array(text[i..<i + placeholder.count]) == placeholder {
-                if context == .comment { copy(placeholder.count); continue }
+                if context == .comment || joiningOnly { copy(placeholder.count); continue }
                 if afterHereDocument { throw Failure.placeholderAfterHereDocument }
                 if let failure = refusal() { throw failure }
                 markConditionals()
@@ -411,11 +432,12 @@ final class ActionRunner {
                 copy(1)
             }
         }
+        if joiningOnly { return (String(String.UnicodeScalarView(text)), changed) }
         // A `[[` left open is a syntax error, but refuse it as if it were closed.
         for context in stack {
             if case .conditional(true, true) = context { throw Failure.placeholderInNumericTest }
         }
-        return String(out)
+        return (String(out), changed)
     }
 
     /// `text` as a single-quoted shell word: `it's` becomes `'it'\''s'`.
