@@ -1226,6 +1226,9 @@ final class AppState {
 
     private func followMovesInHistory(_ moves: [String: String]) {
         guard !moves.isEmpty else { return }
+        // An app that moved away leaves its old path empty. One showing up there later is new
+        // (the app renamed back), not a copy that was there beside it all along.
+        everInstalled.subtract(moves.keys.filter { installedByPath[$0] == nil })
         for i in undoStack.indices { undoStack[i].followMoves(moves) }
         for i in redoStack.indices { redoStack[i].followMoves(moves) }
     }

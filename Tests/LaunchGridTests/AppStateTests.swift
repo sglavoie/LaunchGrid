@@ -244,6 +244,23 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.first?.title == "Custom")
     }
 
+    /// Renamed and then renamed back (or the rename undone in Finder): the tile follows it
+    /// both ways, even though a scan once listed its first path.
+    @Test(arguments: [false, true])
+    func anAppRenamedBackKeepsItsTile(autoAdd: Bool) throws {
+        let state = makeState(["A", "B"])
+        state.prefs.autoAddApps = autoAdd
+        state.catalogScanned([installed("A"), installed("B")])
+        let a = try #require(state.grid.allApps.first)
+        let renamed = InstalledApp(bundleID: a.bundleID, path: "/Applications/Bar.app", name: "Bar")
+        state.catalogScanned([renamed, installed("B")])
+        #expect(state.grid.allApps.map(\.path) == [renamed.path, installed("B").path])
+
+        state.catalogScanned([installed("A"), installed("B")])
+        #expect(state.grid.allApps.map(\.path) == [installed("A").path, installed("B").path])
+        #expect(state.grid.allApps.first?.id == a.id)
+    }
+
     @Test func historyDoesNotMistakeAnExistingCopyForARename() throws {
         let state = makeState(["A", "B"])
         state.prefs.autoAddApps = false
