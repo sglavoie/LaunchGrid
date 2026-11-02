@@ -332,8 +332,34 @@ public struct GridStore: Sendable {
         }
         grid.version = Grid.currentVersion
         freshenRepeatedIDs(in: &grid)
+        matchShowsOnGridToPlace(in: &grid)
         grid.normalize()
         return (grid, skipped.count)
+    }
+
+    /// Sets each action's "Show on grid" from where the file has it: on a page (or in a folder)
+    /// or among the search-only actions. A hand-edited file can say otherwise, and Settings'
+    /// checkbox would then show the opposite of what the grid does.
+    static func matchShowsOnGridToPlace(in grid: inout Grid) {
+        for p in grid.pages.indices {
+            grid.pages[p].items = grid.pages[p].items.map { item -> GridItem in
+                switch item {
+                case .action(var a):
+                    a.showsOnGrid = true
+                    return .action(a)
+                case .folder(var f):
+                    f.items = f.items.map { member -> FolderMember in
+                        guard case .action(var a) = member else { return member }
+                        a.showsOnGrid = true
+                        return .action(a)
+                    }
+                    return .folder(f)
+                default:
+                    return item
+                }
+            }
+        }
+        for k in grid.hiddenActions.indices { grid.hiddenActions[k].showsOnGrid = false }
     }
 
     /// Gives a fresh ID to each page and item (app, folder or action, inside folders and

@@ -1371,6 +1371,23 @@ func action(_ name: String, showsOnGrid: Bool = true, kind: ActionKind? = nil) -
         #expect(g == before)
     }
 
+    /// A file whose "showsOnGrid" disagrees with where an action is: where it is wins, so
+    /// Settings' checkbox shows what the grid does.
+    @Test func loadingSetsShowOnGridFromWhereAnActionIs() throws {
+        let json = #"""
+        {"version":2,"rows":2,"columns":2,"pages":[{"items":[
+          {"type":"action","action":{"name":"Page","kind":{"type":"openURL","template":"x"},"showsOnGrid":false}},
+          {"type":"folder","folder":{"name":"F","items":[
+            {"type":"app","app":{"path":"/Applications/A.app","name":"A"}},
+            {"type":"action","action":{"name":"Inside","kind":{"type":"openURL","template":"y"},"showsOnGrid":false}}]}}]}],
+         "hiddenActions":[{"name":"Hidden","kind":{"type":"openURL","template":"z"},"showsOnGrid":true}]}
+        """#
+        let (g, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+        #expect(skipped == 0)
+        let flags = Dictionary(uniqueKeysWithValues: g.allActions.map { ($0.name, $0.showsOnGrid) })
+        #expect(flags == ["Page": true, "Inside": true, "Hidden": false])
+    }
+
     @Test(arguments: FolderPlacement.allCases)
     func sortingOrdersActionsByTitleAmongApps(placement: FolderPlacement) {
         var g = Grid(rows: 1, columns: 5, pages: [Page(items: [
