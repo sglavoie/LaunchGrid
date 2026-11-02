@@ -666,7 +666,7 @@ struct LibrarySettings: View {
                         Spacer()
                         Button(role: .destructive) {
                             prefs.extraFolders.removeAll { $0 == path }
-                            FileAccess.forget(path)
+                            FileAccess.releaseSetting(path, prefs: prefs)
                             actions.foldersChanged()
                         } label: { Image(systemName: "minus.circle") }
                         .buttonStyle(.borderless)
@@ -848,11 +848,12 @@ enum PickedFileAccess {
         guard FileAccess.remember(url) else {
             // Keep showing the working image. An unopened new bookmark has no selected
             // setting to retry for, so leave no unused bookmark behind either.
-            if old != url.path { FileAccess.forget(url.path) }
+            if old != url.path { FileAccess.releaseSetting(url.path, prefs: prefs) }
             return false
         }
-        if let old, old != url.path { FileAccess.forget(old) }
         prefs.customImagePath = url.path
+        // An action may still use the old picture: it keeps its bookmark until none does.
+        if let old, old != url.path { FileAccess.releaseSetting(old, prefs: prefs) }
         return true
     }
 

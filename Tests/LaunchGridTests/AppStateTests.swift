@@ -3979,6 +3979,56 @@ extension SandboxFileAccessTests {
                 "the picture had stopped being an action's: its setting forgets it")
     }
 
+    @Test func changingSettingsKeepsBookmarksUsedByActions() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        let folder = "/Users/x/Tools", picture = "/Users/x/bg.jpg", icon = "/Users/x/icon.png"
+        let other = "/Users/x/Unused", newPicture = "/Users/x/new.jpg"
+        #expect(PickedFileAccess.addFolder(URL(fileURLWithPath: folder), prefs: prefs))
+        #expect(PickedFileAccess.addFolder(URL(fileURLWithPath: other), prefs: prefs))
+        #expect(PickedFileAccess.replaceImage(with: URL(fileURLWithPath: icon), prefs: prefs))
+        // Picked for actions too: a folder to open, the picture to open and an action's icon.
+        for path in [folder, picture, icon] { #expect(FileAccess.rememberForAction(URL(fileURLWithPath: path))) }
+        #expect(PickedFileAccess.replaceImage(with: URL(fileURLWithPath: picture), prefs: prefs))
+        #expect(FileAccess.isGranted(icon) && sandbox.saved[icon] != nil, "the old background is still an action's icon")
+
+        let state = makeState(["A"])
+        let openFolder = Action(name: "Tools", kind: .openFile(path: folder, appPath: nil))
+        let openPicture = Action(name: "Picture", icon: .image(path: icon), kind: .openFile(path: picture, appPath: nil))
+        state.apply { $0.pages[0].items += [.action(openFolder), .action(openPicture)] }
+        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+
+        // The settings change; the actions still need the same items.
+        prefs.extraFolders.removeAll { $0 == folder || $0 == other }
+        FileAccess.releaseSetting(folder, prefs: prefs)
+        FileAccess.releaseSetting(other, prefs: prefs)
+        #expect(PickedFileAccess.replaceImage(with: URL(fileURLWithPath: newPicture), prefs: prefs))
+        for path in [folder, picture, icon] {
+            #expect(FileAccess.isGranted(path) && sandbox.saved[path] != nil, "\(path) is still an action's")
+            #expect(!sandbox.closed.contains(path))
+        }
+        #expect(sandbox.saved[other] == nil && sandbox.closed == [other], "no action used it")
+        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        #expect([folder, picture, icon].allSatisfy { sandbox.saved[$0] != nil })
+
+        // They come back at the next launch.
+        FileAccess.reset()
+        sandbox.install()
+        FileAccess.restore(prefs: prefs)
+        #expect([folder, picture, icon].allSatisfy(FileAccess.isGranted))
+
+        // Removed, the actions can still come back with ⌘Z: the history keeps their access.
+        state.remove([openFolder.id, openPicture.id])
+        FileAccess.forgetUnused(notIn: state.pathsInUse, prefs: prefs)
+        #expect([folder, picture, icon].allSatisfy { FileAccess.isGranted($0) && sandbox.saved[$0] != nil })
+
+        // Once nothing refers to them, they go as usual.
+        FileAccess.forgetUnused(notIn: state.appPathsInUse, prefs: prefs)
+        #expect([folder, picture, icon].allSatisfy { !FileAccess.isGranted($0) && sandbox.saved[$0] == nil })
+        #expect(sandbox.saved[newPicture] != nil && FileAccess.isGranted(newPicture), "the background keeps its own")
+    }
+
     @Test func aMovedFilesBookmarkStaysAnActionsAtItsNewPlace() {
         sandbox.install()
         defer { FileAccess.reset() }

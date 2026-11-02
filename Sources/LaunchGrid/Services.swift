@@ -764,8 +764,9 @@ enum FileAccess {
     }
 
     /// The bookmarked paths that were picked for actions (a file to open, the app to open it
-    /// with). Unlike folders and pictures, which go when their setting changes, these go
-    /// when no action uses them any longer, like apps added with Browse.
+    /// with, its picture). Unlike folders and pictures, which go when their setting changes,
+    /// these go when no action uses them any longer, like apps added with Browse. A path that
+    /// is both stays until neither the setting nor any action needs it (`releaseSetting`).
     private static var actionPaths: Set<String> {
         get { Set(backend.defaults().stringArray(forKey: actionKey) ?? []) }
         set { backend.defaults().set(newValue.sorted(), forKey: actionKey) }
@@ -992,6 +993,16 @@ enum FileAccess {
         if let url = granted.removeValue(forKey: path) { backend.close(url) }
         saved[path] = nil
         actionPaths.remove(path)
+    }
+
+    /// Lets go of the bookmark of `path` now that a setting (an extra folder, the background
+    /// picture) no longer names it, unless something else still owns it: an action's file,
+    /// app or picture, which `forgetUnused` releases once no action (in the undo and redo
+    /// history too) uses it, or another setting.
+    static func releaseSetting(_ path: String, prefs: Preferences) {
+        guard backend.isActive(), !actionPaths.contains(path),
+              !prefs.extraFolders.contains(path), prefs.customImagePath != path else { return }
+        forget(path)
     }
 
     /// Forgets the bookmarks of apps added with Browse and of files picked for actions that
