@@ -319,6 +319,20 @@ import Testing
             "awk -F : '/{query}/' file",
             // zsh doesn't split words at a no-break space: all this is the code after -c.
             "bash -c :\u{00A0}'; echo {query}'",
+            // `-c` anywhere in a shell's option cluster, and long clusters ending in `-e`.
+            "bash -cx 'echo {query}'", "zsh -cf 'echo {query}'", "sh -cl 'echo {query}'",
+            "perl -wlane 'print \"{query}\"' file", "python3 -Ic 'print(\"{query}\")'",
+            // A program named with quotes or a backslash, or by a variable or a substitution.
+            "\\sh -c 'echo {query}'", "\"bash\" -c \"echo {query}\"", "'sh' -c 'echo {query}'",
+            "$SHELL -c \"echo {query}\"", "${SHELL} -c 'echo {query}'", "echo {query} | $SHELL",
+            // Programs that run the command after their own options.
+            "echo {query} | env sh", "echo {query} | sudo -u me sh", "env bash <<< \"echo {query}\"",
+            "env sh <(echo {query})", "env LANG=C sh -c 'echo {query}'", "nice -n 5 bash -c 'echo {query}'",
+            "timeout 5 sh -c 'echo {query}'", "caffeinate -i sh -c 'echo {query}'", "exec -a x sh -c 'echo {query}'",
+            "command sh -c 'echo {query}'", "/usr/bin/env sh -c 'echo {query}'", "env -S \"sh -c 'echo {query}'\"",
+            "echo {query} | xargs -I% sh -c 'echo %'", "echo {query} | xargs sh -c 'echo \"$@\"' _",
+            // A script read from the input.
+            "echo {query} | source /dev/stdin", ". /dev/stdin <<< {query}", "echo {query} | sh /dev/fd/0",
         ]
         for template in refused {
             #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
@@ -361,7 +375,11 @@ import Testing
                          "gawk -v x=1 '{print}' {query}.log", "perl -e 'print 1' {query}.txt",
                          "echo {query} | python3 script.py", "echo {query} || sh", "diff <(echo {query}) file",
                          "echo $((1<<2)) {query}", "x=$((n << 1)); open {query}", "cat <<< {query}",
-                         "ssh host {query}", "ssh -p 22 host {query}", "eval {query}", "watch -n 1 {query}"] {
+                         "ssh host {query}", "ssh -p 22 host {query}", "eval {query}", "watch -n 1 {query}",
+                         "env LANG=C open {query}", "sudo -u me ls {query}", "nice -n 5 grep -e x {query}",
+                         "echo {query} | xargs open", "echo {query} | env python3 script.py", "timeout 5 echo {query}",
+                         "source script.sh {query}", "echo {query} | source script.sh", "\\ls {query}",
+                         "pwsh -NoProfile -File script.ps1 {query}"] {
             #expect(throws: Never.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
         }
         // A whole program given as the argument is what the command asks for.

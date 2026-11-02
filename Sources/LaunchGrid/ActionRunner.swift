@@ -647,6 +647,16 @@ final class ActionRunner {
         /// it assigns a value with `{query}` in it (`n={query}`), which `scan` collects.
         var numericNames: [String] = []
         var assignedNames: [String] = []
+        /// A program that runs the command after its own options and operands (`env`, `sudo -u
+        /// me`, `xargs -I%`): while set, words are still its own, and the next that isn't is the
+        /// command it runs.
+        var wrapper: String?
+        var wrapperOptionArgument = false
+        var wrapperOperandsLeft = 0
+        /// `xargs` ran the command, handing it the input as arguments: into its code with `-I`.
+        var viaXargs = false
+        /// `source /dev/stdin`, `. -`: the script is the input.
+        var sourcesInput = false
 
         init(start: Int = 0) { self.start = start }
 
@@ -657,6 +667,9 @@ final class ActionRunner {
                 let isCode = (interpreterSeen && (codeOption || (codePending && !word.hasPrefix("-"))))
                     || (programWordsLeft > 0 && !programOptionArgument && !word.hasPrefix("-"))
                     || ["eval", "ssh", "trap", "sched", "watch"].contains(command)
+                    // `env -S '…'` splits its argument into a command line.
+                    || (command == "env" && wrapper != nil && previous.map { $0 == "-S" || $0 == "--split-string" } == true)
+                    || (command == "env" && wrapper != nil && (word.hasPrefix("-S") || word.hasPrefix("--split-string")))
                 if !alone, isCode { throw Failure.placeholderInCode }
                 // `eval echo {query}` joins its arguments and reads them again, so even a whole
                 // argument is code there, unless it starts the command (`ssh host {query}`).
@@ -675,10 +688,16 @@ final class ActionRunner {
                 if isProgram { throw Failure.placeholderInCode }
             }
             if command == nil {
-                if !ActionRunner.precedesCommand(word) {
-                    command = word
+                if !ActionRunner.precedesCommand(ActionRunner.unquoted(word)) {
+                    start(command: word)
                 } else if hasPlaceholder, let name = ActionRunner.assignedName(word) {
                     assignedNames.append(name)
+                }
+            } else if let wrapper {
+                previous = word
+                if !wrapperWord(word, of: wrapper) {
+                    self.wrapper = nil
+                    start(command: word)
                 }
             } else {
                 noteArgument(word)
@@ -695,6 +714,54 @@ final class ActionRunner {
                 programWordsLeft = 1
                 programOptionArgument = false
             }
+        }
+
+        /// Takes `word` as the command, or as a wrapper whose command comes later. A command named
+        /// by a variable or a substitution (`$SHELL`, `$(which sh)`) may be any program, a shell
+        /// too: its options are read as an unknown interpreter's.
+        private mutating func start(command word: String) {
+            let name = ActionRunner.unquoted(word)
+            command = name
+            if ActionRunner.wrappers.contains(ActionRunner.programName(name)) {
+                wrapper = ActionRunner.programName(name)
+                wrapperOptionArgument = false
+                wrapperOperandsLeft = wrapper == "timeout" ? 1 : 0
+                if wrapper == "xargs" { viaXargs = true }
+            } else if ActionRunner.isUnknownProgram(word) {
+                interpreterSeen = true
+                interpreter = nil
+            }
+        }
+
+        /// Whether `word` is still the wrapper's own: an option, an option's argument, a
+        /// variable `env` sets, or the time `timeout` takes.
+        private mutating func wrapperWord(_ word: String, of wrapper: String) -> Bool {
+            if wrapperOptionArgument {
+                wrapperOptionArgument = false
+                return true
+            }
+            if word.hasPrefix("-"), word.count > 1 {
+                let takesArgument: Set<String> = switch wrapper {
+                case "env": ["-u", "-P", "-S", "-C", "--unset", "--chdir", "--split-string"]
+                case "sudo": ["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U", "--user", "--group"]
+                case "nice": ["-n"]
+                case "timeout": ["-s", "-k", "--signal", "--kill-after"]
+                case "caffeinate": ["-t", "-w"]
+                case "arch": ["-arch"]
+                case "xargs": ["-I", "-J", "-L", "-n", "-P", "-s", "-E", "-R", "-S"]
+                case "exec": ["-a"]
+                case "stdbuf": ["-i", "-o", "-e"]
+                default: []
+                }
+                wrapperOptionArgument = takesArgument.contains(word)
+                return true
+            }
+            if wrapper == "env", ActionRunner.assignedName(word) != nil { return true }
+            if wrapperOperandsLeft > 0 {
+                wrapperOperandsLeft -= 1
+                return true
+            }
+            return false
         }
 
         /// Follows an argument through the options of the programs that read code from it.
@@ -736,11 +803,14 @@ final class ActionRunner {
                     joinedOperands += 1
                 }
             }
+            if let command, ["source", "."].contains(command), previous == nil, ActionRunner.namesInput(word) {
+                sourcesInput = true
+            }
             if let command, ActionRunner.readsProgramFromInput(command) {
                 let program = ActionRunner.programName(command)
                 if stdinOptionArgument {
                     stdinOptionArgument = false
-                } else if word == "-" || word == "/dev/stdin" || (word == "-s" && ActionRunner.isShell(program)) {
+                } else if ActionRunner.namesInput(word) || (word == "-s" && ActionRunner.isShell(program)) {
                     stdinForced = true
                 } else if ActionRunner.runsNextWordAsCode(word, program: program) || word == "-m" {
                     programGiven = true // the code, or a module, comes after
@@ -763,7 +833,11 @@ final class ActionRunner {
 
         /// Ends the command: input with `{query}` in it, read as its program, is refused.
         func finish() throws {
-            guard pipedPlaceholder || stdinPlaceholder, let command, ActionRunner.readsProgramFromInput(command) else { return }
+            guard pipedPlaceholder || stdinPlaceholder, let command else { return }
+            // `xargs sh -c '…'` hands the input to the code, into it with `-I`: refuse it whatever
+            // the options, as for `sh -c` itself.
+            if sourcesInput || (viaXargs && interpreterSeen) { throw Failure.placeholderInCode }
+            guard ActionRunner.readsProgramFromInput(command) else { return }
             if stdinForced || !programGiven { throw Failure.placeholderInCode }
         }
 
@@ -830,8 +904,45 @@ final class ActionRunner {
         case "deno": if word == "eval" { return true }
         default: break
         }
-        guard word.hasPrefix("-"), !word.hasPrefix("--"), word.count <= 5, let last = word.last else { return false }
+        guard word.hasPrefix("-"), !word.hasPrefix("--"), let last = word.last else { return false }
+        // A known interpreter's cluster of single-letter options: code follows `-c` (or `-e`)
+        // wherever it is in the cluster (`bash -cx`, `perl -wlane`).
+        let flags = word.dropFirst()
+        if let program, isInterpreter(program), !["pwsh", "powershell"].contains(program),
+           !flags.isEmpty, flags.allSatisfy({ $0.isASCII && $0.isLetter }) {
+            let takesC = isShell(program) || program == "python" || program == "su"
+            return (takesC && flags.contains("c")) || "ceEr".contains(last)
+        }
+        guard word.count <= 5 else { return false }
         return "ceEr".contains(last)
+    }
+
+    /// Programs that run a command given after their own options: `env sh`, `sudo -u me sh`.
+    nonisolated static let wrappers: Set<String> = ["env", "sudo", "nice", "timeout", "gtimeout", "caffeinate", "arch",
+                                                    "xargs", "exec", "command", "stdbuf", "nohup", "doas"]
+
+    /// `word` with the quotes and backslashes zsh removes from it: `\sh` and `"bash"` run `sh`
+    /// and `bash`.
+    nonisolated static func unquoted(_ word: String) -> String {
+        guard word.contains(where: { "\\\"'".contains($0) }) else { return word }
+        var result = ""
+        var escaped = false
+        for c in word {
+            if escaped { result.append(c); escaped = false } else if c == "\\" { escaped = true } else if c != "\"" && c != "'" { result.append(c) }
+        }
+        return result
+    }
+
+    /// Whether `word` names its program through an expansion (`$SHELL`, `${SHELL}`, `$(which sh)`),
+    /// so it may be any program.
+    nonisolated static func isUnknownProgram(_ word: String) -> Bool {
+        let name = unquoted(word)
+        return name.hasPrefix("$") || name.hasPrefix("`")
+    }
+
+    /// Whether `word` names the standard input as a file: `-`, `/dev/stdin`, `/dev/fd/0`.
+    nonisolated static func namesInput(_ word: String) -> Bool {
+        ["-", "/dev/stdin", "/dev/fd/0"].contains(unquoted(word))
     }
 
     /// Whether `word` is `{query}` alone, bare or in one pair of quotes: a whole argument, not
@@ -855,7 +966,7 @@ final class ActionRunner {
     /// whose input is text.
     nonisolated static func readsProgramFromInput(_ command: String) -> Bool {
         let name = programName(command)
-        return isShell(name) || ["osascript", "perl", "python", "ruby", "node", "nodejs", "bun", "php", "lua",
+        return isUnknownProgram(command) || isShell(name) || ["osascript", "perl", "python", "ruby", "node", "nodejs", "bun", "php", "lua",
                                  "tclsh", "pwsh", "powershell", "at", "batch"].contains(name)
     }
 
@@ -885,7 +996,8 @@ final class ActionRunner {
     }
 
     private nonisolated static func programName(_ word: String) -> String {
-        (word.split(separator: "/").last.map(String.init) ?? word)
+        let word = unquoted(word)
+        return (word.split(separator: "/").last.map(String.init) ?? word)
             .trimmingCharacters(in: CharacterSet(charactersIn: "0123456789."))
     }
 
@@ -902,7 +1014,7 @@ final class ActionRunner {
     /// `noglob` and the like, and assignments (`LANG=C`).
     nonisolated static func precedesCommand(_ word: String) -> Bool {
         let prefixes: Set<String> = ["{", "!", "if", "then", "else", "elif", "while", "until", "do", "time",
-                                     "exec", "command", "builtin", "noglob", "nocorrect", "nohup", "sudo"]
+                                     "builtin", "noglob", "nocorrect"]
         if prefixes.contains(word) { return true }
         return assignedName(word) != nil
     }
