@@ -338,17 +338,21 @@ final class AppState {
         afterChange(from: old)
     }
 
-    /// Replaces the whole grid (import, rebuild, load) as one undo step.
-    func replaceGrid(_ new: Grid) {
+    /// Replaces the whole grid (import, rebuild, load) as one undo step. `keepingActions`
+    /// carries the current actions over to `new` (a rebuild or an import of apps only, which
+    /// would otherwise drop them); a grid file brings its own.
+    func replaceGrid(_ new: Grid, keepingActions: Bool = false) {
         var new = new
         new.hasCreatedLayout = true
         // A loaded file can reuse the same IDs. Close against the old layout so its
         // folder selection cannot survive out of sight in the replacement.
         if openFolderID != nil { closeFolder() }
-        if !hasGridFile {
-            // Actions made before the first layout (New Action… in the menu bar or Settings)
-            // go on it, or building it would drop them.
+        // Actions made before the first layout (New Action… in the menu bar or Settings) go on
+        // it, or building it would drop them.
+        if keepingActions || !hasGridFile {
             for action in grid.allActions where new.item(action.id) == nil { new.addAction(action) }
+        }
+        if !hasGridFile {
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
             undoStack.removeAll()
@@ -1037,7 +1041,7 @@ final class AppState {
         var new = GridBuilder.build(from: apps, style: style,
                                     rows: grid.rows, columns: grid.columns)
         new.removedBundleIDs = grid.removedBundleIDs
-        replaceGrid(new)
+        replaceGrid(new, keepingActions: true)
     }
 
     /// Builds now, or once the first scan has found the installed apps.

@@ -1050,7 +1050,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     alert.addButton(withTitle: String(localized: "Cancel"))
                     guard alert.runModal() == .alertFirstButtonReturn else { return }
                 }
-                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid, installed: state.selectableApps))
+                state.replaceGrid(AppState.keepingExclusions(state.grid.removedBundleIDs, in: result.grid, installed: state.selectableApps),
+                                  keepingActions: true)
                 // Whole sentences, so a translation can order them its own way.
                 let (n, skipped, twice) = (result.imported, result.skipped.count, result.duplicates.count)
                 var message = switch (skipped > 0, twice > 0) {

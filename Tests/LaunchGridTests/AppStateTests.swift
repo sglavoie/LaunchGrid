@@ -1790,6 +1790,31 @@ func installed(_ name: String) -> InstalledApp {
         #expect(next.grid.pages.flatMap(\.items).map(\.title) == ["A", "B", "Shown"])
     }
 
+    @Test func rebuildingKeepsActionsOnPagesInFoldersAndSearchOnly() {
+        let state = makeState(["A"])
+        state.catalogScanned(["A", "B"].map(installed))
+        let shown = Action(name: "Shown", kind: .openURL(template: "https://example.com"))
+        let inFolder = Action(name: "Filed", kind: .openURL(template: "https://example.net"))
+        let hidden = Action(name: "Hidden", kind: .openURL(template: "https://example.org"), showsOnGrid: false)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [
+            .app(installed("A").makeRef()), .action(shown),
+            .folder(Folder(name: "F", items: [.app(installed("B").makeRef()), .action(inFolder)])),
+        ])], hiddenActions: [hidden]))
+        #expect(state.hasGridFile)
+
+        state.build(style: .alphabetical)
+        #expect(Set(state.grid.allActions.map(\.name)) == ["Shown", "Filed", "Hidden"])
+        #expect(state.grid.hiddenActions.map(\.name) == ["Hidden"])
+        #expect(state.grid.allApps.map(\.name).sorted() == ["A", "B"])
+    }
+
+    @Test func loadingAGridFileBringsOnlyItsOwnActions() {
+        let state = makeState(["A"])
+        state.saveAction(Action(name: "Old", kind: .openURL(template: "https://example.com")))
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.app(installed("A").makeRef())])]))
+        #expect(state.grid.allActions.isEmpty)
+    }
+
     @Test func theExcludedCountIsOfInstalledAppsOffTheGrid() {
         let state = makeState(["A"])
         state.catalogScanned(["A", "B", "C"].map(installed))
