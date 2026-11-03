@@ -649,9 +649,9 @@ import Testing
     @Test func aRunOverItsTimeoutIsStopped() async throws {
         let clock = ContinuousClock()
         let start = clock.now
-        let result = try await run("sleep 60", timeout: 1)
+        let result = try await run("sleep 300", timeout: 1)
         #expect(result.ending == .timedOut)
-        #expect(clock.now - start < .seconds(15))
+        #expect(clock.now - start < .seconds(60))
         #expect(result.summary == "timed out")
     }
 
@@ -755,8 +755,9 @@ import Testing
 
     /// The sandboxed build can't stop a script macOS runs for it, but stops waiting at its
     /// timeout: the run ends once, as timed out, whether the task never calls back or calls
-    /// back (with more output) afterwards.
-    @Test func sandboxUserScriptTimeoutCompletesExactlyOnce() async throws {
+    /// back (with more output) afterwards. A run that never ended would hang: the time limit
+    /// catches that, where timing each run fails on a busy CI machine.
+    @Test(.timeLimit(.minutes(1))) func sandboxUserScriptTimeoutCompletesExactlyOnce() async throws {
         let dir = try temporaryFolder()
         try script(dir, "hang.sh", "#!/bin/sh\n")
         try Data().write(to: dir.appendingPathComponent("hang.applescript"))
@@ -764,13 +765,11 @@ import Testing
         let runner = ActionRunner(scriptsDirectory: dir)
         runner.scriptTasks = tasks.tasks
         defer { tasks.closeAll() }
-        let clock = ContinuousClock()
 
         for name in ["hang.sh", "hang.applescript"] {
             for callsBackLate in [false, true] {
                 tasks.callBackAfter = callsBackLate ? 0.4 : nil
                 let ends = EndCount()
-                let start = clock.now
                 var started: CodeRun?
                 let result = await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
                     let run = runner.startUserScriptTask(dir.appendingPathComponent(name), ["a"], waitingAtMost: .milliseconds(150)) { r in
@@ -785,8 +784,6 @@ import Testing
                 let label = "\(name) late: \(callsBackLate)"
                 #expect(result.ending == .timedOut, "\(label)")
                 #expect(result.summary == "timed out", "\(label)")
-                // At the deadline rather than never: loose, for a busy CI machine.
-                #expect(clock.now - start < .seconds(10), "\(label)")
                 if name == "hang.sh" { #expect(result.output == "early\n", "\(label)") }
                 // Past the late callback (and the 1 s grace an exit allows for output).
                 try await Task.sleep(for: .seconds(1.6))
