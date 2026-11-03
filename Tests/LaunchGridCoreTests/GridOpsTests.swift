@@ -1002,6 +1002,10 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("iPhone Mirroring", query: "im") == 600)
         #expect(Search.score("Don't Sleep", query: "ds") == 600)
         #expect(Search.score("Don’t Sleep", query: "ds") == 600, "a curly apostrophe too")
+        // The letter after an apostrophe doesn't start a word: "t" isn't a word of "Don't".
+        #expect(Search.score("Don't Sleep", query: "t")! < Search.score("Notes", query: "t")!)
+        #expect(Search.score("Don’t Sleep", query: "t sl")! < 600)
+        #expect(Search.score("Don't Sleep", query: "sl") == 700 - 11)
         #expect(Search.score("Visual Studio Code", query: "vsc") == 600)
     }
 

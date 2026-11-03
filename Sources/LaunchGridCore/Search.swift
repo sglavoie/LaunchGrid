@@ -22,8 +22,9 @@ public enum Search {
         if n == q { return 1000 }
         if n.startsScalars(with: q) { return 900 - shortness(n) }
         let isSeparator: (Character) -> Bool = { !$0.isLetter && !$0.isNumber }
-        let words = n.split(whereSeparator: isSeparator).map(String.init)
-        let queryWords = q.split(whereSeparator: isSeparator)
+        // An apostrophe inside a word keeps it one ("Don't"), as for initials and ⌥←.
+        let words = wordList(n)
+        let queryWords = wordList(q).map { Substring($0) }
         let (nameKey, queryKey) = (spacedWords(n), spacedWords(q))
         if !queryKey.isEmpty, nameKey.startsScalars(with: queryKey) || nameKey.startsScalars(with: queryKey.filter { $0 != " " }) {
             return 850 - shortness(n)
@@ -125,6 +126,24 @@ public enum Search {
 
     /// `s` with separators other than spaces dropped and each run of spaces made one:
     /// "Wi-Fi  Explorer" → "wifi explorer".
+    /// The words of `s`, split as `TextLine` splits them: at anything but a letter or a digit,
+    /// except an apostrophe between letters.
+    static func wordList(_ s: String) -> [String] {
+        let chars = Array(s)
+        var words: [String] = []
+        var word = ""
+        for k in chars.indices {
+            if TextLine.isWord(chars, k) {
+                word.append(chars[k])
+            } else if !word.isEmpty {
+                words.append(word)
+                word = ""
+            }
+        }
+        if !word.isEmpty { words.append(word) }
+        return words
+    }
+
     private static func spacedWords(_ s: String) -> String {
         s.split(whereSeparator: \.isWhitespace)
             .map { $0.filter { $0.isLetter || $0.isNumber } }
