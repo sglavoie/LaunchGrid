@@ -1706,6 +1706,28 @@ func installed(_ name: String) -> InstalledApp {
         try (header + Data("new".utf8)).write(to: assets)
         #expect(icons.dropStale([app.path]) == [app.path])
     }
+
+    /// A large asset catalog is sampled, not read whole on every scan: a rebuild that changes
+    /// its start, its end or the blocks between still shows.
+    @Test func aLargeIconFileIsSampledAtItsStartEndAndBetween() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-Assets.car")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let size = 8 * 1024 * 1024
+        var bytes = Data(repeating: 0x41, count: size)
+        try bytes.write(to: url)
+        let original = try #require(IconProvider.fingerprint(url))
+        #expect(IconProvider.fingerprint(url) == original)
+        for offset in [10, 128 * 1024 + (size - 256 * 1024) / 2 + 5, size - 3] {
+            bytes[offset] = 0x42
+            try bytes.write(to: url)
+            #expect(IconProvider.fingerprint(url) != original, "a change at \(offset)")
+            bytes[offset] = 0x41
+        }
+        try bytes.write(to: url)
+        #expect(IconProvider.fingerprint(url) == original)
+        try (bytes + Data([0])).write(to: url)
+        #expect(IconProvider.fingerprint(url) != original, "a different size")
+    }
 }
 
 @MainActor @Suite(.tempDir) struct ChooseAppsTests {

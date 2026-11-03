@@ -305,11 +305,40 @@ final class IconProvider: @unchecked Sendable {
         return parts.joined(separator: "|")
     }
 
-    private static func fingerprint(_ url: URL) -> Int? {
-        // Hashing every byte catches an in-place replacement of the same size without using file
-        // timestamps. Streamed, so an asset catalog isn't read into memory at once, and not
-        // `Data.hashValue`, which covers only the first 80 bytes on macOS 14's Foundation.
-        ImageBlurCache.contentHash(of: url)
+    /// The icon resource's size and bytes, without file timestamps (which would need a reason in
+    /// the privacy manifest), and not `Data.hashValue`, which covers only the first 80 bytes on
+    /// macOS 14's Foundation. Every scan checks every app on the grid, and asset catalogs run to
+    /// megabytes each, so a large file is sampled: its start, its end and blocks spread between,
+    /// about 450 KB however large it is. A rebuilt catalog differs in all of them.
+    nonisolated static func fingerprint(_ url: URL) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let block = 16 * 1024, edge = 128 * 1024, spread = 12
+        var hasher = Hasher()
+        do {
+            let size = try handle.seekToEnd()
+            hasher.combine(size)
+            var ranges: [(offset: UInt64, count: Int)] = []
+            if size <= UInt64(2 * edge + spread * block) {
+                ranges = [(0, Int(size))]
+            } else {
+                ranges.append((0, edge))
+                let middle = size - UInt64(2 * edge)
+                for k in 0..<spread { ranges.append((UInt64(edge) + middle * UInt64(k) / UInt64(spread), block)) }
+                ranges.append((size - UInt64(edge), edge))
+            }
+            for (offset, count) in ranges {
+                try handle.seek(toOffset: offset)
+                var left = count
+                while left > 0, let data = try handle.read(upToCount: min(left, 64 * 1024)), !data.isEmpty {
+                    data.withUnsafeBytes { hasher.combine(bytes: $0) }
+                    left -= data.count
+                }
+            }
+            return hasher.finalize()
+        } catch {
+            return nil
+        }
     }
 
     /// Calls `done` with the icon: at once from the cache, else when it's drawn, by this call or
