@@ -40,7 +40,8 @@ import Testing
         #expect(ActionKind.openFile(path: "/Users/x/notes.txt", appPath: "/System/Applications/Utilities/Terminal.app").isRunnableCode)
         #expect(ActionKind.openFile(path: "/Users/x/notes.txt", appPath: "/Applications/iTerm.app").isRunnableCode)
         #expect(!ActionKind.openFile(path: "/Users/x/notes.txt", appPath: "/System/Applications/TextEdit.app").isRunnableCode)
-        #expect(!ActionKind.openFile(path: "/Users/x/Documents", appPath: nil).isRunnableCode)
+        #expect(ActionKind.openFile(path: "/Users/x/Readme", appPath: nil).isRunnableCode, "missing, of no known kind")
+        #expect(ActionKind.openFile(path: "/Users/x/Sunset.saver", appPath: nil).isRunnableCode)
 
         // An executable without an extension opens in Terminal; a plain file doesn't.
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("review-\(UUID().uuidString)")
@@ -65,6 +66,15 @@ import Testing
         let linkedPlain = dir.appendingPathComponent("plain-link.txt")
         try FileManager.default.createSymbolicLink(at: linkedPlain, withDestinationURL: plain)
         #expect(!ActionKind.openFile(path: linkedPlain.path, appPath: nil).isRunnableCode, "a link to a plain file")
+
+        // A Finder alias opens what it points to, though it has no extension of its own.
+        let app = dir.appendingPathComponent("Payload.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let alias = dir.appendingPathComponent("Invoice"), plainAlias = dir.appendingPathComponent("Letter")
+        try URL.writeBookmarkData(try app.bookmarkData(options: .suitableForBookmarkFile), to: alias)
+        try URL.writeBookmarkData(try plain.bookmarkData(options: .suitableForBookmarkFile), to: plainAlias)
+        #expect(ActionKind.openFile(path: alias.path, appPath: nil).isRunnableCode, "an alias to an app")
+        #expect(!ActionKind.openFile(path: plainAlias.path, appPath: nil).isRunnableCode, "an alias to a plain file")
 
         // Any app other than the file's own is launched, whatever the file, and may run it.
         for app in ["/Users/x/Downloads/Payload.app", "/Applications/Python 3.13/Python Launcher.app"] {
@@ -154,5 +164,19 @@ import Testing
         #expect(full.range(of: Data("secret-marker".utf8)) != nil && full.range(of: Data("marker-token".utf8)) != nil)
         #expect(grid.hasCommands && !grid.removingCommands().allActions.isEmpty)
         #expect(!Grid(rows: 3, columns: 4, pages: [Page(items: [.action(web)])]).hasCommands)
+    }
+
+    /// A direction override or a zero-width space would make a command read differently from
+    /// what runs: the review names them. Joiners inside an emoji stay, as do line breaks.
+    @Test func hiddenCharactersAreNamed() {
+        let reversed = ActionKind.shell(command: "echo ok #\u{202E}gnp.x/ ; rm -rf ~", runMode: .background,
+                                        workingDirectory: nil, timeoutSeconds: nil)
+        #expect(reversed.reviewDescription == "echo ok #⟨U+202E⟩gnp.x/ ; rm -rf ~")
+        #expect(ActionKind.revealingHidden("a\u{200B}b\nc\td") == "a⟨U+200B⟩b\nc\td")
+        #expect(ActionKind.revealingHidden("👨\u{200D}👩\u{200D}👧") == "👨\u{200D}👩\u{200D}👧")
+        #expect(ActionKind.revealingHidden("a\u{200D}b") == "a⟨U+200D⟩b")
+        #expect(ActionKind.hiddenCharacters(in: "x\u{2066}y\u{2066}\u{E000}") == ["U+2066", "U+E000"])
+        let entry = ActionReviewEntry(action: Action(name: "Safe\u{202E}", kind: reversed), isRunnableCode: true)
+        #expect(entry.name == "Safe⟨U+202E⟩")
     }
 }

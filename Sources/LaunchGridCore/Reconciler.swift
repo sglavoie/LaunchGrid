@@ -17,6 +17,13 @@ public struct ReconcileReport: Equatable, Sendable {
 public enum Reconciler {
     /// How long a pruned app keeps its slot, waiting for an updater to put it back.
     public static let restoreWindow: TimeInterval = 3600
+
+    /// Whether an app pruned at `prunedAt` can still come back at `now`. A time up to the
+    /// window ahead counts as fresh: after the clock steps back (a correction after sleep),
+    /// an app pruned moments ago isn't dropped for good. One further ahead is a damaged record.
+    public static func isRecent(_ prunedAt: Date, now: Date) -> Bool {
+        (-restoreWindow..<restoreWindow).contains(now.timeIntervalSince(prunedAt))
+    }
     /// Bound on `Grid.recentlyPruned`, oldest first out.
     static let pruneMemory = 200
     /// How many preceding neighbours a pruned app remembers to find its way back.
@@ -72,7 +79,7 @@ public enum Reconciler {
             return aliases[key].flatMap { byPath[$0]?.path } ?? respelt(at: key)?.path ?? key
         })
         var returning = grid.recentlyPruned.filter {
-            (0..<restoreWindow).contains(now.timeIntervalSince($0.prunedAt))
+            isRecent($0.prunedAt, now: now)
                 && !grid.isExcluded(key: $0.app.key, path: $0.app.path)
         }
         // Exact paths and explicit aliases identify owners without guessing about case.

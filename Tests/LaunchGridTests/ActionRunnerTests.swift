@@ -391,6 +391,31 @@ import Testing
         #expect(try ActionRunner.substitutingArgument(in: "osascript -e \"{query}\"") == #"osascript -e "${LAUNCHGRID_QUERY}""#)
     }
 
+    /// Braces zsh reads as a body's start or end separate commands, so what comes after them is
+    /// read as a command: `function f { eval … }` is as refused as `eval …`. So are zsh's
+    /// precommands (`coproc`, `-`, `repeat 3`), and code given to tmux, screen, vim and git.
+    @Test func bodiesInBracesAndPrecommandsAreRead() {
+        let refused = [
+            #"function f { eval "echo {query}" }; f"#, #"function { eval "echo {query}" }"#,
+            #"function f g { eval "echo {query}" }"#, #"{ true } always { eval "echo {query}" }"#,
+            #"function f { trap "echo {query}" EXIT }"#, #"function f { let "x={query}" }"#,
+            #"coproc eval "echo {query}""#, #"coproc let "x={query}""#, #"- eval "echo {query}""#,
+            #"repeat 1 eval "echo {query}""#, #"repeat 1 { eval "echo {query}" }"#, #"gtimeout 5 eval "echo {query}""#,
+            #"while (( n-- )) { eval "echo {query}" }"#, #"if [[ -n x ]] { eval "echo {query}" }"#,
+            #"for x (1) { eval "echo {query}" }"#,
+            #"tmux new-window "less {query}""#, #"screen -dm sh -c "echo {query}""#, #"vim -c "e {query}""#,
+            #"nvim --cmd "echo '{query}'""#, #"vim +{query}"#, #"git -c "alias.x=!{query}" x"#,
+        ]
+        for template in refused {
+            #expect(throws: ActionRunner.Failure.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
+        }
+        for template in [#"function f { echo {query} }; f"#, #"{ echo {query} } always { echo done }"#,
+                         #"repeat 2 echo {query}"#, #"echo { {query} }"#, #"coproc cat {query}"#, #"vim {query}"#,
+                         #"vim -c {query}"#, #"tmux new-window {query}"#, #"git log --grep {query}"#] {
+            #expect(throws: Never.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
+        }
+    }
+
     /// A glob qualifier (`*(e:'…':)`) is code zsh runs for each file: `{query}` in one is
     /// refused. Function definitions, arrays and `$(…)` still take it.
     @Test func placeholdersInGlobQualifiersAreRefused() async throws {
@@ -672,6 +697,60 @@ import Testing
         #expect(result.ending == .stopped)
         try await Task.sleep(for: .seconds(6.5))
         #expect(!FileManager.default.fileExists(atPath: marker.path), "the background child kept running")
+    }
+
+    /// The editor warns about characters that would make a command read differently from what
+    /// runs, without refusing to save it.
+    @Test func theEditorWarnsAboutHiddenCharacters() {
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model.fill("name", "Clean")
+        model.fill("kind", "command")
+        model.fill("command", "echo ok")
+        #expect(model.warnings.isEmpty)
+        model.fill("command", "echo ok #\u{202E}fr- mr")
+        #expect(model.errors.isEmpty)
+        #expect(model.warnings.count == 1)
+        #expect(model.warnings.first?.contains("U+202E") == true)
+    }
+
+    /// As LaunchGrid quits, a command that ignores SIGTERM is killed before it returns: a
+    /// SIGKILL scheduled for later would never be sent once LaunchGrid has exited.
+    @Test(.timeLimit(.minutes(1))) func stoppingAllAtQuitKillsWhatIgnoresSIGTERM() async throws {
+        let pidFile = try temporaryFolder().appendingPathComponent("pid")
+        let runner = ActionRunner()
+        let command = "trap '' TERM; echo $$ > \(ActionRunner.shellQuoted(pidFile.path)); while :; do sleep 0.1; done"
+        guard case .code(let job) = try ActionRunner.plan(shell(command), argument: nil) else {
+            Issue.record("not code"); return
+        }
+        let shell = Box<ProcessTree.Member?>(nil)
+        let result = await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
+            do {
+                let run = try runner.start(job) { c.resume(returning: $0) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    shell.value = pid.flatMap(ProcessTree.Member.init)
+                    CodeRun.stopAll([run], grace: 0.3)
+                }
+            } catch { Issue.record(error) }
+        }
+        #expect(result.ending == .stopped)
+        let member = try #require(shell.value, "the command never wrote its process ID")
+        #expect(!member.isRunning, "the command outlived stopAll")
+    }
+
+    /// A process that ended is no longer the member found before, so a signal sent later can't
+    /// reach another process given its ID since.
+    @Test func aMemberThatEndedIsntSignalled() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["30"]
+        try process.run()
+        let member = try #require(ProcessTree.Member(process.processIdentifier))
+        #expect(member.isRunning)
+        process.terminate()
+        process.waitUntilExit()
+        #expect(!member.isRunning)
+        #expect(ProcessTree.Member(-1) == nil)
     }
 
     @Test func theArgumentIsInTheEnvironment() async throws {
@@ -1144,4 +1223,10 @@ private final class FakeScriptTasks: @unchecked Sendable {
         #expect((reopened.command, reopened.runMode, reopened.workingDirectory, reopened.timeout) == ("make {query}", .terminal, "/tmp", 120))
     }
     #endif
+}
+
+/// A value set from a closure that outlives the test's own scope.
+private final class Box<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
 }

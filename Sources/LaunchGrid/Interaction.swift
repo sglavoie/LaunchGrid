@@ -228,10 +228,13 @@ extension AppState {
             drag.decided = true
             drag.gestureStart = start
             if !beginItemDrag(at: start) {
-                drag.panning = query.isEmpty && openFolder == nil && textEdit == nil && drag.pagerFrame.contains(start)
+                drag.panning = canPan && drag.pagerFrame.contains(start)
             }
         }
         if drag.panning {
+            // A search, an open folder or a rename started mid-pan (from the keyboard) ends the
+            // pan, as it ends a trackpad swipe: the pages behind them stay where they were.
+            guard canPan else { abandonPan(); return }
             swipeOffset = swipeOffset(for: location.x - start.x, width: drag.pagerFrame.width)
             return
         }
@@ -254,6 +257,7 @@ extension AppState {
             dragFinished()
         }
         if drag.panning {
+            guard canPan else { abandonPan(); return }
             let w = max(drag.pagerFrame.width, 1)
             let dx = location.x - start.x, flick = predicted.x - start.x
             withAnimation(Self.pageAnimation) {
@@ -275,6 +279,16 @@ extension AppState {
         drag.location = location
         updateTargets()
         drop()
+    }
+
+    /// Whether dragging empty space turns pages: not over a search, an open folder or a rename.
+    private var canPan: Bool { query.isEmpty && openFolder == nil && textEdit == nil }
+
+    /// Ends a pan without turning the page; the rest of the gesture does nothing.
+    private func abandonPan() {
+        drag.panning = false
+        guard swipeOffset != 0 else { return }
+        withAnimation(Self.pageAnimation) { swipeOffset = 0 }
     }
 
     // MARK: Drag lifecycle

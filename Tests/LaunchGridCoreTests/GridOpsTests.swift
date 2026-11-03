@@ -571,7 +571,7 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
 
     @Test func aMalformedIDOrNameKeepsTheEntry() throws {
         let json = #"""
-        {"version": 1, "rows": "five", "pages": [
+        {"version": 1, "pages": [
           {"id": "nope", "title": 3, "items": [{"type": "app", "app": {"id": 7, "path": "/Applications/A.app", "name": ["A"]}}]},
           {"items": [{"type": "folder", "folder": {"id": "x", "name": false, "apps": [{"path": "/Applications/B.app", "displayName": 1}]}}]}
         ]}
@@ -583,6 +583,32 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(grid.pages[0].title == nil)
         #expect(grid.allApps.map(\.path) == ["/Applications/A.app", "/Applications/B.app"])
         #expect(Set(grid.pages.map(\.id)).count == 2)
+    }
+
+    /// An empty layout with exclusions isn't broken because one restoration record or
+    /// search-only action is damaged: it loads without it. With nothing else, it's broken.
+    @Test func aDamagedRestorationRecordDoesntBreakAnEmptyLayout() throws {
+        for list in [#""recentlyPruned": [{"app": 3}]"#, #""hiddenActions": [{"kind": false}]"#] {
+            let json = #"{"version": 1, "hasCreatedLayout": true, "pages": [{"items": []}], "removedBundleIDs": ["com.test.x"], \#(list)}"#
+            let (grid, skipped) = try GridStore.decodeCountingSkipped(Data(json.utf8))
+            #expect(skipped == 1, "\(list)")
+            #expect(grid.removedBundleIDs == ["com.test.x"])
+            let bare = #"{"version": 1, "pages": [{"items": []}], \#(list)}"#
+            #expect(throws: GridFileError.self, "\(list)") { try GridStore.decode(Data(bare.utf8)) }
+        }
+    }
+
+    /// A size that's there but unreadable is damage: read as the default, it would cut every
+    /// page that no longer fits and be saved over the file. Whole numbers as text read.
+    @Test func anUnreadableSizeIsRejected() throws {
+        for size in [#""rows": "five""#, #""rows": 8.5"#, #""columns": null"#, #""rows": {}"#] {
+            let data = Data(#"{"version": 1, \#(size), "pages": []}"#.utf8)
+            #expect(throws: GridFileError.self, "\(size)") { try GridStore.decode(data) }
+        }
+        let text = try GridStore.decode(Data(#"{"version": 1, "rows": "8", "columns": 8, "pages": []}"#.utf8))
+        #expect(text.rows == 8 && text.columns == 8)
+        let missing = try GridStore.decode(Data(#"{"version": 1, "pages": []}"#.utf8))
+        #expect(missing.rows == 5 && missing.columns == 7)
     }
 
     @Test func rejectsOutOfRangeSize() {

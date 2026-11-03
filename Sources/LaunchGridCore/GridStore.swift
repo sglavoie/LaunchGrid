@@ -326,9 +326,11 @@ public struct GridStore: Sendable {
         } catch {
             throw GridFileError.invalid(error.localizedDescription)
         }
-        // A few bad entries are dropped; with nothing left, the file is broken, not empty.
-        if skipped.layoutCount > 0 && grid.allApps.isEmpty && grid.allActions.isEmpty && grid.recentlyPruned.isEmpty {
-            throw GridFileError.invalid("none of its \(skipped.layoutCount) entries could be read")
+        // A few bad entries are dropped; with nothing left, the file is broken, not empty. A
+        // damaged restoration record alone doesn't break an empty layout that has exclusions.
+        let nothingLeft = grid.allApps.isEmpty && grid.allActions.isEmpty && grid.recentlyPruned.isEmpty
+        if nothingLeft && (skipped.layoutCount > 0 || (skipped.restorationCount > 0 && grid.removedBundleIDs.isEmpty)) {
+            throw GridFileError.invalid("none of its \(skipped.layoutCount + skipped.restorationCount) entries could be read")
         }
         guard (1...50).contains(grid.rows), (1...50).contains(grid.columns) else {
             throw GridFileError.invalid("grid size \(grid.rows)×\(grid.columns) is out of range")

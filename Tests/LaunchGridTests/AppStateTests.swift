@@ -523,6 +523,66 @@ func installed(_ name: String) -> InstalledApp {
         #expect(!state.drag.active)
     }
 
+    /// 35 apps on the first page and 5 on the second.
+    private func twoPages() -> AppState {
+        let state = makeState()
+        let apps = (1...40).map { GridItem.app(AppRef(bundleID: "com.test.App\($0)", path: "/Applications/App\($0).app", name: "App\($0)")) }
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: Array(apps.prefix(35))), Page(items: Array(apps.dropFirst(35)))]))
+        return state
+    }
+
+    /// A search with no results focuses nothing; one with results focuses the first.
+    @Test func aSearchWithNoResultsFocusesNothing() {
+        let state = makeState(["Alpha", "Beta"])
+        state.query = "zzzz"
+        #expect(state.allSearchResults.isEmpty)
+        #expect(state.focusIndex == nil)
+        state.query = "Al"
+        #expect(state.focusIndex == 0)
+    }
+
+    /// A search typed while a mouse pan is held ends the pan: the release doesn't turn the page
+    /// behind the results, and focus stays on the result chosen.
+    @Test func aSearchStartedMidPanEndsThePan() {
+        let state = twoPages()
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = CGPoint(x: 600, y: 490)
+        state.dragChanged(start: start, location: CGPoint(x: 500, y: start.y))
+        #expect(state.drag.panning)
+        state.query = "App"
+        state.focusIndex = 20
+        let release = CGPoint(x: 100, y: start.y)
+        state.dragChanged(start: start, location: release)
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.currentPage == 0)
+        #expect(state.focusIndex == 20)
+        #expect(state.swipeOffset == 0)
+        state.query = ""
+        #expect(state.currentPage == 0)
+    }
+
+    /// A folder opened while a mouse pan is held ends the pan too: the folder stays on the page
+    /// shown.
+    @Test func aFolderOpenedMidPanEndsThePan() throws {
+        let state = twoPages()
+        let folderItem = Folder(name: "F", apps: [AppRef(bundleID: "com.test.X", path: "/Applications/X.app", name: "X"),
+                                                  AppRef(bundleID: "com.test.Y", path: "/Applications/Y.app", name: "Y")])
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [
+            Page(items: [.folder(folderItem)] + state.grid.pages[0].items.dropFirst()),
+            state.grid.pages[1],
+        ]))
+        let folder = folderItem.id
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = CGPoint(x: 600, y: 490)
+        state.dragChanged(start: start, location: CGPoint(x: 500, y: start.y))
+        #expect(state.drag.panning)
+        state.openFolder(folder)
+        let release = CGPoint(x: 100, y: start.y)
+        state.dragEnded(start: start, location: release, predicted: release)
+        #expect(state.currentPage == 0)
+        #expect(state.openFolder?.id == folder)
+    }
+
     @Test func aNewGestureAfterAMissingEndAppliesTheDeferredScan() {
         let state = makeState(["A"])
         state.catalogScanned([installed("A")])

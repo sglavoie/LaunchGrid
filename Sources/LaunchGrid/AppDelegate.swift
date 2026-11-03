@@ -1165,13 +1165,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             title.textColor = .secondaryLabelColor
             stack.addArrangedSubview(title)
             for entry in group {
-                let name = NSTextField(labelWithString: entry.action.name)
+                let name = NSTextField(labelWithString: entry.name)
                 name.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
                 let detail = NSTextField(wrappingLabelWithString: entry.detail)
                 detail.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
                 detail.isSelectable = true
                 detail.preferredMaxLayoutWidth = width - 16
-                detail.setAccessibilityLabel(String(localized: "\(entry.action.name): \(entry.detail)"))
+                detail.setAccessibilityLabel(String(localized: "\(entry.name): \(entry.detail)"))
                 stack.addArrangedSubview(name)
                 stack.addArrangedSubview(detail)
                 stack.setCustomSpacing(2, after: name)

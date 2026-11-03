@@ -75,6 +75,21 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.recentlyPruned.isEmpty)
     }
 
+    /// The clock stepping back while an app updates (a correction after sleep) doesn't lose
+    /// its place: it comes back to its slot, not dropped for good.
+    @Test func anUpdatingAppComesBackAfterTheClockStepsBack() {
+        let source = ["A", "B", "C"].map { installed($0) }
+        var g = Grid(rows: 1, columns: 4, pages: [Page(items: source.map { .app($0.makeRef()) })])
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: [source[0], source[2]], autoAdd: false,
+                                 pathExists: { $0 != source[1].path }, now: now)
+        #expect(g.recentlyPruned.count == 1)
+        _ = Reconciler.reconcile(&g, installed: source, autoAdd: false, now: now - 120)
+        #expect(g.pages.map { $0.items.map(\.title) } == [["A", "B", "C"]])
+        #expect(g.recentlyPruned.isEmpty)
+        #expect(!Reconciler.isRecent(now + Reconciler.restoreWindow + 1, now: now), "a record far ahead is damaged")
+    }
+
     @Test func anUpdatingAppFollowsNeighboursMovedToAnotherPageByASort() {
         let source = ["A", "B", "C", "D"].map { installed($0) }
         func item(_ name: String) -> GridItem { .app(source.first { $0.name == name }!.makeRef()) }
@@ -2016,6 +2031,28 @@ func tempDir(_ prefix: String) -> URL {
         #expect(throws: LaunchpadImporter.ImportError.self) {
             try LaunchpadImporter.copyDatabase(at: db, to: copy)
         }
+    }
+
+    /// A database reached through a symbolic link is copied, with its log beside the file it
+    /// points to; the copy isn't the link, which would open the live database.
+    @Test func aLinkedDatabaseIsCopiedNotLinked() throws {
+        let fm = FileManager.default
+        let folder = tempDir("linked-db")
+        let real = folder.appendingPathComponent("real.db"), link = folder.appendingPathComponent("link.db")
+        let copy = tempDir("linked-db-copy")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? fm.removeItem(at: folder)
+            for suffix in ["", "-wal"] { try? fm.removeItem(atPath: copy.path + suffix) }
+        }
+        try Data("database".utf8).write(to: real)
+        try Data(repeating: 1, count: 24).write(to: URL(fileURLWithPath: real.path + "-wal"))
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: "real.db")
+        try LaunchpadImporter.copyDatabase(at: link, to: copy)
+        let type = try fm.attributesOfItem(atPath: copy.path)[.type] as? FileAttributeType
+        #expect(type == .typeRegular)
+        #expect(try Data(contentsOf: copy) == Data("database".utf8))
+        #expect(fm.fileExists(atPath: copy.path + "-wal"), "the log beside the linked file comes too")
     }
 
     @Test func anUnreadableListedLogCannotBeImportedAsAbsent() throws {

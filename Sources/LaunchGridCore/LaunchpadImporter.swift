@@ -333,7 +333,10 @@ public enum LaunchpadImporter {
     /// The folder must be listable: an inaccessible log can look absent to `fileExists` in
     /// the sandbox, which would otherwise make an incomplete copy appear consistent.
     /// `betweenCopies` runs after the database is copied and before its log is, for tests.
-    static func copyDatabase(at url: URL, to tmp: URL, attempts: Int = 5, betweenCopies: () -> Void = {}) throws {
+    /// A symbolic link is followed: copied as a link, the "copy" would be the live database,
+    /// opened read-write, and its log is beside the file it points to, where SQLite keeps it.
+    static func copyDatabase(at link: URL, to tmp: URL, attempts: Int = 5, betweenCopies: () -> Void = {}) throws {
+        let url = link.resolvingSymlinksInPath()
         let fm = FileManager.default
         let wal = url.path + "-wal"
         let tmpWAL = tmp.path + "-wal"

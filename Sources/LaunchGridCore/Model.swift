@@ -526,8 +526,20 @@ extension Grid {
         guard c.contains(.pages), try !c.decodeNil(forKey: .pages) else {
             throw DecodingError.keyNotFound(CodingKeys.pages, .init(codingPath: c.codingPath, debugDescription: "No pages"))
         }
-        let rows = (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? 5
-        let columns = (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7
+        // Missing, it's the default size. There but unreadable ("8.5", null, an object), it's
+        // damaged: the default would cut every page that no longer fits, and that rearranged
+        // layout would then be saved over the file and its backup. Whole numbers written as
+        // text ("8") read, as the version does.
+        func size(_ key: CodingKeys, default value: Int) throws -> Int {
+            guard c.contains(key) else { return value }
+            if let n = try? c.decode(Int.self, forKey: key) { return n }
+            if let text = try? c.decode(String.self, forKey: key),
+               let n = Int(text.trimmingCharacters(in: .whitespaces)) { return n }
+            throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath + [key],
+                                                    debugDescription: "the grid's \(key.stringValue) isn't a whole number"))
+        }
+        let rows = try size(.rows, default: 5)
+        let columns = try size(.columns, default: 7)
         // `init` raises a size below 1 to 1, which GridStore's range check could then never
         // see: a damaged size would load as a 1×1 grid and be saved over the layout.
         guard rows >= 1, columns >= 1 else {
@@ -540,8 +552,8 @@ extension Grid {
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
             removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs, countingLayoutEntries: false) ?? []),
             // Keep readable restoration records even when another one is damaged.
-            recentlyPruned: try c.decodeLossily(PrunedApp.self, forKey: .recentlyPruned, allowNull: true) ?? [],
-            hiddenActions: try c.decodeLossily(Action.self, forKey: .hiddenActions, allowNull: true) ?? []
+            recentlyPruned: try c.decodeLossily(PrunedApp.self, forKey: .recentlyPruned, restoration: true, allowNull: true) ?? [],
+            hiddenActions: try c.decodeLossily(Action.self, forKey: .hiddenActions, restoration: true, allowNull: true) ?? []
         )
         // GridStore reads the version first, also when written as text, and rejects bad ones.
         version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? 1
@@ -654,7 +666,8 @@ extension KeyedDecodingContainer {
     /// The array's elements that decode; the others are skipped and logged, so one bad entry
     /// (an app without a path) doesn't make the whole layout unreadable.
     func decodeLossily<T: Decodable>(_ type: T.Type, forKey key: Key,
-                                    countingLayoutEntries: Bool = true, allowNull: Bool = false) throws -> [T]? {
+                                    countingLayoutEntries: Bool = true, restoration: Bool = false,
+                                    allowNull: Bool = false) throws -> [T]? {
         guard contains(key) else { return nil }
         if try decodeNil(forKey: key) {
             // A missing list can use an older format's default; an explicit null layout
@@ -676,7 +689,11 @@ extension KeyedDecodingContainer {
                 NSLog("LaunchGrid: skipped an unreadable \(T.self) in the layout: \(error)")
                 if let skipped = decoder.userInfo[SkippedEntries.key] as? SkippedEntries {
                     skipped.count += 1
-                    if countingLayoutEntries { skipped.layoutCount += 1 }
+                    if restoration {
+                        skipped.restorationCount += 1
+                    } else if countingLayoutEntries {
+                        skipped.layoutCount += 1
+                    }
                 }
                 _ = try c.decode(SkippedEntry.self) // a failed decode doesn't move past the entry
             }
@@ -695,5 +712,9 @@ final class SkippedEntries: @unchecked Sendable {
     static let key = CodingUserInfoKey(rawValue: "skippedEntries")!
     var count = 0
     /// Excludes malformed exclusions: an exclusions-only file has no app entries to recover.
+    /// Excludes restoration records and search-only actions too, counted apart.
     var layoutCount = 0
+    /// Unreadable `recentlyPruned` and `hiddenActions` entries. Only with nothing else readable
+    /// in the file do they make it broken: an empty layout with exclusions still loads.
+    var restorationCount = 0
 }

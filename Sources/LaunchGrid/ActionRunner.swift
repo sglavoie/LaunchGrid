@@ -41,7 +41,7 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset, vared, getopts or sysread, a variable name for typeset, declare, local or export (or after [ -v, test -v, set -A, strftime -s or zstat -A), or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
         }
         static var placeholderInCode: Failure {
-            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
+            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, in a tmux or screen command, after vim -c or git -c, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
         }
         static var placeholderInGlobQualifier: Failure {
             Failure(message: String(localized: "{query} can't go inside parentheses that end a word, like the glob qualifier in *(e:'…':), where zsh would run what's typed as code. Use $LAUNCHGRID_QUERY there instead."))
@@ -319,10 +319,23 @@ final class ActionRunner {
             while j >= 0, "#+=~^".unicodeScalars.contains(text[j]) { j -= 1 }
             return j >= 0 && text[j] == "$"
         }
+        /// Whether the text before `index` ends with `]]` or `))`, the condition of a short loop
+        /// (`while (( n-- )) {`), blanks aside.
+        func afterTest(before index: Int) -> Bool {
+            var j = index - 1
+            while j >= 0, ActionRunner.isBlank(text[j]) { j -= 1 }
+            return j >= 1 && ((text[j] == "]" && text[j - 1] == "]") || (text[j] == ")" && text[j - 1] == ")"))
+        }
         /// Ends the word before `i`. A new command starts after `;`, `&`, `|`, `(`, `)` or a newline.
         func endWord(newCommand: Bool) throws {
             let word = String(String.UnicodeScalarView(text[min(words.start, i)..<i]))
-            if !word.isEmpty {
+            // zsh reads `}` as a word of its own as the end of a body, and `{` after `function f`,
+            // `always`, `repeat 3` or a short loop's head as its start: the next word is a command
+            // (`function f { eval … }`, `{ … } always { eval … }`).
+            let brace = !words.redirecting
+                && (word == "}" || (word == "{" && (ActionRunner.opensBody(after: words) || afterTest(before: i - 1))))
+            let newCommand = newCommand || brace
+            if !word.isEmpty, !brace {
                 if words.redirecting {
                     // A file to read or write (`<<< {query}`, `> {query}`): data, not an argument,
                     // but what a program reading code from its input runs: `bash <<< "echo {query}"`,
@@ -671,6 +684,7 @@ final class ActionRunner {
                 let isCode = (interpreterSeen && (codeOption || (codePending && !word.hasPrefix("-"))))
                     || (programWordsLeft > 0 && !programOptionArgument && !word.hasPrefix("-"))
                     || ["eval", "ssh", "trap", "sched", "watch"].contains(command)
+                    || ActionRunner.runsAsCommand(word, after: previous, in: command)
                     // `env -S '…'` splits its argument into a command line.
                     || (command == "env" && wrapper != nil && previous.map { $0 == "-S" || $0 == "--split-string" } == true)
                     || (command == "env" && wrapper != nil && (word.hasPrefix("-S") || word.hasPrefix("--split-string")))
@@ -732,7 +746,7 @@ final class ActionRunner {
             if ActionRunner.wrappers.contains(ActionRunner.programName(name)) {
                 wrapper = ActionRunner.programName(name)
                 wrapperOptionArgument = false
-                wrapperOperandsLeft = wrapper == "timeout" ? 1 : 0
+                wrapperOperandsLeft = ["timeout", "gtimeout", "repeat"].contains(wrapper) ? 1 : 0
                 if wrapper == "xargs" { viaXargs = true }
             } else if ActionRunner.isUnknownProgram(word) {
                 interpreterSeen = true
@@ -936,9 +950,31 @@ final class ActionRunner {
         return "ceEr".contains(last)
     }
 
+    /// Whether `command` runs `word` as a command of its own, or as an editor's or git's: any
+    /// argument of `tmux` and `screen` (`tmux new-window 'less …'`), after `vim -c`, `--cmd` or
+    /// in a `+…`, and git's `-c alias.x='!…'`.
+    nonisolated static func runsAsCommand(_ word: String, after previous: String?, in command: String) -> Bool {
+        switch programName(command) {
+        case "tmux", "screen": return true
+        case "vim", "nvim", "vi", "ex", "view", "gvim", "mvim", "vimdiff", "rvim", "gview":
+            return word.hasPrefix("+") || ["-c", "--cmd"].contains(previous ?? "")
+        case "git": return ["-c", "--config-env"].contains(previous ?? "")
+        default: return false
+        }
+    }
+
     /// Programs that run a command given after their own options: `env sh`, `sudo -u me sh`.
     nonisolated static let wrappers: Set<String> = ["env", "sudo", "nice", "timeout", "gtimeout", "caffeinate", "arch",
-                                                    "xargs", "exec", "command", "stdbuf", "nohup", "doas"]
+                                                    "xargs", "exec", "command", "stdbuf", "nohup", "doas", "repeat"]
+
+    /// Whether a `{` after these words starts a body whose first word is a command: after
+    /// `function` and its names, `always`, `repeat 3` and the heads of zsh's short loops
+    /// (`if [[ … ]] {`, `for x (…) {`, `while (( … )) {`).
+    private nonisolated static func opensBody(after words: Words) -> Bool {
+        guard let command = words.command else { return true }
+        return ["function", "always", "repeat", "if", "elif", "while", "until", "for", "foreach", "select"]
+            .contains(command)
+    }
 
     /// `word` with the quotes and backslashes zsh removes from it: `\sh` and `"bash"` run `sh`
     /// and `bash`.
@@ -1041,7 +1077,7 @@ final class ActionRunner {
     /// `noglob` and the like, and assignments (`LANG=C`).
     nonisolated static func precedesCommand(_ word: String) -> Bool {
         let prefixes: Set<String> = ["{", "!", "if", "then", "else", "elif", "while", "until", "do", "time",
-                                     "builtin", "noglob", "nocorrect"]
+                                     "builtin", "noglob", "nocorrect", "coproc", "-"]
         if prefixes.contains(word) { return true }
         return assignedName(word) != nil
     }
@@ -1280,20 +1316,56 @@ final class CodeRun: @unchecked Sendable {
     func stop() { end(as: .stopped) }
 
     private func end(as reason: RunResult.Ending) {
-        let pid: pid_t? = lock.withLock {
+        #if !APP_STORE
+        guard let tree = terminate(as: reason) else { return }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+            ProcessTree.signal(ProcessTree.withLateDescendants(of: tree), SIGKILL)
+        }
+        #else
+        _ = terminate(as: reason)
+        #endif
+    }
+
+    /// Notes why the run ends and, in the downloadable build, sends SIGTERM to its processes.
+    /// Returns them, to be killed if they're still running later; nil when it can't be stopped
+    /// or already ended.
+    #if !APP_STORE
+    private func terminate(as reason: RunResult.Ending) -> [ProcessTree.Member]? {
+        guard let pid = markStopped(as: reason) else { return nil }
+        // Everything it started too: a command's own processes stay in LaunchGrid's process
+        // group, so the group can't be signalled instead.
+        let tree = ProcessTree.members(of: pid)
+        ProcessTree.signal(tree, SIGTERM)
+        return tree
+    }
+    #else
+    private func terminate(as reason: RunResult.Ending) -> Bool? {
+        markStopped(as: reason).map { _ in true }
+    }
+    #endif
+
+    private func markStopped(as reason: RunResult.Ending) -> pid_t? {
+        lock.withLock {
             guard canStop, !finished, exit == nil, stopReason == nil, rootPID > 0 else { return nil }
             stopReason = reason
             return rootPID
         }
-        guard let pid else { return }
+    }
+
+    /// Stops every run as LaunchGrid quits. A SIGKILL set for later would never be sent once
+    /// LaunchGrid has exited, so this waits up to `grace` for the runs' processes to end, then
+    /// kills those still running: a command that ignores SIGTERM isn't left behind.
+    static func stopAll(_ runs: [CodeRun], grace: TimeInterval = 1.5) {
         #if !APP_STORE
-        // Everything it started too: a command's own processes stay in LaunchGrid's process
-        // group, so the group can't be signalled instead.
-        let tree = ProcessTree.withDescendants(of: pid)
-        for p in tree { kill(p, SIGTERM) }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-            for p in Set(tree + ProcessTree.withDescendants(of: pid)) where kill(p, 0) == 0 { kill(p, SIGKILL) }
+        let trees = runs.compactMap { $0.terminate(as: .stopped) }
+        guard !trees.isEmpty else { return }
+        let deadline = Date().addingTimeInterval(grace)
+        while Date() < deadline, trees.contains(where: { $0.contains(where: \.isRunning) }) {
+            usleep(20_000)
         }
+        for tree in trees { ProcessTree.signal(ProcessTree.withLateDescendants(of: tree), SIGKILL) }
+        #else
+        for run in runs { run.stop() }
         #endif
     }
 
@@ -1332,6 +1404,53 @@ final class CodeRun: @unchecked Sendable {
 #if !APP_STORE
 /// A process and those it started, from the kernel's list of child processes.
 enum ProcessTree {
+    /// A process as it was when found: its ID with its start time, so a signal sent later never
+    /// reaches another process that was given the same ID after it ended.
+    struct Member: Hashable {
+        let pid: pid_t
+        let started: UInt64
+
+        init?(_ pid: pid_t) {
+            guard let info = ProcessTree.info(pid) else { return nil }
+            self.pid = pid
+            started = ProcessTree.startTime(info)
+        }
+
+        /// Whether it's still this process, and hasn't ended (a zombie waiting to be reaped has).
+        var isRunning: Bool {
+            guard let info = ProcessTree.info(pid) else { return false }
+            return ProcessTree.startTime(info) == started && info.pbi_status != UInt32(SZOMB)
+        }
+    }
+
+    private static func info(_ pid: pid_t) -> proc_bsdinfo? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard pid > 0, proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info
+    }
+
+    private static func startTime(_ info: proc_bsdinfo) -> UInt64 {
+        UInt64(info.pbi_start_tvsec) &* 1_000_000 &+ UInt64(info.pbi_start_tvusec)
+    }
+
+    /// `pid` and its descendants that are still there.
+    static func members(of pid: pid_t) -> [Member] {
+        withDescendants(of: pid).compactMap(Member.init)
+    }
+
+    /// `tree` with what those still running started since: processes started after a SIGTERM.
+    static func withLateDescendants(of tree: [Member]) -> [Member] {
+        var all = Set(tree)
+        for member in tree where member.isRunning { all.formUnion(members(of: member.pid)) }
+        return Array(all)
+    }
+
+    /// Sends `signal` to each member that is still the process it was.
+    static func signal(_ members: [Member], _ signal: Int32) {
+        for member in members where member.isRunning { kill(member.pid, signal) }
+    }
+
     static func withDescendants(of pid: pid_t) -> [pid_t] {
         var all = [pid]
         var queue = [pid]

@@ -265,6 +265,18 @@ final class ActionEditorModel {
         var warnings = keywords.compactMap { k in
             otherKeywords[Search.normalize(k)].map { String(localized: "“\(k)” is also a keyword of \($0).") }
         }
+        // Invisible or direction-changing characters make what's shown differ from what runs.
+        let shown: [String] = switch kind {
+        case .command: [command, workingDirectory]
+        case .script: [scriptName, argumentsText]
+        case .link: [template]
+        case .file: [filePath, appPath ?? ""]
+        case .shortcut: [shortcutName, shortcutInput]
+        }
+        let hidden = ActionKind.hiddenCharacters(in: ([name] + shown).joined(separator: "\n"))
+        if !hidden.isEmpty {
+            warnings.append(String(localized: "This action contains invisible or direction-changing characters (\(hidden.formatted(.list(type: .and)))), which can make it read differently from what it does. Retype it to be sure."))
+        }
         // It may be put in the folder later: the tile says so meanwhile.
         if kind == .script, !scriptName.isEmpty, scriptsLoaded, !scripts.contains(scriptName) {
             warnings.append(ActionRunner.Failure.scriptNotFound(scriptName).message)

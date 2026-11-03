@@ -113,7 +113,8 @@ final class AppState {
             queryCaret = query.count
             if query != oldValue {
                 searchPage = 0
-                focusIndex = query.isEmpty ? nil : 0
+                // Nothing to focus when nothing matches: ⌃Return then opens the page's menu.
+                focusIndex = query.isEmpty || allSearchResults.isEmpty ? nil : 0
             }
             // However the search ended (a page jump, a reveal, hiding), the folder it started
             // in is no longer one to go back to.
@@ -681,7 +682,7 @@ final class AppState {
         var paths = Set(movesAfterDrag.flatMap(\.values))
         for g in [grid] + undoStack + redoStack {
             paths.formUnion(g.allApps.map(\.path))
-            let recent = g.recentlyPruned.filter { (0..<Reconciler.restoreWindow).contains(now.timeIntervalSince($0.prunedAt)) }
+            let recent = g.recentlyPruned.filter { Reconciler.isRecent($0.prunedAt, now: now) }
             paths.formUnion(recent.map(\.app.path))
         }
         return paths
@@ -834,7 +835,7 @@ final class AppState {
     /// need disk checks too before following a change in capitalization.
     private func outsideCandidates(includingHistory: Bool = false) -> [String] {
         let grids = includingHistory ? [grid] + undoStack + redoStack : [grid]
-        let recent = grids.flatMap(\.recentlyPruned).filter { Date().timeIntervalSince($0.prunedAt) < Reconciler.restoreWindow }
+        let recent = grids.flatMap(\.recentlyPruned).filter { Reconciler.isRecent($0.prunedAt, now: Date()) }
         var seen = Set<String>()
         let paths = (grids.flatMap(\.allApps) + recent.map(\.app)).filter { !isSelf($0.bundleID) }.map(\.path)
             + grid.removedBundleIDs.filter { $0.hasPrefix("/") }.sorted()
@@ -1421,8 +1422,7 @@ final class AppState {
 
     /// Stops every background run, as LaunchGrid quits: they aren't left running on their own.
     func stopAllRuns() {
-        for handle in runningActions.values { handle.stop() }
-        for run in testRuns.values { run.stop() }
+        CodeRun.stopAll(runningActions.values.flatMap(\.runs) + Array(testRuns.values))
     }
 
     /// Why an action can't run here, said on its tile: a command in the Mac App Store build, or a

@@ -20,16 +20,24 @@ extension ActionKind {
     }
 
     /// Kinds of file whose default app runs them, or what they point to: apps, Terminal
-    /// commands and settings, Java archives, installers, Automator workflows and link files.
+    /// commands and settings, Java archives, installers, settings panes and screen savers
+    /// (opening one installs it), Automator workflows and link files.
     static let runnableExtensions: Set<String> = [
-        "app", "command", "tool", "terminal", "jar", "pkg", "mpkg", "prefpane", "workflow", "action",
+        "app", "command", "tool", "terminal", "jar", "pkg", "mpkg", "prefpane", "saver", "workflow", "action",
         "webloc", "inetloc", "fileloc",
     ]
 
     static func opensAsCode(_ path: String) -> Bool {
-        // A link opens what it points to: `notes.txt` can be a link to a script.
+        // A link opens what it points to: `notes.txt` can be a link to a script. So does a
+        // Finder alias, which has no extension of its own and which a symbolic link's
+        // resolving doesn't follow.
         let url = URL(fileURLWithPath: path)
-        let target = url.resolvingSymlinksInPath()
+        var target = url.resolvingSymlinksInPath()
+        if let isAlias = try? target.resourceValues(forKeys: [.isAliasFileKey]).isAliasFile, isAlias {
+            // An alias that can't be resolved points somewhere unknown: it may open anything.
+            guard let resolved = try? URL(resolvingAliasFileAt: target) else { return true }
+            target = resolved.resolvingSymlinksInPath()
+        }
         for candidate in Set([url, target]) {
             let ext = candidate.pathExtension.lowercased()
             if runnableExtensions.contains(ext) { return true }
@@ -38,7 +46,12 @@ extension ActionKind {
             if !ext.isEmpty, let type = UTType(filenameExtension: ext), type.conforms(to: .script) { return true }
         }
         var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isFolder), !isFolder.boolValue else { return false }
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isFolder) else {
+            // Nothing there yet: without an extension to tell what it will be, whatever is put
+            // there later (an executable, an alias to an app) opens without another look.
+            return target.pathExtension.isEmpty
+        }
+        guard !isFolder.boolValue else { return false }
         // An executable without an extension opens in Terminal, which runs it.
         if target.pathExtension.isEmpty && FileManager.default.isExecutableFile(atPath: target.path) { return true }
         // Any other file opened by a terminal by default runs too.
@@ -76,8 +89,55 @@ extension ActionKind {
     }
 
     /// What it does, in full, for the person to check: the command, script and arguments, link,
-    /// file or Shortcut.
-    public var reviewDescription: String {
+    /// file or Shortcut. Characters that would hide or reorder what's shown are named instead.
+    public var reviewDescription: String { ActionKind.revealingHidden(plainDescription) }
+
+    /// Each invisible or direction-changing character in `text` shown as its code point
+    /// (`⟨U+202E⟩`): a direction override or a zero-width space would make a command read
+    /// differently from what runs. Line breaks and tabs stay.
+    public static func revealingHidden(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        for i in scalars.indices {
+            if isHidden(at: i, in: scalars) {
+                out.append(contentsOf: "⟨U+\(String(format: "%04X", scalars[i].value))⟩".unicodeScalars)
+            } else {
+                out.append(scalars[i])
+            }
+        }
+        return String(out)
+    }
+
+    /// The characters `revealingHidden` names, in `text`, as code points: none for most text.
+    public static func hiddenCharacters(in text: String) -> [String] {
+        let scalars = Array(text.unicodeScalars)
+        var seen: [String] = []
+        for i in scalars.indices where isHidden(at: i, in: scalars) {
+            let name = "U+\(String(format: "%04X", scalars[i].value))"
+            if !seen.contains(name) { seen.append(name) }
+        }
+        return seen
+    }
+
+    /// Format, control and private-use characters and line separators, but not line breaks and
+    /// tabs, nor a joiner or non-joiner inside an emoji or a word (`👨‍👩‍👧`, Persian), which
+    /// shapes what's around it rather than hiding anything.
+    private static func isHidden(at i: Int, in scalars: [Unicode.Scalar]) -> Bool {
+        let scalar = scalars[i]
+        if scalar == "\n" || scalar == "\t" { return false }
+        if scalar.value == 0x200D || scalar.value == 0x200C, i > 0, i + 1 < scalars.count {
+            let joined = [scalars[i - 1], scalars[i + 1]].allSatisfy { s in
+                !s.isASCII && !s.properties.isWhitespace && s.properties.generalCategory != .format
+            }
+            if joined { return false }
+        }
+        switch scalar.properties.generalCategory {
+        case .format, .control, .privateUse, .lineSeparator, .paragraphSeparator: return true
+        default: return false
+        }
+    }
+
+    private var plainDescription: String {
         switch self {
         case .openURL(let template): return template
         case .openFile(let path, let appPath):
@@ -100,6 +160,8 @@ public struct ActionReviewEntry: Equatable, Sendable, Identifiable {
     public var isRunnableCode: Bool
     public var id: UUID { action.id }
     public var detail: String { action.kind.reviewDescription }
+    /// The action's name, with any characters that would hide or reorder it named.
+    public var name: String { ActionKind.revealingHidden(action.name) }
 }
 
 /// What to do with the actions of a grid file being loaded.
