@@ -747,6 +747,23 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.pages[0].items[1].app?.path == "/Users/x/Applications/B.app")
     }
 
+    @Test func anUpdateThatChangesTheBundleIDKeepsTheTileOnItsOwnPath() {
+        // An old copy of Foo sat in ~/Applications all along, off the grid. An update then gives
+        // /Applications/Foo.app a new bundle ID: the tile stays with the updated app.
+        let old = installed("Foo", id: "com.old.foo", path: "/Users/u/Applications/Foo.app")
+        let updated = installed("Foo", id: "com.new.foo")
+        for autoAdd in [false, true] {
+            var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(app("Foo", id: "com.old.foo"))])])
+            let report = Reconciler.reconcile(&g, installed: [updated, old], autoAdd: autoAdd, pathExists: { _ in true },
+                                              wasInstalledBefore: { $0 == old.path })
+            #expect(report.moved.isEmpty)
+            #expect(g.pages[0].items[0].app?.path == "/Applications/Foo.app")
+            #expect(g.pages[0].items[0].app?.bundleID == "com.new.foo")
+            // With auto-add, the old copy is the one added, not the updated app a second time.
+            #expect(g.allApps.map(\.path) == (autoAdd ? [updated.path, old.path] : [updated.path]))
+        }
+    }
+
     @Test func copiesSharingABundleIDStayApart() {
         let xcode = AppRef(bundleID: "com.apple.dt.Xcode", path: "/Applications/Xcode.app", name: "Xcode")
         var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(xcode)])])
@@ -1201,6 +1218,46 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.pages.map(titles) == [["A"], ["F"], ["C"], []])
         #expect(g.pages[1].title == "Games")
         #expect(g.pages[1].items[0].folder?.apps.map(\.name) == ["B"])
+    }
+
+    /// An app alone on the last page leaves during an update, an edit carries the end of the
+    /// page before onto a new page, and the app's page comes back after it, not ahead of it.
+    @Test(arguments: ["delete", "resize", "ungroup", "deleteOnlyPage"])
+    func anEmptiedPageComesBackAfterItemsAnEditCarriedOntoNewPages(edit: String) {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        let names = ["A0", "A1", "A2", "A3", "A4", "A9"]
+        var g: Grid, gone: String, expected: [[String]]
+        switch edit {
+        case "delete":
+            g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A0")), .app(app("A1"))]),
+                                                  Page(items: [.app(app("A2")), .app(app("A3"))]),
+                                                  Page(items: [.app(app("A4"))])])
+            (gone, expected) = ("A4", [["A0", "A1"], ["A2", "A3"], ["A4"]])
+        case "resize":
+            g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A0")), .app(app("A1")), .app(app("A2"))]),
+                                                  Page(items: [.app(app("A3"))])])
+            (gone, expected) = ("A3", [["A0", "A1"], ["A2"], ["A3"]])
+        case "ungroup":
+            g = Grid(rows: 1, columns: 3, pages: [Page(items: [.app(app("A0")), .app(app("A1")), .app(app("A2")),
+                                                               .app(app("A9"))]),
+                                                  Page(items: [.app(app("A3"))])])
+            g.group([g.pages[0].items[1].id, g.pages[0].items[2].id], name: "F")
+            (gone, expected) = ("A3", [["A0", "A1", "A2"], ["A9"], ["A3"]])
+        default:
+            g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A0"))]), Page(items: [.app(app("A1"))])])
+            (gone, expected) = ("A1", [["A0"], ["A1"]])
+        }
+        _ = Reconciler.reconcile(&g, installed: names.filter { $0 != gone }.map { installed($0) },
+                                 autoAdd: false, pathExists: { !$0.hasSuffix("/\(gone).app") }, now: t0)
+        #expect(g.recentlyPruned.first?.pageEmptied == true)
+        switch edit {
+        case "delete": g.deletePage(1)
+        case "resize": g.resize(rows: 1, columns: 2)
+        case "ungroup": g.ungroup(g.pages[0].items[1].id)
+        default: g.deletePage(0)
+        }
+        _ = Reconciler.reconcile(&g, installed: names.map { installed($0) }, autoAdd: false, now: t0 + 5)
+        #expect(g.pages.map(titles) == expected)
     }
 
     @Test func theOnlyPageComesBackWithoutABlankOneBeside() {

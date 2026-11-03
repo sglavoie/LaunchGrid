@@ -1259,14 +1259,17 @@ struct MenuEntry {
             entries.append(.button(String(localized: "Rename…")) { state.beginRename(item.id) })
         }
         entries.append(.divider)
-        let pages = state.grid.pages.enumerated().map { p, page in
-            MenuEntry.button(page.title.map { String(localized: "\(p + 1) — \($0)", comment: "Move to Page: a page's number and title") } ?? String(localized: "Page \(p + 1)")) {
-                state.moveToPage(targets, pageID: page.id)
+        // A search-only action is on no page, so there's nothing to move.
+        if targets.contains(where: { state.grid.locate($0) != nil }) {
+            let pages = state.grid.pages.enumerated().map { p, page in
+                MenuEntry.button(page.title.map { String(localized: "\(p + 1) — \($0)", comment: "Move to Page: a page's number and title") } ?? String(localized: "Page \(p + 1)")) {
+                    state.moveToPage(targets, pageID: page.id)
+                }
             }
+            let newPage = MenuEntry.button(String(localized: "New Page")) { state.moveToPage(targets, pageID: nil) }
+            entries.append(.submenu(multi ? String(localized: "Move \(targets.count) Items to Page") : String(localized: "Move to Page"),
+                                    pages + [.divider, newPage]))
         }
-        let newPage = MenuEntry.button(String(localized: "New Page")) { state.moveToPage(targets, pageID: nil) }
-        entries.append(.submenu(multi ? String(localized: "Move \(targets.count) Items to Page") : String(localized: "Move to Page"),
-                                pages + [.divider, newPage]))
         // Actions don't go in folders yet.
         if multi && state.canGroup(targets) {
             entries.append(.button(String(localized: "Group \(targets.count) Items")) { state.groupSelection(anchor: item.id) })

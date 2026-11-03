@@ -62,12 +62,12 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | `windowsize:718,534` | Resize the overlay window in points to cover compact layouts |
 | `keys:cmd+e@14`, `keys:125`, `keys: @49` | Post keyboard events: edit mode, Down, Space |
 | `click:0`, `press:0`, `fclick:0`, `fpress:0` | Click or long-press a page cell, or a cell of the open folder |
-| `drag:0,2`, `fdrag:1,1`, `finside:0,2`, `merge:0,1`, `edge:0,0`, `fedge:0,0` | Send mouse events through the gesture path; `edge` and `fedge` dwell at the page or open folder's right edge first |
+| `drag:0,2`, `fdrag:1,1`, `finside:0,2`, `merge:0,1`, `fmerge:0,0`, `edge:0,0`, `fedge:0,0` | Send mouse events through the gesture path; `edge` and `fedge` dwell at the page or open folder's right edge first; `fmerge` drags an open folder's app out and onto a page item |
 | `hold:0,2`, `fhold:1,1`, `release` | Hold/release a mouse drag; Escape can cancel it |
 | `page:1`, `folder`, `focus:0`, `edit`, `select:0,1`, `fselect:0` | Set up a specific interaction context |
 | `search:beta`, `type:beta` | Set search directly or insert text at its caret |
 | `group`, `undo`, `redo`, `deletepage`, `movetopage:1` | Invoke app-state actions directly |
-| `menuhold`, `pagemenuhold`, `menurun:Sort This Page` | Capture an item/page menu, then run a captured callback |
+| `menuhold`, `smenuhold`, `pagemenuhold`, `menurun:Sort This Page`, `menutitles` | Capture an item, first search result or page menu, then run a captured callback or print its entries |
 | `fakeinstall:Echo`, `autoadd:on` | Simulate a catalog update using the reconciler |
 | `pagetitle:First`, `titleedit` | Set a page title or open its editor |
 | `addaction:{"name": "X", "kind": {...}}`, `runaction:X,argument` | Add an action from its layout JSON (no `;` inside), or run one by name |

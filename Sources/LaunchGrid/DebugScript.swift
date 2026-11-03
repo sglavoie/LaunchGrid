@@ -474,7 +474,7 @@ enum DebugScript {
                     let screen = window.convertPoint(toScreen: local)
                     let top = NSScreen.screens.first?.frame.maxY ?? 0
                     print("where: \(arg) \(Int(screen.x)),\(Int(top - screen.y))"); fflush(stdout)
-                case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold", "nudgehold", "fnudgehold":
+                case "drag", "merge", "fmerge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold", "nudgehold", "fnudgehold":
                     // An optional third number grabs the icon that many points right of its centre.
                     let n = arg.split(separator: ",").compactMap { Int($0) }
                     guard let window = overlay.window, let from = n.first else { break }
@@ -745,6 +745,11 @@ enum DebugScript {
                     // The ⌃Return menu of the focused item, in an open folder too, for "menurun".
                     let focused = state.focusIndex.flatMap { i in state.openFolder.map { $0.items[safe: i]?.gridItem } ?? state.currentItems[safe: i] }
                     if let focused { heldMenu = MenuEntry.item(focused, state: state) }
+                case "smenuhold":
+                    // The first search result's right-click menu, a search-only action's too, for "menurun".
+                    if let first = state.allSearchResults.first { heldMenu = MenuEntry.item(first.item, state: state) }
+                case "menutitles":
+                    print("menutitles: \(heldMenu.map(\.title).filter { !$0.isEmpty })"); fflush(stdout)
                 case "pagemenuhold":
                     // Builds the ⋯ menu (the background's right-click menu) for "menurun", as it is
                     // over search results or an open folder.
@@ -863,7 +868,7 @@ enum DebugScript {
             // Between two icons, where a drag swipes the page rather than lifting an icon.
             start = rootPoint(from, dx: layout.cell.width / 2)
         }
-        if kind == "fdrag" || kind == "fedge" || kind == "finside" || kind == "fhold" || kind == "fnudgehold" {
+        if kind == "fdrag" || kind == "fedge" || kind == "finside" || kind == "fhold" || kind == "fnudgehold" || kind == "fmerge" {
             let f = state.drag.folderGridFrame
             let fl = state.folderLayout
             let c = fl.center(from)
@@ -873,7 +878,7 @@ enum DebugScript {
         send(.leftMouseDown, start)
         try? await Task.sleep(for: .milliseconds(50))
         var approach = start
-        if kind == "fdrag" || kind == "fhold" {
+        if kind == "fdrag" || kind == "fhold" || kind == "fmerge" {
             // In a short window the page gap can still be under the open folder. Leave
             // the panel first, as a person dragging out would, before aiming at that gap.
             let panel = state.drag.folderPanelFrame
@@ -884,12 +889,13 @@ enum DebugScript {
         }
         var end: CGPoint
         switch kind {
-        case "merge":
+        case "merge", "fmerge":
+            // fmerge: out of the open folder first, then onto page item `to`.
             end = rootPoint(to)
             // Lift the icon, then jump onto the target: a glide that a busy machine slows past
             // the reorder dwell moves the gap under the pointer, leaving nothing to merge with.
-            let length = max(1, hypot(end.x - start.x, end.y - start.y))
-            await glide(start, CGPoint(x: start.x + (end.x - start.x) * 16 / length, y: start.y + (end.y - start.y) * 16 / length), steps: 2)
+            let length = max(1, hypot(end.x - approach.x, end.y - approach.y))
+            await glide(approach, CGPoint(x: approach.x + (end.x - approach.x) * 16 / length, y: approach.y + (end.y - approach.y) * 16 / length), steps: 2)
             send(.leftMouseDragged, end)
             // Hold until the target is picked, not a fixed time: on a busy machine the events
             // can be handled late and in a burst, which reads as too short a rest to merge.

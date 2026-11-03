@@ -389,9 +389,14 @@ final class ActionEditorModel {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return [] }
+        // A stalled Shortcuts service would otherwise leave this thread, and `shortcuts`,
+        // waiting for good each time an editor opens. Ending it closes the pipe, so the read ends.
+        let timeout = DispatchWorkItem { [process] in if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: timeout)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return [] }
+        timeout.cancel()
+        guard process.terminationStatus == 0, process.terminationReason == .exit else { return [] }
         return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
             .filter { !$0.isEmpty }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }

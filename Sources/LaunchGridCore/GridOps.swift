@@ -354,6 +354,10 @@ extension Grid {
 
     /// Replaces a folder by its apps and actions, in place.
     public mutating func ungroup(_ folderID: UUID) {
+        keepingEmptiedPagesAfterTheirItems { $0.ungroupInPlace(folderID) }
+    }
+
+    private mutating func ungroupInPlace(_ folderID: UUID) {
         guard let loc = locate(folderID), loc.folderIndex == nil,
               case .folder(let f) = pages[loc.page].items[loc.index] else { return }
         pages[loc.page].items.replaceSubrange(loc.index...loc.index, with: f.items.map(\.gridItem))
@@ -532,6 +536,10 @@ extension Grid {
     /// A titled next page keeps its own items: those of the first page that don't fit stay
     /// on an untitled page before it.
     public mutating func deletePage(_ index: Int) {
+        keepingEmptiedPagesAfterTheirItems { $0.deletePageMovingItsItems(index) }
+    }
+
+    private mutating func deletePageMovingItsItems(_ index: Int) {
         guard pages.indices.contains(index) else { return }
         let removed = pages.remove(at: index)
         let items = removed.items
@@ -613,6 +621,43 @@ extension Grid {
         }
     }
 
+    /// Runs an edit that can carry the end of a page onto new pages after it: deleting a page,
+    /// resizing, ungrouping. A page an update emptied goes back after the pages it remembers;
+    /// when the items just before it now sit on later pages, those join what it remembers, so it
+    /// still comes back after them rather than ahead of them. When a page now mixes items from
+    /// before and after it, no slot keeps it between them, and it is left as it was.
+    private mutating func keepingEmptiedPagesAfterTheirItems(_ body: (inout Grid) -> Void) {
+        func slot(_ entry: PrunedApp) -> Int {
+            min(max(0, Self.slot(after: entry.pageBefore, fallback: entry.pageIndex ?? pages.count,
+                                 in: pages.map(\.id))), pages.count)
+        }
+        // A page's items, each folder followed by its members, as they stand once it is ungrouped.
+        func flat(_ pages: ArraySlice<Page>) -> [UUID] {
+            pages.flatMap { $0.items.flatMap { [$0.id] + ($0.folder?.items.map(\.id) ?? []) } }
+        }
+        // For each such page, the items before its slot (nearest last) and those after it.
+        let waiting = recentlyPruned.indices.filter { recentlyPruned[$0].pageEmptied == true }.map { k in
+            let at = slot(recentlyPruned[k])
+            return (k, before: flat(pages[..<at]), after: Set(flat(pages[at...])))
+        }
+        body(&self)
+        for (k, itemsBefore, itemsAfter) in waiting
+        where recentlyPruned.indices.contains(k) && recentlyPruned[k].pageEmptied == true {
+            let at = slot(recentlyPruned[k])
+            var last: Int?
+            for id in itemsBefore.reversed() {
+                if let page = locate(id)?.page { last = page; break }
+            }
+            guard let last, last >= at, flat(pages[at...last]).allSatisfy({ !itemsAfter.contains($0) }) else { continue }
+            let ids = pages.map(\.id)
+            var remembered = recentlyPruned[k].pageBefore ?? []
+            // Just after the page it went after, so pages pruned after it keep coming back after it.
+            let nearest = remembered.lastIndex(where: ids.contains).map { $0 + 1 } ?? 0
+            remembered.insert(contentsOf: ids[at...last].filter { !remembered.contains($0) }, at: nearest)
+            recentlyPruned[k].pageBefore = remembered
+        }
+    }
+
     public mutating func setPageTitle(_ index: Int, _ title: String?) {
         guard pages.indices.contains(index) else { return }
         let t = title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -630,6 +675,10 @@ extension Grid {
     /// the items around it. Page `n` keeps the old page `n`'s ID, and takes the title of the page
     /// its first item came from, so a title stays with what it names.
     public mutating func resize(rows: Int, columns: Int) {
+        keepingEmptiedPagesAfterTheirItems { $0.resizeReflowing(rows: rows, columns: columns) }
+    }
+
+    private mutating func resizeReflowing(rows: Int, columns: Int) {
         // A size a saved file can't be loaded back with would set the whole layout aside.
         let rows = min(max(1, rows), Grid.maxDimension), columns = min(max(1, columns), Grid.maxDimension)
         guard pages.contains(where: { $0.items.count > rows * columns }) else {

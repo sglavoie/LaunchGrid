@@ -1924,6 +1924,9 @@ final class AppState {
            let loc = grid.locate(id), loc.folderIndex == nil {
             currentPage = loc.page
             openFolderID = id
+            // Closing it when the drag left it dropped the focus; it comes back with the folder.
+            focusIndex = drag.sourceFolderFocus
+            clampFocus()
         }
         // Back on the folder page the drag started from, with keyboard focus on what's shown:
         // the drag may have shown fewer pages, or flipped to another.

@@ -527,6 +527,51 @@ func installed(_ name: String) -> InstalledApp {
         }
     }
 
+    @Test func anAppDraggedOutOfAFolderAndDroppedBackOnItStaysInPlace() throws {
+        let state = makeState(["A", "B", "C"])
+        let apps = state.grid.allApps
+        state.apply { $0.group([apps[0].id, apps[1].id], name: "Work") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        let before = state.grid
+        state.openFolder(folder.id)
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 100, y: 100, width: 500, height: 200)
+        state.drag.folderPanelFrame = CGRect(x: 80, y: 80, width: 540, height: 240)
+        let center = state.iconCenter(0, inFolder: true)
+        let start = CGPoint(x: 100 + center.x, y: 100 + center.y)
+        let outside = CGPoint(x: 650, y: 450)
+        let onFolder = state.iconCenter(0, inFolder: false)
+
+        state.dragChanged(start: start, location: outside)
+        #expect(state.openFolderID == nil, "dragging it out closes the folder")
+        state.dragChanged(start: start, location: onFolder)
+        #expect(state.drag.candidate == folder.id)
+        state.drag.mergeTarget = folder.id
+        state.dragEnded(start: start, location: onFolder, predicted: onFolder)
+        #expect(state.grid == before, "A stays first in Work, not moved to its end")
+        #expect(state.toast == nil)
+    }
+
+    @Test func escapeAfterDraggingOutOfAFolderKeepsItsKeyboardFocus() throws {
+        let state = makeState(["A", "B", "C"])
+        let apps = state.grid.allApps
+        state.apply { $0.group(apps.map(\.id), name: "Work") }
+        let folder = try #require(state.grid.pages[0].items.first?.folder)
+        state.openFolder(folder.id)
+        state.focusIndex = 1
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 100, y: 100, width: 500, height: 200)
+        state.drag.folderPanelFrame = CGRect(x: 80, y: 80, width: 540, height: 240)
+        let center = state.iconCenter(2, inFolder: true)
+        let start = CGPoint(x: 100 + center.x, y: 100 + center.y)
+
+        state.dragChanged(start: start, location: CGPoint(x: 650, y: 450))
+        #expect(state.openFolderID == nil)
+        state.cancelDrag()
+        #expect(state.openFolderID == folder.id)
+        #expect(state.focusIndex == 1)
+    }
+
     @Test func aLateEndFromThePreviousGestureDoesNotDropTheNewDrag() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
@@ -4360,7 +4405,7 @@ func installed(_ name: String) -> InstalledApp {
         try await opener.waitForOpens(2)
     }
 
-    @Test func anActionsMenuOffersWhatSuitsIt() {
+    @Test func anActionsMenuOffersWhatSuitsIt() throws {
         let opener = FakeOpener()
         let state = state(with: [link, file], opener: opener)
         let titles = { (item: GridItem) in MenuEntry.item(item, state: state).map(\.title).filter { !$0.isEmpty } }
@@ -4371,6 +4416,13 @@ func installed(_ name: String) -> InstalledApp {
         state.selection = [link.id, state.grid.allApps[0].id]
         #expect(titles(.action(link)).contains("Group 2 Items"))
         #expect(titles(.action(link)).contains("Move 2 Items to Page"))
+
+        // A search-only action is on no page: nothing to move.
+        state.selection = []
+        state.setShowsOnGrid(link.id, false)
+        let hidden = try #require(state.grid.item(link.id))
+        #expect(state.grid.locate(link.id) == nil)
+        #expect(!titles(hidden).contains("Move to Page"))
     }
 
     @Test func aSelectionWithAnActionGroupsIntoAFolderAndUndoes() throws {

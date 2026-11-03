@@ -383,8 +383,12 @@ struct AppearanceSettings: View {
         case .image:
             guard let path = customImage else { return nil }
             let url = URL(fileURLWithPath: path)
-            guard await !Disk.run({ BackgroundPicture.isReadable(url) }) else { return nil }
-            return FileManager.default.fileExists(atPath: path)
+            // Both off the main thread: a drive that stopped answering would hang Settings.
+            let (readable, exists) = await Disk.run {
+                BackgroundPicture.isReadable(url) ? (true, true) : (false, FileManager.default.fileExists(atPath: path))
+            }
+            guard !readable else { return nil }
+            return exists
                 ? String(localized: "This picture can't be read, so the blurred desktop is shown instead. Choose it again, or another one.")
                 : String(localized: "This picture is no longer there (moved, deleted or on a disconnected drive), so the blurred desktop is shown instead.")
         case .wallpaper:

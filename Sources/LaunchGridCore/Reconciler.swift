@@ -151,10 +151,13 @@ public enum Reconciler {
                ref.bundleID == nil || respelt.bundleID == nil || respelt.bundleID == ref.bundleID {
                 return (respelt, false)
             }
+            // With an app still at its path (an update changed the bundle ID, or another app took
+            // the spot), a copy that was installed beside it all along is not where it moved.
             if let id = ref.bundleID, atPath != nil || (isReachable(ref.path) && !pathExists(ref.path)),
                let other = likelyMove(of: ref, among: byBundle[id]?.filter {
                    !gridPaths.contains($0.path) && !seen.contains($0.path)
                        && !removed.contains($0.key) && !removed.contains($0.path)
+                       && (atPath == nil || !wasInstalledBefore($0.path))
                } ?? [], wasInstalledBefore: wasInstalledBefore,
                   reserved: Set(exactMoves.filter { $0.value != ref.path }.keys)) {
                 return (other, true)

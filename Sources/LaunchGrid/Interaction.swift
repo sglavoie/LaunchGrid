@@ -103,6 +103,9 @@ final class DragController {
     @ObservationIgnored var panPage = 0
     /// The open folder's page when the drag started, shown again if it's cancelled.
     @ObservationIgnored var sourceFolderPage = 0
+    /// Keyboard focus in the open folder when the drag started: dragging out closes the
+    /// folder, which drops it, and a cancel that reopens the folder puts it back.
+    @ObservationIgnored var sourceFolderFocus: Int?
     @ObservationIgnored var timer: Timer?
     /// Start of a gesture cancelled while still in progress (Esc, hiding). Its remaining
     /// events are ignored instead of starting a new drag.
@@ -355,6 +358,7 @@ extension AppState {
         // on one that is no longer shown (blank, with no page dot lit).
         if openFolder != nil {
             drag.sourceFolderPage = folderPage
+            drag.sourceFolderFocus = focusIndex
             folderPage = min(folderPage, max(shownFolderPageCount - 1, 0))
         }
         // In the common modes: in the default mode alone it doesn't fire while the run loop
@@ -546,8 +550,13 @@ extension AppState {
         if let target = drag.mergeTarget, let targetItem = grid.item(target) {
             switch targetItem {
             case .folder(let f):
-                apply { g in g.removingEmptiedPages { $0.addToFolder(ids, folder: f.id) } }
-                showToast(String(localized: "Added to \(f.name)"))
+                // Apps dragged out of this folder and dropped back on it stay where they were,
+                // rather than moving to its end as if newly added.
+                let adding = ids.filter { !f.itemIDs.contains($0) }
+                if !adding.isEmpty {
+                    apply { g in g.removingEmptiedPages { $0.addToFolder(adding, folder: f.id) } }
+                    showToast(String(localized: "Added to \(f.name)"))
+                }
             case .app, .action:
                 // An app or action dropped on an app or action: a new folder, named for the
                 // apps' category ("New Folder" when there are none or they differ).
