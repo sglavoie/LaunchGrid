@@ -90,7 +90,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(textInput)
+        // Shown again mid-fade, a rename card still open keeps its field's keyboard.
+        if state.textEdit == nil { panel.makeFirstResponder(textInput) }
         launchedBehind = nil
         state.didShow()
         // Shown again mid-fade, whose completion now won't run: a save that already ended
