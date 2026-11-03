@@ -510,6 +510,10 @@ enum DebugScript {
                     // As if a scan found a newly installed app "Name" (nothing is put on disk).
                     let app = InstalledApp(bundleID: "com.example.fake.\(arg.lowercased())", path: "/Applications/\(arg).app", name: arg)
                     state.catalogScanned(state.installed + [app])
+                case "icongen":
+                    // Bumped each time a scan finds icons changed on disk and redraws them.
+                    print("icongen: \(state.iconGeneration)")
+                    fflush(stdout)
                 case "regenicons":
                     state.regenerateIcons { print("regenicons: done"); fflush(stdout) }
                 case "movetopage":
@@ -726,6 +730,10 @@ enum DebugScript {
                     // Builds the first item's right-click menu now, for "menurun" to choose from later,
                     // as a menu left open while a rescan changes the pages.
                     if let first = state.currentItems.first { heldMenu = MenuEntry.item(first, state: state) }
+                case "focusmenuhold":
+                    // The ⌃Return menu of the focused item, in an open folder too, for "menurun".
+                    let focused = state.focusIndex.flatMap { i in state.openFolder.map { $0.items[safe: i]?.gridItem } ?? state.currentItems[safe: i] }
+                    if let focused { heldMenu = MenuEntry.item(focused, state: state) }
                 case "pagemenuhold":
                     // Builds the ⋯ menu (the background's right-click menu) for "menurun", as it is
                     // over search results or an open folder.
