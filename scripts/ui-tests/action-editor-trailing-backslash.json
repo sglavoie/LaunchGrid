@@ -1,0 +1,70 @@
+{
+  "name": "A command ending in a backslash, a line still to be continued, is checked without crashing",
+  "fixture": {
+    "rows": 3,
+    "columns": 4,
+    "pages": [
+      [
+        "Delta"
+      ]
+    ],
+    "pageTitles": [
+      ""
+    ],
+    "folders": {}
+  },
+  "steps": [
+    {
+      "run": "show"
+    },
+    {
+      "expect": {
+        "keyWindow": true,
+        "pagerReady": true
+      }
+    },
+    {
+      "run": "neweditor"
+    },
+    {
+      "expect": {
+        "actionEditor": "new"
+      }
+    },
+    {
+      "run": "editorfill:name=Continued"
+    },
+    {
+      "run": "editorfill:kind=command"
+    },
+    {
+      "run": "editorfill:command=ls \\"
+    },
+    {
+      "expect": {
+        "actionEditor": "new",
+        "editorErrors": []
+      }
+    },
+    {
+      "run": "editorfill:command=echo \"a\\"
+    },
+    {
+      "run": "editorfill:command=echo {query} \\"
+    },
+    {
+      "expect": {
+        "actionEditor": "new",
+        "editorErrors": []
+      }
+    },
+    {
+      "run": "editorcancel"
+    },
+    {
+      "expect": {
+        "actionEditor": ""
+      }
+    }
+  ]
+}

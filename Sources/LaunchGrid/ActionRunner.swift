@@ -291,8 +291,10 @@ final class ActionRunner {
         var i = 0
         func at(_ offset: Int) -> Unicode.Scalar? { i + offset < text.count ? text[i + offset] : nil }
         func copy(_ n: Int) {
-            out.append(contentsOf: text[i..<min(i + n, text.count)])
-            i += n
+            // A trailing `\` asks for two: stop at the end of the text.
+            let end = min(i + n, text.count)
+            out.append(contentsOf: text[i..<end])
+            i = end
         }
         /// With `afterBrace`, a `{` before counts too: `{((…))}` and `{[[ … ]]}` are commands.
         func startsWord(afterBrace: Bool = false) -> Bool {

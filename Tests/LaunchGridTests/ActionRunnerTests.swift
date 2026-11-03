@@ -540,6 +540,20 @@ import Testing
         #expect(try ActionRunner.substitutingArgument(in: "echo 'a\\\nb' {query}") == "echo 'a\\\nb' \"${LAUNCHGRID_QUERY}\"")
     }
 
+    /// A backslash at the very end, the start of a continuation line still to be typed, is read
+    /// without running past the text: the editor checks the command on every keystroke.
+    @Test func aTrailingBackslashIsRead() throws {
+        for template in ["ls \\", "echo \"a\\", "echo $'a\\", "echo 'a\\", "echo $(ls \\", "echo {query} \\", "\\"] {
+            #expect(throws: Never.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
+        }
+        #expect(try ActionRunner.substitutingArgument(in: "ls \\") == "ls \\")
+        let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+        model.fill("name", "Continued")
+        model.fill("kind", "command")
+        model.fill("command", "ls \\")
+        _ = model.errors
+    }
+
     /// Runs a terminal command file the way the terminal would, through zsh.
     private func runZsh(_ file: URL) throws -> (status: Int32, output: String) {
         let process = Process()
