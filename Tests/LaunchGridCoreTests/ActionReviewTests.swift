@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import LaunchGridCore
@@ -64,6 +65,17 @@ import Testing
         let linkedPlain = dir.appendingPathComponent("plain-link.txt")
         try FileManager.default.createSymbolicLink(at: linkedPlain, withDestinationURL: plain)
         #expect(!ActionKind.openFile(path: linkedPlain.path, appPath: nil).isRunnableCode, "a link to a plain file")
+
+        // Any app other than the file's own is launched, whatever the file, and may run it.
+        for app in ["/Users/x/Downloads/Payload.app", "/Applications/Python 3.13/Python Launcher.app"] {
+            #expect(ActionKind.openFile(path: "/etc/hosts", appPath: app).isRunnableCode, "\(app)")
+            #expect(ActionKind.openFile(path: plain.path, appPath: app).isRunnableCode, "\(app)")
+        }
+        let text = dir.appendingPathComponent("notes.txt.plain.txt")
+        try Data("hi".utf8).write(to: text)
+        if let own = NSWorkspace.shared.urlForApplication(toOpen: text) {
+            #expect(!ActionKind.openFile(path: text.path, appPath: own.path).isRunnableCode, "its own app: \(own.path)")
+        }
 
         let script = Action(name: "Script", kind: .openFile(path: "/Users/x/Notes.command", appPath: nil))
         let shared = Grid(rows: 3, columns: 4, pages: [Page(items: [.action(file), .action(script)])])

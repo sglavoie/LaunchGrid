@@ -9,12 +9,12 @@ extension ActionKind {
     /// Whether running it does something beyond opening a web page, a document or a Shortcut:
     /// a command, a script, a link to another app (`obsidian://`, `x-callback-url`, `file://`),
     /// or a file that runs something when opened (an app, a `.command`, an executable) or is
-    /// opened with a terminal, which runs it.
+    /// opened with an app that isn't its own: a terminal runs it, and any app named launches.
     public var isRunnableCode: Bool {
         switch self {
         case .shell, .userScript: true
         case .openURL(let template): !Self.isWebLink(template)
-        case .openFile(let path, let appPath): Self.opensAsCode(path) || appPath.map(Self.isTerminal) == true
+        case .openFile(let path, let appPath): Self.opensAsCode(path) || appPath.map { Self.launchesAnotherApp($0, opening: path) } == true
         case .shortcut: false
         }
     }
@@ -46,6 +46,20 @@ extension ActionKind {
             return isTerminal(app.path)
         }
         return false
+    }
+
+    /// Whether opening `path` with `appPath` runs more than its own default app would: the app
+    /// itself is launched whatever the file (`/etc/hosts` with `~/Downloads/Payload.app`), and
+    /// some run the file (Python Launcher, a terminal). Apple's own apps in /System only show it.
+    static func launchesAnotherApp(_ appPath: String, opening path: String) -> Bool {
+        if isTerminal(appPath) { return true }
+        let app = URL(fileURLWithPath: appPath).standardizedFileURL.resolvingSymlinksInPath()
+        if app.path.hasPrefix("/System/Applications/") { return false }
+        let target = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        if let own = LSCopyDefaultApplicationURLForURL(target as CFURL, .all, nil)?.takeRetainedValue() as URL? {
+            return own.standardizedFileURL.resolvingSymlinksInPath().path != app.path
+        }
+        return true
     }
 
     /// Terminal apps run a file they open as a script.
