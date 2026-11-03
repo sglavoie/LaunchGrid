@@ -876,7 +876,15 @@ enum DebugScript {
         case "merge":
             end = rootPoint(to)
             await glide(start, end)
-            for _ in 0..<8 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
+            // Hold until the target is picked, not a fixed time: on a busy machine the events
+            // can be handled late and in a burst, which reads as too short a rest to merge.
+            let deadline = Date().addingTimeInterval(5)
+            var held = 0
+            while held < 8 || (state.drag.mergeTarget == nil && Date() < deadline) {
+                send(.leftMouseDragged, end)
+                try? await Task.sleep(for: .milliseconds(100))
+                held += 1
+            }
         case "edge":
             let frame = state.drag.pagerFrame
             let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)
