@@ -327,9 +327,13 @@ extension AppState {
         let before = siblings.prefix { $0 != hit }.filter { !ids.contains($0) }.count
         drag.gap = before
         withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.8))) { drag.active = true }
-        drag.timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        // In the common modes: in the default mode alone it doesn't fire while the run loop
+        // is in another (event tracking, a modal panel), and no dwell would ever complete.
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.dragTick() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        drag.timer = timer
         return true
     }
 
