@@ -26,8 +26,18 @@ struct SettingsView: View {
         case "Library": 780
         default: 600
         }
-        let room = (NSScreen.main?.visibleFrame.height ?? 900) - 80
+        let room = (screen?.visibleFrame.height ?? 900) - 80
         return max(420, min(fits, room))
+    }
+
+    /// The display Settings is on, or opens on: the pointer's, as the window is placed there,
+    /// rather than the one with keyboard focus.
+    private static var screen: NSScreen? {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "settings" }), let screen = window.screen {
+            return screen
+        }
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
     }
 }
 

@@ -779,7 +779,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // The same place relative to the display, kept on it when it's smaller.
         let x = to.minX + (to.width - size.width) * ((window.frame.minX - from.minX) / max(from.width - size.width, 1))
         let y = to.minY + (to.height - size.height) * ((window.frame.minY - from.minY) / max(from.height - size.height, 1))
-        window.setFrameOrigin(NSPoint(x: max(to.minX, x), y: max(to.minY, y)))
+        // On it at every edge; a window taller than the display keeps its title bar in sight.
+        window.setFrameOrigin(NSPoint(x: max(to.minX, min(x, to.maxX - size.width)),
+                                      y: min(max(to.minY, y), to.maxY - size.height)))
     }
 
     /// Brings the open window for `key` to the front, over the grid. False when none is open.
