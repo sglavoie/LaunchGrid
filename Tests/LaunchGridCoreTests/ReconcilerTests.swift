@@ -1635,6 +1635,25 @@ func tempDir(_ prefix: String) -> URL {
         #expect(r.imported == 2)
     }
 
+    /// A damaged or crafted file can nest rows far deeper than Launchpad does: the import reads
+    /// them all, in order, without running out of stack.
+    @Test func deeplyNestedFoldersImportWithoutOverflowing() {
+        typealias Row = LaunchpadImporter.Row
+        let depth = 50_000
+        var items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 2, type: 3, parent: 1, ordering: 0)]
+        // Folders inside folders, an app halfway down and one at the bottom, after the deeper folder.
+        for n in 0..<depth { items.append(Row(id: 10 + n, type: 2, parent: n == 0 ? 2 : 9 + n, ordering: 0)) }
+        items.append(Row(id: 1_000_000, type: 4, parent: 10 + depth / 2, ordering: 1))
+        items.append(Row(id: 1_000_001, type: 4, parent: 9 + depth, ordering: 0))
+        items.append(Row(id: 1_000_002, type: 4, parent: 10, ordering: 1))
+        let apps = [1_000_000: LaunchpadImporter.AppRow(title: "Middle", bundleID: "t.middle"),
+                    1_000_001: LaunchpadImporter.AppRow(title: "Bottom", bundleID: "t.bottom"),
+                    1_000_002: LaunchpadImporter.AppRow(title: "Top", bundleID: "t.top")]
+        let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(r.grid.pages[0].items[0].folder?.apps.map(\.name) == ["Bottom", "Middle", "Top"])
+        #expect(r.imported == 3)
+    }
+
     @Test func aPageFullerThanTheGridSplitsInsteadOfShiftingTheNext() {
         typealias Row = LaunchpadImporter.Row
         // Two pages of three apps each, imported into a grid of two.

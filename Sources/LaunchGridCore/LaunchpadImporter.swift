@@ -184,18 +184,20 @@ public enum LaunchpadImporter {
             return copiesByID?[id] ?? []
         }
 
-        /// `visited` guards against parent_id cycles in a damaged database.
-        func countApps(under id: Int, visited: inout Set<Int>) -> Int {
-            guard visited.insert(id).inserted else { return 0 }
-            var n = 0
-            for child in children[id] ?? [] {
-                n += child.type == ItemType.app.rawValue ? 1 : countApps(under: child.id, visited: &visited)
-            }
-            return n
-        }
+        /// `visited` guards against parent_id cycles in a damaged database. A loop rather than
+        /// recursion: a file opened from Finder can nest rows thousands deep, past what the
+        /// import thread's stack holds.
         func countApps(under id: Int) -> Int {
             var visited = Set<Int>()
-            return countApps(under: id, visited: &visited)
+            var pending = [id]
+            var n = 0
+            while let next = pending.popLast() {
+                guard visited.insert(next).inserted else { continue }
+                for child in children[next] ?? [] {
+                    if child.type == ItemType.app.rawValue { n += 1 } else { pending.append(child.id) }
+                }
+            }
+            return n
         }
 
         func makeApp(_ id: Int) -> AppRef? {
@@ -250,16 +252,26 @@ public enum LaunchpadImporter {
             return ref
         }
 
-        /// Apps inside a folder: directly, through the folder's own pages or in folders inside it.
-        func folderApps(_ id: Int, visited: inout Set<Int>) -> [AppRef] {
-            guard visited.insert(id).inserted else { return [] }
+        /// Apps inside a folder: directly, through the folder's own pages or in folders inside it,
+        /// in order. A loop, like `countApps`, however deep the rows nest.
+        func folderApps(_ id: Int) -> [AppRef] {
+            var visited = Set<Int>()
             var out: [AppRef] = []
-            for child in children[id] ?? [] {
-                switch ItemType(rawValue: child.type) {
-                case .app: out += makeApp(child.id).map { [$0] } ?? []
-                // A folder in a folder: the grid has one level, so its apps join this one.
-                case .page, .folder: out += folderApps(child.id, visited: &visited)
-                default: break
+            // Rows still to read, the next last; a container is opened when it comes up.
+            var pending: [(id: Int, isApp: Bool)] = [(id, false)]
+            while let next = pending.popLast() {
+                if next.isApp {
+                    if let app = makeApp(next.id) { out.append(app) }
+                    continue
+                }
+                guard visited.insert(next.id).inserted else { continue }
+                for child in (children[next.id] ?? []).reversed() {
+                    switch ItemType(rawValue: child.type) {
+                    case .app: pending.append((child.id, true))
+                    // A folder in a folder: the grid has one level, so its apps join this one.
+                    case .page, .folder: pending.append((child.id, false))
+                    default: break
+                    }
                 }
             }
             return out
@@ -271,8 +283,7 @@ public enum LaunchpadImporter {
                 case .app:
                     return makeApp(child.id).map(GridItem.app)
                 case .folder:
-                    var visited = Set<Int>()
-                    let contents = folderApps(child.id, visited: &visited)
+                    let contents = folderApps(child.id)
                     guard !contents.isEmpty else { return nil }
                     return .folder(Folder(name: groupTitles[child.id] ?? String(localized: "Folder"), apps: contents))
                 default:
