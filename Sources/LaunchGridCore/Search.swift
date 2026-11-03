@@ -132,7 +132,7 @@ public enum Search {
             .joined(separator: " ")
     }
 
-    static func normalize(_ s: String) -> String {
+    public static func normalize(_ s: String) -> String {
         // Composed first: a name in decomposed form (from an HFS+ disk or a zip) keeps
         // conjoining Hangul letters that no typed query would equal.
         var s = s.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)

@@ -109,7 +109,8 @@ final class ActionEditorModel {
         id = action?.id ?? UUID()
         var keywords: [String: String] = [:]
         for other in others where other.id != action?.id {
-            for k in other.keywords where keywords[k] == nil { keywords[k] = other.name }
+            // As search compares them: `Cafe` and `café` are the same keyword.
+            for k in other.keywords where keywords[Search.normalize(k)] == nil { keywords[Search.normalize(k)] = other.name }
         }
         otherKeywords = keywords
         // Whichever way init ends, what it filled in is the baseline for `hasChanges`.
@@ -164,9 +165,12 @@ final class ActionEditorModel {
     /// (which the draft does, without the flag) lets it run.
     var needsReview: Bool { original?.needsReview ?? false }
 
-    /// The keywords as saved: split at commas, trimmed and lowercased, without blanks.
+    /// The keywords as saved: split at commas, trimmed and lowercased, without blanks, each once
+    /// as search tells them apart.
     var keywords: [String] {
-        keywordsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return keywordsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty && seen.insert(Search.normalize($0)).inserted }
     }
 
     /// The script's arguments: one per line (any line break, CRLF too), blank lines left out;
@@ -259,7 +263,7 @@ final class ActionEditorModel {
     /// both.
     var warnings: [String] {
         var warnings = keywords.compactMap { k in
-            otherKeywords[k].map { String(localized: "“\(k)” is also a keyword of \($0).") }
+            otherKeywords[Search.normalize(k)].map { String(localized: "“\(k)” is also a keyword of \($0).") }
         }
         // It may be put in the folder later: the tile says so meanwhile.
         if kind == .script, !scriptName.isEmpty, scriptsLoaded, !scripts.contains(scriptName) {

@@ -4549,6 +4549,12 @@ extension SandboxFileAccessTests {
         #expect(model.errors.isEmpty)
         #expect(model.warnings == ["“gh” is also a keyword of Search GitHub."], "a repeated keyword warns, not blocks")
         #expect(model.canSave)
+        // As search tells keywords apart: case and accents in either action don't hide a repeat.
+        let cafe = Action(name: "Café", keywords: ["CAFÉ"], kind: .openURL(template: "https://example.com"))
+        let other = ActionEditorModel(action: nil, pageID: nil, others: [cafe])
+        other.keywordsText = "cafe, Cafe, café"
+        #expect(other.keywords == ["cafe"])
+        #expect(other.warnings == ["“cafe” is also a keyword of Café."])
         model.kind = .command
         #expect(model.errors == [Sandbox.isActive || !ActionEditorModel.KindChoice.command.isAvailable
                                  ? ActionRunner.Failure.commandsUnavailable.message : "Enter a command."] && !model.canSave)
