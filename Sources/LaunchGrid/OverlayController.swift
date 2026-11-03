@@ -25,6 +25,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Whether the trackpad gesture under way goes up and down, taken from its first movement
     /// so a slightly slanted swipe doesn't switch axis halfway.
     private var scrollIsVertical: Bool?
+    /// What a trackpad swipe began on. When that changes mid-gesture (a folder closed with Esc,
+    /// a search typed), the rest of the gesture is dropped rather than turning another pager.
+    private enum SwipeTarget: Equatable { case grid, folder(UUID), search }
+    private var swipeTarget: SwipeTarget?
+    private var swipeAbandoned = false
     /// When the last mouse-wheel event came, to tell one burst of them from the next.
     private var lastWheelEvent = Date.distantPast
     /// Bumped by every show and hide, so a fade-out that was overtaken doesn't order the panel out.
@@ -837,10 +842,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let ending = event.phase.contains(.ended) || event.phase.contains(.cancelled)
         // The rename card edits the page it opened on: don't turn pages behind it.
         guard let panel, event.window === panel, isVisible, !state.drag.active, state.textEdit == nil else {
+            // The rest of a gesture that was blocked doesn't turn pages once the block lifts.
+            if !event.phase.isEmpty { swipeAbandoned = !ending }
             if ending, event.window === panel { settleSwipe() }
             return event
         }
         let searching = !state.query.isEmpty
+        let target: SwipeTarget = searching ? .search : state.openFolderID.map { .folder($0) } ?? .grid
         // If a search began during a swipe of the grid, finish that gesture without
         // carrying its accumulated movement into the search results.
         if searching && (state.swipeOffset != 0 || state.folderSwipeOffset != 0) {
@@ -854,6 +862,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if event.phase.contains(.began) {
                 scrollAccumulator = 0
                 scrollIsVertical = nil
+                swipeTarget = target
+                swipeAbandoned = false
+            } else if swipeAbandoned || (swipeTarget != nil && swipeTarget != target) {
+                if !swipeAbandoned { settleSwipe() }
+                swipeAbandoned = !ending
+                if ending { swipeTarget = nil }
+                return nil
             }
             // Up and down turns pages too, as the mouse wheel does: down for the next one.
             if scrollIsVertical == nil, event.scrollingDeltaX != 0 || event.scrollingDeltaY != 0 {
@@ -884,6 +899,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                     }
                 }
                 scrollAccumulator = 0
+                swipeTarget = nil
             }
             return nil
         }

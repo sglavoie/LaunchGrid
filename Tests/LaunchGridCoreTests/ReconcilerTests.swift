@@ -1687,6 +1687,33 @@ func tempDir(_ prefix: String) -> URL {
         #expect(result.unreadable == 2)
     }
 
+    /// A blank bundle ID is no bundle ID: it isn't looked up, and a tile found by path gets
+    /// the app's own ID rather than the blank one.
+    @Test func aBlankBundleIDIsNotUsed() throws {
+        typealias Row = LaunchpadImporter.Row
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("lp-blank-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Tool.app")
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        let info: NSDictionary = ["CFBundleIdentifier": "test.tool", "CFBundlePackageType": "APPL"]
+        info.write(to: app.appendingPathComponent("Contents/Info.plist"), atomically: true)
+        let items = [
+            Row(id: 1, type: 3, parent: 0, ordering: 0),
+            Row(id: 2, type: 4, parent: 1, ordering: 0),
+            Row(id: 3, type: 4, parent: 1, ordering: 1),
+        ]
+        let apps = [
+            2: LaunchpadImporter.AppRow(title: "Tool", bundleID: "  ", customPath: app.path),
+            3: LaunchpadImporter.AppRow(title: "Blank", bundleID: " "),
+        ]
+        var looked: [String] = []
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:],
+                                             rows: 5, columns: 7) { looked.append($0); return "/Applications/\($0).app" }
+        #expect(looked.isEmpty)
+        #expect(result.grid.allApps.map(\.bundleID) == ["test.tool"])
+        #expect(result.skipped == ["Blank"])
+    }
+
     /// Builds a Launchpad-style DB: root(1) → pages → apps and a folder (type 2) with its own page.
     func makeFixture() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("lp-\(UUID().uuidString).db")

@@ -231,6 +231,22 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages[3].title == "Third", "with D, the third page's first item")
     }
 
+    /// A page that re-flows into another one takes the apps awaiting return to it along: one
+    /// comes back where that page's items went, not in the first free slot.
+    @Test func resizeKeepsAnAppAwaitingReturnWithItsPagesItems() {
+        var g = grid([["A", "B", "C", "D", "E"], ["F"], ["X", "G"]], columns: 5)
+        let x = g.pages[2].items[0].app!
+        g.recentlyPruned = [PrunedApp(app: x, prunedAt: Date(), pageID: g.pages[2].id, index: 0)]
+        g.pages[2].items.remove(at: 0)
+        g.resize(rows: 1, columns: 4)
+        #expect(g.pages.map(titles) == [["A", "B", "C", "D"], ["E", "F", "G"]])
+        #expect(g.recentlyPruned.first?.pageID == g.pages[1].id)
+        #expect(g.recentlyPruned.first?.index == 2)
+        let installed = ["A", "B", "C", "D", "E", "F", "G", "X"].map { InstalledApp(app($0)) }
+        _ = Reconciler.reconcile(&g, installed: installed, autoAdd: false, pathExists: { _ in true })
+        #expect(g.pages.map(titles) == [["A", "B", "C", "D"], ["E", "F", "X", "G"]])
+    }
+
     @Test func resizeTitlesFollowTheirPagesFirstItem() {
         var g = grid([["A", "B"], ["C", "D", "E"], ["F"]], columns: 5)
         g.setPageTitle(1, "Games")

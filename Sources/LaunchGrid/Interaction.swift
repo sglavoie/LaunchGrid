@@ -544,7 +544,14 @@ extension AppState {
             }
         } else if case .folder(let fid) = drag.source, openFolderID == fid {
             let gap = drag.pendingGap ?? drag.gap ?? remainingFolderItems().count
+            let shown = folderPage
             apply { $0.addToFolder(ids, folder: fid, at: gap) }
+            // Stay on the folder page dropped onto, not the one the keyboard focus is on (the
+            // drag can have left fewer pages); focus comes along, as turning a page brings it.
+            if let f = openFolder {
+                folderPage = min(shown, FolderLayout.pageCount(apps: f.items.count, grid: grid) - 1)
+                keepFolderFocusOnShownPage()
+            }
         } else {
             // A drop right after moving counts, even if the pointer hadn't settled yet.
             let gap = drag.pendingGap ?? drag.gap ?? remainingItems(page: page).count

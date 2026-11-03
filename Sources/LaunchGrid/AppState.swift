@@ -816,8 +816,6 @@ final class AppState {
         if drag.active, installedBeforeDrag == nil { installedBeforeDrag = everInstalled }
         installedBefore = installedBeforeDrag ?? everInstalled
         everInstalled.formUnion(apps.map(\.path))
-        let scanned = apps.map(\.path).sorted()
-        if prefs.scannedPaths != scanned { prefs.scannedPaths = scanned }
         let outside = outside ?? Self.readOutsideApps(outsideCandidates(includingHistory: true).filter { needsDiskCheck($0) })
         outsideApps = outside.apps
         outsideChecked = outside.checked
@@ -833,6 +831,9 @@ final class AppState {
         let disk = disk ?? DiskState.read(roots: prefs.scanRoots.map(\.path), unlisted: unlisted)
         if self.disk != disk { self.disk = disk }
         if unlistedFolders != unlisted { unlistedFolders = unlisted }
+        let scanned = Self.pathsToRemember(scanned: apps.map(\.path), previous: prefs.scannedPaths,
+                                           unseen: disk.missingRoots + unlisted, hasReadableRoot: hasReadableRoot)
+        if prefs.scannedPaths != scanned { prefs.scannedPaths = scanned }
         if !hasScanned { hasScanned = true }
         if let style = buildAfterScan {
             buildAfterScan = nil
@@ -841,6 +842,19 @@ final class AppState {
             reconcile()
         }
         refreshUpdatedIcons()
+    }
+
+    /// The app paths the next launch starts from as installed before. Apps in folders this scan
+    /// missed or couldn't list weren't seen but aren't gone, so their earlier entries are kept;
+    /// a scan that read no folder keeps them all. Otherwise they'd look newly installed next
+    /// launch and could be taken for a moved copy of a deleted app.
+    nonisolated static func pathsToRemember(scanned: [String], previous: [String], unseen: [String],
+                                            hasReadableRoot: Bool) -> [String] {
+        let folders = unseen.map { ($0.hasSuffix("/") ? $0 : $0 + "/").lowercased() }
+        let kept = previous.filter { path in
+            !hasReadableRoot || folders.contains { path.lowercased().hasPrefix($0) }
+        }
+        return Array(Set(scanned).union(kept)).sorted()
     }
 
     /// Paths of grid apps, recently pruned ones, and path-based exclusions. Exclusions
@@ -1556,6 +1570,16 @@ final class AppState {
         focusIndex = count == 0 ? nil : focusIndex.map { min($0, count - 1) }
     }
 
+    /// Keeps keyboard focus on the folder page being shown, in the same slot where there is one,
+    /// so Return acts on what is seen and a drop doesn't send the view back to the focus's page.
+    func keepFolderFocusOnShownPage() {
+        guard let f = openFolder, let i = focusIndex, !f.items.isEmpty else { return }
+        let perPage = FolderLayout.perPage(grid)
+        if i / perPage != folderPage {
+            focusIndex = min(folderPage * perPage + i % perPage, f.items.count - 1)
+        }
+    }
+
     func flipPage(_ delta: Int) {
         if !query.isEmpty {
             goToSearchPage(searchPage + delta)
@@ -1563,11 +1587,7 @@ final class AppState {
             let pages = FolderLayout.pageCount(apps: f.items.count, grid: grid)
             let p = max(0, min(folderPage + delta, pages - 1))
             withAnimationIfShown { folderPage = p }
-            // Keep keyboard focus on the page being shown, in the same slot where there is one.
-            let perPage = FolderLayout.perPage(grid)
-            if let i = focusIndex, i / perPage != p {
-                focusIndex = min(p * perPage + i % perPage, f.items.count - 1)
-            }
+            keepFolderFocusOnShownPage()
         } else {
             goToPage(currentPage + delta)
         }

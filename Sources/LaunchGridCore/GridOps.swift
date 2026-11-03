@@ -632,6 +632,9 @@ extension Grid {
         for p in pages.indices {
             pages[p].items.removeAll { if case .folder(let f) = $0 { return f.items.isEmpty } else { return false } }
         }
+        // Where each page started, to follow its ID when re-flowing packs it into another page.
+        let firstItems = Dictionary(pages.compactMap { p in p.items.first.map { (p.id, $0.id) } },
+                                    uniquingKeysWith: { a, _ in a })
         // Each run of pages between empty ones re-flows on its own, keeping its pages' IDs.
         var result: [Page] = []
         var run: [Page] = []
@@ -654,6 +657,16 @@ extension Grid {
         }
         flush()
         pages = result
+        // Apps temporarily absent during an update whose page re-flowed into another one go
+        // back where that page's items went, not to the first free slot in the grid.
+        let live = Set(pages.map(\.id))
+        for k in recentlyPruned.indices where !live.contains(recentlyPruned[k].pageID) {
+            guard let first = firstItems[recentlyPruned[k].pageID],
+                  let p = pages.firstIndex(where: { $0.items.contains { $0.id == first } }),
+                  let at = pages[p].items.firstIndex(where: { $0.id == first }) else { continue }
+            recentlyPruned[k].pageID = pages[p].id
+            recentlyPruned[k].index = min(at + recentlyPruned[k].index, pages[p].items.count)
+        }
     }
 
     /// The grid as a resize would leave it, so the UI can warn before re-flowing.

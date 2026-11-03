@@ -207,7 +207,7 @@ public enum LaunchpadImporter {
             }
             let title = [row.title, row.bundleID].compactMap { $0 }.first { !$0.isEmpty } ?? "App"
             // AppGrid invents `manual_app_<hash>` IDs for apps it added by path.
-            let bundleID = row.bundleID.flatMap { $0.hasPrefix("manual_app_") || $0.isEmpty ? nil : $0 }
+            let bundleID = AppRef.usableBundleID(row.bundleID).flatMap { $0.hasPrefix("manual_app_") ? nil : $0 }
             var candidate: String?
             if let p = row.customPath, savedAppPath(p) { candidate = p }
             if candidate == nil, let data = row.bookmark, let p = path(ofBookmark: data),
@@ -240,7 +240,7 @@ public enum LaunchpadImporter {
             let resolved = real(found)
             let path = spelling[resolved] ?? found
             var ref = AppRef(bundleID: bundleID, path: path, name: title)
-            if bundleID == nil, let id = AppScanner.infoDictionary(ofBundleAt: URL(fileURLWithPath: path))?["CFBundleIdentifier"] as? String {
+            if bundleID == nil, let id = AppRef.usableBundleID(AppScanner.infoDictionary(ofBundleAt: URL(fileURLWithPath: path))?["CFBundleIdentifier"] as? String) {
                 ref.bundleID = id
             }
             // By path: copies sharing a bundle ID (Xcode and Xcode-beta) are separate apps.

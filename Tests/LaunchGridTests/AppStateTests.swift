@@ -298,6 +298,39 @@ func installed(_ name: String) -> InstalledApp {
         #expect(other.grid.allApps.map(\.path) == [renamed.path])
     }
 
+    /// A folder the last scan couldn't list still had its apps: the next launch doesn't take
+    /// them for new ones, so a deleted app's tile doesn't become a copy that was there all along.
+    @Test func aFolderTheLastScanMissedKeepsItsAppsForTheNextLaunch() throws {
+        let dir = TempDir.url
+        let prefs = testPreferences()
+        prefs.autoAddApps = false
+        let xcode = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Applications/LGTest Tool.app", name: "LGTest Tool")
+        let beta = InstalledApp(bundleID: "com.apple.dt.Xcode", path: "/Users/t/Tools/LGTest Tool-beta.app", name: "LGTest Tool-beta")
+        let first = AppState(prefs: prefs, store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        first.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.app(AppRef(bundleID: xcode.bundleID, path: xcode.path, name: xcode.name))])]))
+        first.catalogScanned([xcode, beta], hasReadableRoot: true)
+        first.catalogScanned([xcode], unlisted: ["/Users/t/Tools"], hasReadableRoot: true)
+        #expect(prefs.scannedPaths.contains(beta.path))
+        _ = first.saveNow()
+
+        let next = AppState(prefs: prefs, store: GridStore(url: dir.appendingPathComponent("grid.json")))
+        next.catalogScanned([beta], hasReadableRoot: true)
+        #expect(next.grid.allApps.isEmpty, "Xcode's tile isn't Xcode-beta's")
+    }
+
+    @Test func pathsToRememberKeepOnlyWhatTheScanCouldNotSee() {
+        let previous = ["/Applications/Gone.app", "/Users/t/Tools/Beta.app", "/Volumes/Ext/Apps/X.app"]
+        let scanned = ["/Applications/New.app"]
+        #expect(AppState.pathsToRemember(scanned: scanned, previous: previous, unseen: ["/Users/t/tools", "/Volumes/Ext/Apps"],
+                                         hasReadableRoot: true)
+            == ["/Applications/New.app", "/Users/t/Tools/Beta.app", "/Volumes/Ext/Apps/X.app"])
+        #expect(AppState.pathsToRemember(scanned: scanned, previous: previous, unseen: [], hasReadableRoot: true) == scanned)
+        #expect(AppState.pathsToRemember(scanned: [], previous: previous, unseen: [], hasReadableRoot: false) == previous.sorted())
+        // A sibling whose name only starts the same isn't inside the folder.
+        #expect(AppState.pathsToRemember(scanned: [], previous: ["/Users/t/Tools2/A.app"], unseen: ["/Users/t/Tools"],
+                                         hasReadableRoot: true).isEmpty)
+    }
+
     @Test func historyDoesNotMistakeAnExistingCopyForARename() throws {
         let state = makeState(["A", "B"])
         state.prefs.autoAddApps = false
@@ -708,6 +741,34 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.folderPage == 0, "no second page to flip to")
         state.dragEnded(start: start, location: edge, predicted: edge)
         #expect(state.shownFolderPageCount == 2)
+    }
+
+    /// Dragging apps from a folder's last page so that only one page is shown: the keyboard
+    /// focus left on the page that went doesn't send the view back there after the drop.
+    @Test func aDropAfterTheFolderLosesAPageStaysOnThePageShown() {
+        let state = makeState()
+        let refs = (1...30).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.folder(folder)])])) // 28 per folder page
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 0, y: 0, width: 700, height: 400)
+        state.drag.folderPanelFrame = CGRect(x: 0, y: 0, width: 700, height: 440)
+        state.openFolder(folder.id)
+        state.editing = true
+        state.toggleSelection(refs[0].id)
+        state.toggleSelection(refs[1].id)
+        state.flipPage(1)
+        state.toggleSelection(refs[28].id)
+        state.focusIndex = 29
+        let start = state.iconCenter(0, inFolder: true)
+        state.dragChanged(start: start, location: CGPoint(x: start.x + 1, y: start.y + 40))
+        #expect(state.drag.ids.count == 3)
+        #expect(state.folderPage == 0)
+        let drop = state.iconCenter(3, inFolder: true)
+        state.dragChanged(start: start, location: drop)
+        state.dragEnded(start: start, location: drop, predicted: drop)
+        #expect(state.folderPage == 0, "the view stays where the apps were dropped")
+        #expect((state.focusIndex ?? 99) < FolderLayout.perPage(state.grid))
     }
 
     @Test func draggingAcrossFolderPagesKeepsKeyboardFocusVisible() {
