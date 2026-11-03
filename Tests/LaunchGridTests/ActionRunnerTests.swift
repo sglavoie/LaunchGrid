@@ -715,6 +715,31 @@ import Testing
         #expect(missing.ending == .failed("Script not found: gone.sh"))
     }
 
+    /// An executable script with no `#!` line runs with /bin/sh, as it does in a terminal,
+    /// rather than failing with "Exec format error". Programs and `#!` scripts run directly.
+    @Test func aScriptWithoutAnInterpreterLineRunsWithTheShell() async throws {
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try script(dir, "plain", "printf '%s|' \"$@\"\n")
+        try script(dir, "empty", "")
+        try script(dir, "bang.sh", "#!/bin/sh\necho bang\n")
+        #expect(ActionRunner.needsShell(dir.appendingPathComponent("plain")))
+        #expect(ActionRunner.needsShell(dir.appendingPathComponent("empty")))
+        #expect(!ActionRunner.needsShell(dir.appendingPathComponent("bang.sh")))
+        #expect(!ActionRunner.needsShell(URL(fileURLWithPath: "/bin/ls")))
+        // The Mac App Store build hands scripts to macOS, which runs only those it can exec.
+        #if !APP_STORE
+        let runner = ActionRunner(scriptsDirectory: dir)
+        let result = await runner.runToEnd(CodeJob(program: .script(fileName: "plain", arguments: ["a b", "c"]), argument: nil,
+                                                   workingDirectory: nil, timeout: 60, mode: .background))
+        #expect(result.ending == .exited(0), "\(result)")
+        #expect(result.output == "a b|c|")
+        let empty = await runner.runToEnd(CodeJob(program: .script(fileName: "empty", arguments: []), argument: nil,
+                                                  workingDirectory: nil, timeout: 60, mode: .background))
+        #expect(empty.ending == .exited(0))
+        #endif
+    }
+
     /// The sandboxed build can't stop a script macOS runs for it, but stops waiting at its
     /// timeout: the run ends once, as timed out, whether the task never calls back or calls
     /// back (with more output) afterwards.

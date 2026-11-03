@@ -1388,9 +1388,28 @@ extension ActionRunner {
             if Self.isAppleScript(url) {
                 return try startProcess(URL(fileURLWithPath: "/usr/bin/osascript"), [url.path] + arguments, job: job, onEnd: onEnd)
             }
+            // A script with no `#!` line can't be run directly ("Exec format error"): like a
+            // shell, and the terminal, run it with /bin/sh.
+            if Self.needsShell(url) {
+                return try startProcess(URL(fileURLWithPath: "/bin/sh"), [url.path] + arguments, job: job, onEnd: onEnd)
+            }
             return try startProcess(url, arguments, job: job, onEnd: onEnd)
             #endif
         }
+    }
+
+    /// Whether the executable at `url` is a script without a `#!` line: neither one the
+    /// kernel can run by its interpreter line nor a Mach-O program.
+    nonisolated static func needsShell(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 4), !head.isEmpty else { return true }
+        if head.starts(with: [0x23, 0x21]) { return false } // #!
+        guard head.count == 4 else { return true }
+        let magic = head.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        // Thin and universal Mach-O, either byte order.
+        let machO: Set<UInt32> = [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]
+        return !machO.contains(magic)
     }
 
     /// Runs `job` in the background and waits for it to end.
