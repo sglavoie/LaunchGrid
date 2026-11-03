@@ -875,7 +875,11 @@ enum DebugScript {
         switch kind {
         case "merge":
             end = rootPoint(to)
-            await glide(start, end)
+            // Lift the icon, then jump onto the target: a glide that a busy machine slows past
+            // the reorder dwell moves the gap under the pointer, leaving nothing to merge with.
+            let length = max(1, hypot(end.x - start.x, end.y - start.y))
+            await glide(start, CGPoint(x: start.x + (end.x - start.x) * 16 / length, y: start.y + (end.y - start.y) * 16 / length), steps: 2)
+            send(.leftMouseDragged, end)
             // Hold until the target is picked, not a fixed time: on a busy machine the events
             // can be handled late and in a burst, which reads as too short a rest to merge.
             let deadline = Date().addingTimeInterval(5)
