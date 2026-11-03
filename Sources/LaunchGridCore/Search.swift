@@ -34,7 +34,7 @@ public enum Search {
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - shortness(n) }
         if humpWords(of: name).contains(where: { $0.startsScalars(with: q) }) { return 650 - shortness(n) }
         // With the humps and without: "qp" is QuickTime Player's initials as much as "qtp" is.
-        if acronym(of: name).hasPrefix(q) || acronym(of: name, humps: false).hasPrefix(q) { return 600 }
+        if acronym(of: name).startsScalars(with: q) || acronym(of: name, humps: false).startsScalars(with: q) { return 600 }
         if queryWords.count > 1, startsWordsOrInitials(queryWords, of: words) { return 600 }
         if let initials = consonantInitials(of: name, for: q),
            initials.startsScalars(with: q) || initials.split(whereSeparator: isSeparator).contains(where: { $0.startsScalars(with: q) }) {
@@ -212,30 +212,36 @@ public enum Search {
     /// Initials of words and of camel-case humps: "Visual Studio Code" → "vsc", "GarageBand" → "gb",
     /// and after a run of capitals, "PDFExpert" → "pe". Without `humps`, words only: "QuickTime
     /// Player" → "qp". An apostrophe between letters stays inside the word: "Don't Sleep" → "ds".
+    /// Each initial is its letter alone, without the vowel signs that make one character with it
+    /// in Devanagari or Thai: "हिंदी शब्द" → "हश".
     static func acronym(of name: String, humps: Bool = true) -> String {
-        let chars = Array(name)
+        // Composed, so a Hangul syllable (one scalar) stays whole when only its first is kept.
+        let chars = Array(name.precomposedStringWithCanonicalMapping)
         var out = ""
         for (i, ch) in chars.enumerated() where ch.isLetter || ch.isNumber {
             let previous: Character = i > 0 ? chars[i - 1] : " "
             let next: Character = i + 1 < chars.count ? chars[i + 1] : " "
             let wordStart = i == 0 || !TextLine.isWord(chars, i - 1)
             let hump = humps && ch.isUppercase && (previous.isLowercase || (previous.isUppercase && next.isLowercase))
-            if wordStart || hump { out.append(ch) }
+            if wordStart || hump, let letter = ch.unicodeScalars.first { out.unicodeScalars.append(letter) }
         }
         return normalize(out)
     }
 
     /// Whether `q` is the first words typed whole without their spaces, then either nothing or
     /// at least two letters of the next: "appstore" and "appst" for "App Store", not "apps".
+    /// By Unicode scalars, as `startsScalars` compares: in Devanagari "शब" starts "शब्द", whose
+    /// last character is the cluster "ब्द".
     static func startsWordsRunTogether(_ q: String, words: [Substring]) -> Bool {
-        var rest = Substring(q)
+        var rest = Array(q.unicodeScalars)[...]
         for (k, word) in words.enumerated() {
+            let letters = Array(word.unicodeScalars)
             if rest.isEmpty { return k > 1 }
-            if rest.hasPrefix(word) {
-                rest = rest.dropFirst(word.count)
+            if rest.starts(with: letters) {
+                rest = rest.dropFirst(letters.count)
                 continue
             }
-            return k > 0 && rest.count >= 2 && word.hasPrefix(rest)
+            return k > 0 && rest.count >= 2 && letters.starts(with: rest)
         }
         return rest.isEmpty && words.count > 1
     }
@@ -290,8 +296,11 @@ public enum Search {
             guard j < words.count, !failed.contains([i, j]) else { return false }
             let w = queryWords[i]
             if words[j].startsScalars(with: w), match(i + 1, j + 1) { return true }
-            if w.count > 1, j + w.count <= words.count,
-               zip(w, words[j...]).allSatisfy({ $0 == $1.first }), match(i + 1, j + w.count) { return true }
+            // Initials by scalars, as `acronym` takes them: "हश" for "हिंदी शब्द".
+            let initials = Array(w.unicodeScalars)
+            if initials.count > 1, j + initials.count <= words.count,
+               zip(initials, words[j...]).allSatisfy({ $0 == $1.unicodeScalars.first }),
+               match(i + 1, j + initials.count) { return true }
             if match(i, j + 1) { return true }
             failed.insert([i, j])
             return false

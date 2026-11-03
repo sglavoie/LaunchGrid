@@ -337,6 +337,20 @@ import Testing
             "expect -c 'puts \"{query}\"'", "echo {query} | expect", "wish -c 'puts {query}'", "echo {query} | m4",
             "m4 <<< {query}", "sqlite3 ~/x.db \"select * from t where n='{query}'\"", "sqlite3 db {query}",
             "echo {query} | sqlite3 db", "sqlite3 db <<< {query}", "/usr/bin/sqlite3 :memory: \".shell echo {query}\"",
+            // Code glued to its option.
+            "python3 -c\"print('{query}')\"", "perl -e\"print '{query}'\"", "perl -wle'print \"{query}\"'",
+            "ruby -e\"puts '{query}'\"", "node -e\"'{query}'\"", "node --eval=\"'{query}'\"", "php -r\"echo '{query}';\"",
+            "lua -e\"print('{query}')\"", "osascript -e\"display dialog \\\"{query}\\\"\"", "sed -e\"s/x/{query}/\" file",
+            "sed --expression='s/x/{query}/' file", "awk -e'/{query}/' file", "$SHELL -c\"echo {query}\"",
+            // A sed or awk program after an option whose argument looks like `-e` or `-f`.
+            "awk -vx=one '/{query}/' file", "awk -vfile=1 '/{query}/' file", "sed -ie 's/a/{query}/' file",
+            // A descriptor number or name before a redirection doesn't give a script.
+            "bash 0<<< \"echo {query}\"", "osascript 0<<< \"display dialog \\\"{query}\\\"\"",
+            "python3 0<<< \"print('{query}')\"", "sh 0< <(print -r -- {query})", "print -r -- {query} | sh 0<&0",
+            "bash {fd}<<< \"echo {query}\"",
+            // A shell reading what's typed through `>(…)` or a coprocess.
+            "print -r -- {query} > >(sh)", "print -r -- {query} >>(sh)", "tee >(bash) <<< {query}",
+            "print -r -- {query} > >(cat | sh)", "coproc sh; print -p -- {query}", "coproc bash\nprint -p -- {query}",
         ]
         for template in refused {
             #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
@@ -383,7 +397,12 @@ import Testing
                          "env LANG=C open {query}", "sudo -u me ls {query}", "nice -n 5 grep -e x {query}",
                          "echo {query} | xargs open", "echo {query} | env python3 script.py", "timeout 5 echo {query}",
                          "source script.sh {query}", "echo {query} | source script.sh", "\\ls {query}",
-                         "pwsh -NoProfile -File script.ps1 {query}"] {
+                         "pwsh -NoProfile -File script.ps1 {query}",
+                         // The whole program glued to its option, a script after a redirection,
+                         // a `>(…)` that doesn't run its input, and `2>&1` before an argument.
+                         "python3 -c{query}", "perl -e\"{query}\"", "node --eval={query}", "echo {query} > >(cat)",
+                         "print -r -- {query} > >(sh script.sh)", "ls 2>&1 {query}", "bash script.sh 2>/dev/null <<< {query}",
+                         "sed -e 's/a/b/' -e's/c/d/' {query}.txt", "coproc cat; print -p -- {query}"] {
             #expect(throws: Never.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
         }
         // A whole program given as the argument is what the command asks for.
@@ -588,7 +607,8 @@ import Testing
     /// promptsubst. Assigning to them anywhere in a command that holds `{query}` is refused.
     @Test func placeholdersStoredAsCodeAreRefused() throws {
         for template in ["functions[f]={query}; f", "x={query}; functions[f]=$x; f", "aliases[x]={query}; eval x",
-                         "galiases[g]=\"{query}\"", "PS4={query}; set -x; true", "echo {query}; PROMPT4=x"] {
+                         "galiases[g]=\"{query}\"", "PS4={query}; set -x; true", "echo {query}; PROMPT4=x",
+                         "alias x={query}\nx", "alias -g g=\"{query}\"", "x={query}; alias y=$x"] {
             #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
                 try ActionRunner.plan(shell(template), argument: "$(touch /nonexistent/x)")
             }

@@ -1925,6 +1925,13 @@ final class AppState {
             currentPage = loc.page
             openFolderID = id
         }
+        // Back on the folder page the drag started from, with keyboard focus on what's shown:
+        // the drag may have shown fewer pages, or flipped to another.
+        if wasActive, case .folder(let id) = source, openFolderID == id, let folder = openFolder {
+            let pages = FolderLayout.pageCount(apps: folder.items.count, grid: grid)
+            folderPage = min(drag.sourceFolderPage, max(pages - 1, 0))
+            keepFolderFocusOnShownPage()
+        }
         dragFinished()
     }
 

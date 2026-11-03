@@ -95,6 +95,13 @@ import Testing
         var thai = TextLine(text: "ภาษาไทยง่ายมาก")
         thai.moveWordLeft()
         #expect(thai.caret > 0, "Thai is written without spaces too")
+        // Half-width katakana stops where its full-width spelling does.
+        var full = TextLine(text: "カメラアプリ テスト", caret: 0)
+        var half = TextLine(text: "ｶﾒﾗｱﾌﾟﾘ ﾃｽﾄ", caret: 0)
+        full.moveWordRight()
+        half.moveWordRight()
+        #expect(half.caret < 6, "not across the whole run in one step")
+        #expect(half.caret == full.caret)
     }
 
     @Test func deletesAroundTheCaret() {

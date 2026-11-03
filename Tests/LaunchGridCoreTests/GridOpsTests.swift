@@ -750,6 +750,32 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try fm.contentsOfDirectory(atPath: dir.path).allSatisfy { !$0.hasSuffix(".tmp") })
     }
 
+    @Test func anUnflushedDailyCopyIsNotKeptAndIsRetried() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        try store.save(Grid(rows: 1, columns: 1))
+        try store.save(Grid(rows: 2, columns: 2))
+        let day = try #require(Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: Date()))
+
+        // The staged backup flushes; the daily copy, flushed second, doesn't.
+        var flushes = 0
+        try store.save(Grid(rows: 3, columns: 3), refreshingBackup: true, now: day, flushBackup: { url in
+            flushes += 1
+            if flushes > 1 { throw CocoaError(.fileWriteOutOfSpace) }
+            try GridStore.flushFile(url)
+        }, write: GridStore.writeDurably)
+        #expect(flushes == 2)
+        #expect(!fm.fileExists(atPath: store.dailyBackupURL(day: GridStore.day(of: day)).path))
+        #expect(try fm.contentsOfDirectory(atPath: dir.path).allSatisfy { !$0.hasSuffix(".tmp") })
+
+        // The next refresh that day tries again, and keeps a whole copy.
+        try store.save(Grid(rows: 4, columns: 4), now: day)
+        let copy = try Data(contentsOf: store.dailyBackupURL(day: GridStore.day(of: day)))
+        #expect(try GridStore.decode(copy).rows == 2, "the backup the fourth save replaced")
+    }
+
     @Test func repairingPartlyReadableFileKeepsTheLastGoodBackup() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -1082,6 +1108,25 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("กินข้าว", query: "กินข") != nil)
         #expect(Search.score("Hindi किताब", query: "क")! > 650, "a word start")
         #expect(Search.score("Mail", query: "mai") == 900 - 4, "Latin as before")
+    }
+
+    @Test func devanagariWordsRunTogetherAndInitialsMatchAsLatinOnesDo() {
+        // Words run together: "शब" starts "शब्द", whose last character is the cluster "ब्द".
+        #expect(Search.score("Hindi Shabd", query: "hindish")! >= 750)
+        #expect(Search.score("हिंदी शब्द", query: "हिंदीशब")! >= 750)
+        // Initials: each word's first letter, without its vowel signs.
+        #expect(Search.score("Visual Studio", query: "vs") == 600)
+        #expect(Search.score("हिंदी शब्द", query: "हश") == 600)
+        #expect(Search.score("हिंदी शब्द नया", query: "हश न") == 600, "initials among query words")
+        #expect(Search.acronym(of: "Visual Studio Code") == "vsc", "Latin as before")
+        #expect(Search.score("카카오 톡", query: "카톡") == 600, "a Hangul syllable stays whole")
+        #expect(Search.score("\u{110F}\u{1161}\u{110F}\u{1161}\u{110B}\u{1169} \u{1110}\u{1169}\u{11A8}", query: "카톡") == 600,
+                "decomposed, as from an HFS+ disk")
+    }
+
+    @Test func halfWidthKatakanaNeedsTwoCharactersAsFullWidthDoes() {
+        #expect(Search.score("カメラ", query: "カラ") != nil)
+        #expect(Search.score("カメラ", query: "ｶﾗ") == Search.score("カメラ", query: "カラ"))
     }
 
     @Test func koreanNamesAreFoundByTheirFirstConsonants() {

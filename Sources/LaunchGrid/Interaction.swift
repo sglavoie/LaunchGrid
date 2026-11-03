@@ -99,6 +99,10 @@ final class DragController {
     @ObservationIgnored var decided = false
     @ObservationIgnored var gestureStart: CGPoint = .zero
     @ObservationIgnored var panning = false
+    /// The page a pan started on: one turned meanwhile (Tab, the wheel) ends the pan.
+    @ObservationIgnored var panPage = 0
+    /// The open folder's page when the drag started, shown again if it's cancelled.
+    @ObservationIgnored var sourceFolderPage = 0
     @ObservationIgnored var timer: Timer?
     /// Start of a gesture cancelled while still in progress (Esc, hiding). Its remaining
     /// events are ignored instead of starting a new drag.
@@ -229,12 +233,14 @@ extension AppState {
             drag.gestureStart = start
             if !beginItemDrag(at: start) {
                 drag.panning = canPan && drag.pagerFrame.contains(start)
+                drag.panPage = currentPage
             }
         }
         if drag.panning {
             // A search, an open folder or a rename started mid-pan (from the keyboard) ends the
             // pan, as it ends a trackpad swipe: the pages behind them stay where they were.
-            guard canPan else { abandonPan(); return }
+            // So does a page turned meanwhile, which the release would otherwise turn again.
+            guard panContinues else { abandonPan(); return }
             swipeOffset = swipeOffset(for: location.x - start.x, width: drag.pagerFrame.width)
             return
         }
@@ -257,7 +263,7 @@ extension AppState {
             dragFinished()
         }
         if drag.panning {
-            guard canPan else { abandonPan(); return }
+            guard panContinues else { abandonPan(); return }
             let w = max(drag.pagerFrame.width, 1)
             let dx = location.x - start.x, flick = predicted.x - start.x
             withAnimation(Self.pageAnimation) {
@@ -283,6 +289,10 @@ extension AppState {
 
     /// Whether dragging empty space turns pages: not over a search, an open folder or a rename.
     private var canPan: Bool { query.isEmpty && openFolder == nil && textEdit == nil }
+
+    /// Whether the pan under way can go on: nothing it can't pan over opened, and the page it
+    /// moves is still the one it started on.
+    private var panContinues: Bool { canPan && currentPage == drag.panPage }
 
     /// Ends a pan without turning the page; the rest of the gesture does nothing.
     private func abandonPan() {
@@ -343,7 +353,10 @@ extension AppState {
         withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.8))) { drag.active = true }
         // Dragging several apps out of a folder can leave fewer pages than it had: don't stay
         // on one that is no longer shown (blank, with no page dot lit).
-        if openFolder != nil { folderPage = min(folderPage, max(shownFolderPageCount - 1, 0)) }
+        if openFolder != nil {
+            drag.sourceFolderPage = folderPage
+            folderPage = min(folderPage, max(shownFolderPageCount - 1, 0))
+        }
         // In the common modes: in the default mode alone it doesn't fire while the run loop
         // is in another (event tracking, a modal panel), and no dwell would ever complete.
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in

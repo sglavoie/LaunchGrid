@@ -102,7 +102,7 @@ public struct GridStore: Sendable {
 
     /// Copies the backup aside the first time it's refreshed on `day`, and lets the oldest
     /// copies go. Best effort, as the backup is.
-    private func keepDailyCopy(day: String) {
+    private func keepDailyCopy(day: String, flush: (URL) throws -> Void) {
         let fm = FileManager.default
         let daily = dailyBackupURL(day: day)
         // A damaged or manually replaced backup path might be a directory or a link.
@@ -110,7 +110,19 @@ public struct GridStore: Sendable {
         guard let values = try? backupURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
               values.isRegularFile == true, values.isSymbolicLink != true,
               !fm.fileExists(atPath: daily.path) else { return }
-        guard (try? fm.copyItem(at: backupURL, to: daily)) != nil else { return }
+        // Through a flushed temporary file, as the backup itself is staged: a copy straight to
+        // its name could reappear empty after a power cut, take a rotation slot from a good
+        // one, and stop any retry that day. The next save's sweep removes one left behind.
+        let tmp = backupURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(backupURL.lastPathComponent).\(UUID().uuidString).tmp")
+        do {
+            try fm.copyItem(at: backupURL, to: tmp)
+            try flush(tmp)
+            guard rename(tmp.path, daily.path) == 0 else { throw GridStore.posixError() }
+        } catch {
+            unlink(tmp.path)
+            return
+        }
         // Only copies up to today rotate: one dated later (made while the clock was set ahead)
         // would otherwise outlast every real one, and today's new copy with them.
         let upToToday = dailyBackups.filter { $0.lastPathComponent <= daily.lastPathComponent }
@@ -164,7 +176,7 @@ public struct GridStore: Sendable {
         }
         try write(GridStore.encode(grid), target)
         guard let stagedBackup else { return false }
-        keepDailyCopy(day: GridStore.day(of: now))
+        keepDailyCopy(day: GridStore.day(of: now), flush: flushBackup)
         guard rename(stagedBackup.path, backupURL.path) == 0 else {
             onBackupFailure?(GridStore.posixError())
             return false

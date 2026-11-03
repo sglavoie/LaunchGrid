@@ -604,6 +604,27 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.currentPage == 0)
     }
 
+    /// A page turned from the keyboard or the wheel while a mouse pan is held ends the pan: the
+    /// release doesn't turn the page a second time.
+    @Test func aPageTurnedMidPanEndsThePan() {
+        let state = makeState()
+        let apps = (1...80).map { GridItem.app(AppRef(bundleID: "com.test.App\($0)", path: "/Applications/App\($0).app", name: "App\($0)")) }
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [
+            Page(items: Array(apps.prefix(35))), Page(items: Array(apps[35..<70])), Page(items: Array(apps.dropFirst(70))),
+        ]))
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = CGPoint(x: 600, y: 490)
+        let held = CGPoint(x: 300, y: start.y)
+        state.dragChanged(start: start, location: held)
+        #expect(state.drag.panning)
+        state.flipPage(1)
+        #expect(state.currentPage == 1)
+        state.dragChanged(start: start, location: held)
+        #expect(state.swipeOffset == 0, "the pager doesn't stay pulled on the new page")
+        state.dragEnded(start: start, location: held, predicted: held)
+        #expect(state.currentPage == 1)
+    }
+
     /// A folder opened while a mouse pan is held ends the pan too: the folder stays on the page
     /// shown.
     @Test func aFolderOpenedMidPanEndsThePan() throws {
@@ -769,6 +790,30 @@ func installed(_ name: String) -> InstalledApp {
         state.dragEnded(start: start, location: drop, predicted: drop)
         #expect(state.folderPage == 0, "the view stays where the apps were dropped")
         #expect((state.focusIndex ?? 99) < FolderLayout.perPage(state.grid))
+    }
+
+    @Test func aCancelledDragReturnsToTheFolderPageItStartedOn() {
+        let state = makeState()
+        let refs = (1...30).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.folder(folder)])])) // 28 per folder page
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 0, y: 0, width: 700, height: 400)
+        state.drag.folderPanelFrame = CGRect(x: 0, y: 0, width: 700, height: 440)
+        state.openFolder(folder.id)
+        state.editing = true
+        state.toggleSelection(refs[0].id)
+        state.toggleSelection(refs[1].id)
+        state.flipPage(1)
+        state.toggleSelection(refs[28].id)
+        state.focusIndex = 29
+        let start = state.iconCenter(0, inFolder: true)
+        state.dragChanged(start: start, location: CGPoint(x: start.x + 1, y: start.y + 40))
+        #expect(state.folderPage == 0, "fewer pages while dragging")
+        state.cancelDrag()
+        #expect(state.openFolderID == folder.id)
+        #expect(state.folderPage == 1, "back on the page the drag started from")
+        #expect(state.focusIndex == 29, "focus is on that page")
     }
 
     @Test func draggingAcrossFolderPagesKeepsKeyboardFocusVisible() {

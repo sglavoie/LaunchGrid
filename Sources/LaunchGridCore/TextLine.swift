@@ -110,7 +110,9 @@ public struct TextLine: Equatable, Sendable {
         }
         return runs.flatMap { run -> [Range<Int>] in
             guard chars[run].contains(where: Self.isUnspaced) else { return [run] }
-            let piece = String(chars[run])
+            // The system splits half-width katakana nowhere: split its full-width spelling,
+            // which has as many characters, so the ranges fit the text as written.
+            let piece = Self.fullWidthKana(chars[run]) ?? String(chars[run])
             var ranges: [Range<Int>] = []
             piece.enumerateSubstrings(in: piece.startIndex..., options: [.byWords, .substringNotRequired]) { _, r, _, _ in
                 let lower = piece.distance(from: piece.startIndex, to: r.lowerBound)
@@ -120,7 +122,31 @@ public struct TextLine: Equatable, Sendable {
         }
     }
 
-    /// Han, hiragana, katakana, Thai, Lao, Khmer and Myanmar: written without spaces between words.
+    /// `chars` with half-width katakana written full-width, its sound marks joined to their
+    /// letter (ﾌﾟ → プ), one character for each; nil when there's none, or a character would
+    /// become more than one.
+    private static func fullWidthKana(_ chars: ArraySlice<Character>) -> String? {
+        let halfWidth: ClosedRange<UInt32> = 0xFF65...0xFF9F
+        guard chars.contains(where: { $0.unicodeScalars.contains { halfWidth.contains($0.value) } }) else { return nil }
+        var out = ""
+        for c in chars {
+            let marks = String(String.UnicodeScalarView(c.unicodeScalars.map {
+                switch $0.value {
+                case 0xFF9E: "\u{3099}"
+                case 0xFF9F: "\u{309A}"
+                default: $0
+                }
+            }))
+            let full = marks.folding(options: .widthInsensitive, locale: nil).precomposedStringWithCanonicalMapping
+            guard full.count == 1 else { return nil }
+            out += full
+        }
+        // Joined, a mark could still merge with the letter before it.
+        return out.count == chars.count ? out : nil
+    }
+
+    /// Han, hiragana, katakana (half-width too), Thai, Lao, Khmer and Myanmar: written without
+    /// spaces between words.
     static func isUnspaced(_ c: Character) -> Bool {
         c.unicodeScalars.contains { s in
             s.properties.isIdeographic || unspacedRanges.contains { $0.contains(s.value) }
@@ -128,7 +154,7 @@ public struct TextLine: Equatable, Sendable {
     }
 
     private static let unspacedRanges: [ClosedRange<UInt32>] = [
-        0x3040...0x30FF, 0x31F0...0x31FF, // kana
+        0x3040...0x30FF, 0x31F0...0x31FF, 0xFF65...0xFF9F, // kana, half-width katakana too
         0x0E00...0x0E7F, 0x0E80...0x0EFF, // Thai, Lao
         0x1000...0x109F, 0x1780...0x17FF, 0x19E0...0x19FF, // Myanmar, Khmer
     ]
