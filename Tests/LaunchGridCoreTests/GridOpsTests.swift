@@ -766,6 +766,23 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(try store.load().rows == 8)
     }
 
+    /// A copy dated after today (the clock was once set ahead) doesn't count against the days
+    /// kept: today's copy and the two before it stay, and the later one is left alone.
+    @Test func aDailyBackupDatedLaterDoesntPushOutTodays() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: dir) }
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let day: TimeInterval = 24 * 60 * 60
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        try store.save(Grid(rows: 1, columns: 1), now: start)
+        let later = (0..<3).map { store.dailyBackupURL(day: GridStore.day(of: start + Double(100 + $0) * day)) }
+        for url in later { try Data("{}".utf8).write(to: url) }
+        for n in 1...5 { try store.save(Grid(rows: 1 + n, columns: 1), now: start + Double(n) * day) }
+        let kept = (3...5).map { store.dailyBackupURL(day: GridStore.day(of: start + Double($0) * day)) }
+        #expect(store.dailyBackups.map(\.lastPathComponent) == (kept + later).map(\.lastPathComponent))
+    }
+
     @Test func dailyBackupRotationLeavesOtherFilesAndDirectoriesAlone() throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -111,7 +111,10 @@ public struct GridStore: Sendable {
               values.isRegularFile == true, values.isSymbolicLink != true,
               !fm.fileExists(atPath: daily.path) else { return }
         guard (try? fm.copyItem(at: backupURL, to: daily)) != nil else { return }
-        for old in dailyBackups.dropLast(Self.dailyBackupsKept) { try? fm.removeItem(at: old) }
+        // Only copies up to today rotate: one dated later (made while the clock was set ahead)
+        // would otherwise outlast every real one, and today's new copy with them.
+        let upToToday = dailyBackups.filter { $0.lastPathComponent <= daily.lastPathComponent }
+        for old in upToToday.dropLast(Self.dailyBackupsKept) { try? fm.removeItem(at: old) }
     }
 
     /// Saves `grid`. With `refreshingBackup`, the file it replaces becomes the backup after
