@@ -182,6 +182,8 @@ final class AppState {
     @ObservationIgnored var onSaveFailure: ((_ title: String, _ detail: String) -> Void)?
     @ObservationIgnored var onOpenSettings: () -> Void = {}
     @ObservationIgnored var onAddMissing: () -> Void = {}
+    /// An extra scan folder was followed to where it moved, outside a rescan: watch and scan it there.
+    @ObservationIgnored var onScanFoldersMoved: () -> Void = {}
     /// Opens the action editor on an action, or on a new one (nil) for the page with that ID.
     @ObservationIgnored var onEditAction: (_ action: Action?, _ pageID: UUID?) -> Void = { _, _ in }
     /// The open action editor, for the debug scripts and UI scenarios to drive.
@@ -1250,13 +1252,22 @@ final class AppState {
         guard let old = grid.item(id)?.app?.path, old != path else { return }
         // Its bookmark, if added with Browse, follows it too (and may find other moves),
         // resolved off the main thread where the system's calls go.
+        let folders = prefs.extraFolders
         guard FileAccess.followsInBackground(old) else {
-            return followMovedApps(FileAccess.follow(old, prefs: prefs).merging([old: path]) { found, _ in found })
+            followMovedApps(FileAccess.follow(old, prefs: prefs).merging([old: path]) { found, _ in found })
+            return noteScanFoldersMoved(from: folders)
         }
         Task {
             let found = await FileAccess.followInBackground(old, prefs: prefs)
             followMovedApps(found.merging([old: path]) { found, _ in found })
+            noteScanFoldersMoved(from: folders)
         }
+    }
+
+    /// Resolving bookmarks can follow an extra scan folder to its new place too: the watcher
+    /// and the scan then move with it.
+    private func noteScanFoldersMoved(from folders: [String]) {
+        if prefs.extraFolders != folders { onScanFoldersMoved() }
     }
 
     /// Follows apps that moved, old path to new (as found by their sandbox bookmarks), in the
@@ -1383,7 +1394,9 @@ final class AppState {
                 // Its bookmark didn't open at launch (a volume that wasn't connected): try it
                 // again now, following the file if it was moved.
                 if case .openFile(let path, _) = plan, FileAccess.hasPendingBookmark(path) {
+                    let folders = prefs.extraFolders
                     followMovedApps(await FileAccess.restoreInBackground(prefs: prefs))
+                    noteScanFoldersMoved(from: folders)
                     if let now = grid.item(action.id)?.action, let again = try? ActionRunner.plan(now.kind, argument: argument) {
                         plan = again
                     }

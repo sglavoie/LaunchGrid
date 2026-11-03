@@ -121,8 +121,19 @@ extension Grid {
                 pages[p].items.removeSubrange(capacity...)
                 if p + 1 == pages.count { pages.append(Page()) }
                 pages[p + 1].items.insert(contentsOf: overflow, at: 0)
+                notePrepended(overflow.map(\.id), toPage: p + 1)
             }
             p += 1
+        }
+    }
+
+    /// Apps away during an update keep their place on page `p` behind `ids`, just put at its
+    /// front: with no neighbour before it still there, one would otherwise go back ahead of them.
+    mutating func notePrepended(_ ids: [UUID], toPage p: Int) {
+        guard !ids.isEmpty, pages.indices.contains(p) else { return }
+        for k in recentlyPruned.indices where recentlyPruned[k].pageID == pages[p].id {
+            recentlyPruned[k].index += ids.count
+            recentlyPruned[k].before = ids + (recentlyPruned[k].before ?? [])
         }
     }
 
@@ -571,6 +582,7 @@ extension Grid {
         }
         if head > 0 {
             pages[0].items.insert(contentsOf: items[head...], at: 0)
+            notePrepended(items[head...].map(\.id), toPage: 0)
             pages.insert(Page(items: Array(items[..<head])), at: 0)
             // Only a page holding more than fits (from an older, larger grid) spills here.
             if head > capacity {
@@ -584,6 +596,7 @@ extension Grid {
         }
         if index == 0 {
             pages[0].items.insert(contentsOf: items, at: 0)
+            notePrepended(items.map(\.id), toPage: 0)
         } else {
             pages[target].items.append(contentsOf: items)
         }
@@ -593,6 +606,7 @@ extension Grid {
         let next = target + 1
         if pages.indices.contains(next), pages[next].title == nil, pages[next].items.count + overflow.count <= capacity {
             pages[next].items.insert(contentsOf: overflow, at: 0)
+            notePrepended(overflow.map(\.id), toPage: next)
         } else {
             pages.insert(Page(items: overflow), at: next)
             spill(from: next)
@@ -657,15 +671,17 @@ extension Grid {
         }
         flush()
         pages = result
-        // Apps temporarily absent during an update whose page re-flowed into another one go
-        // back where that page's items went, not to the first free slot in the grid.
-        let live = Set(pages.map(\.id))
-        for k in recentlyPruned.indices where !live.contains(recentlyPruned[k].pageID) {
+        // Apps temporarily absent during an update go back where their page's items went: not
+        // to the first free slot in the grid when that page re-flowed into another one, nor
+        // ahead of the items re-flowing put before them on their own page.
+        for k in recentlyPruned.indices {
             guard let first = firstItems[recentlyPruned[k].pageID],
                   let p = pages.firstIndex(where: { $0.items.contains { $0.id == first } }),
-                  let at = pages[p].items.firstIndex(where: { $0.id == first }) else { continue }
+                  let at = pages[p].items.firstIndex(where: { $0.id == first }),
+                  pages[p].id != recentlyPruned[k].pageID || at > 0 else { continue }
             recentlyPruned[k].pageID = pages[p].id
             recentlyPruned[k].index = min(at + recentlyPruned[k].index, pages[p].items.count)
+            recentlyPruned[k].before = pages[p].items.prefix(at).map(\.id) + (recentlyPruned[k].before ?? [])
         }
     }
 

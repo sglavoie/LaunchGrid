@@ -3293,6 +3293,30 @@ func installed(_ name: String) -> InstalledApp {
         #expect(prefs.extraFolders == ["/Users/x/Utilities"])
     }
 
+    @Test func aScanFolderFollowedWhileFollowingAnAppIsWatchedAgain() {
+        sandbox.install()
+        defer { FileAccess.reset() }
+        let prefs = testPreferences()
+        // The folder's bookmark didn't open at launch, so it is still pending.
+        sandbox.gone.insert("/Users/x/Tools")
+        #expect(PickedFileAccess.addFolder(URL(fileURLWithPath: "/Users/x/Tools"), prefs: prefs))
+        FileAccess.remember(URL(fileURLWithPath: "/Users/x/A.app"))
+        let state = AppState(prefs: prefs, store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [
+            .app(AppRef(bundleID: "com.test.A", path: "/Users/x/A.app", name: "A"))])]))
+        var moved = 0
+        state.onScanFoldersMoved = { moved += 1 }
+
+        sandbox.gone.remove("/Users/x/Tools")
+        sandbox.moves["/Users/x/Tools"] = "/Users/x/Utilities"
+        state.rememberPath("/Users/x/Apps/A.app", of: state.grid.allApps[0].id) // as a launch finding it elsewhere does
+        #expect(prefs.extraFolders == ["/Users/x/Utilities"])
+        #expect(moved == 1, "the watcher and the scan move with the folder")
+
+        state.rememberPath("/Users/x/Apps2/A.app", of: state.grid.allApps[0].id)
+        #expect(moved == 1, "not when no folder moved")
+    }
+
     @Test func anItemInTheTrashIsNotFollowed() {
         sandbox.install()
         defer { FileAccess.reset() }

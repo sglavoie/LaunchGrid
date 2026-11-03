@@ -221,6 +221,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onSaveFailure = { [weak self] title, detail in self?.showSaveFailure(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
         state.onAddMissing = { [weak self] in self?.showAddMissing() }
+        state.onScanFoldersMoved = { [weak self] in
+            self?.startWatching(onlyIfChanged: true)
+            self?.state.rescan()
+        }
         state.onEditAction = { [weak self] action, pageID in self?.showActionEditor(action, pageID: pageID) }
         state.onConfirmRunAgain = { [weak self] action in self?.confirmRunAgain(action) ?? false }
         state.onShowLastOutput = { [weak self] action in self?.showLastOutput(action) }

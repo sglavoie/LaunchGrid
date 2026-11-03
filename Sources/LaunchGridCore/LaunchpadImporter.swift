@@ -184,6 +184,22 @@ public enum LaunchpadImporter {
             return copiesByID?[id] ?? []
         }
 
+        func fileName(_ path: String) -> String {
+            URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased()
+        }
+        /// Real paths of the copies sharing bundle ID `id` that some row's title names.
+        var namedByID: [String: Set<String>] = [:]
+        func namedCopies(of id: String, others: [String]) -> Set<String> {
+            if let known = namedByID[id] { return known }
+            let titles = Set(apps.values.compactMap { row -> String? in
+                guard AppRef.usableBundleID(row.bundleID) == id, let t = row.title, !t.isEmpty else { return nil }
+                return t.lowercased()
+            })
+            let named = Set(others.filter { titles.contains(fileName($0)) }.map(real))
+            namedByID[id] = named
+            return named
+        }
+
         /// `visited` guards against parent_id cycles in a damaged database. A loop rather than
         /// recursion: a file opened from Finder can nest rows thousands deep, past what the
         /// import thread's stack holds.
@@ -223,11 +239,16 @@ public enum LaunchpadImporter {
                 if others.count == 1 {
                     candidate = others[0]
                 } else if others.count > 1 {
-                    let file = { (path: String) in URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased() }
                     let scanned = Set(others.map(real))
-                    candidate = others.first { file($0) == title.lowercased() }
-                        ?? resolve(b).flatMap { scanned.contains(real($0)) && !seen.contains(real($0)) ? $0 : nil }
-                        ?? others.first { !seen.contains(real($0)) }
+                    // A copy another row is named after is kept for that row, wherever it comes
+                    // in the layout, unless no other copy is free.
+                    let named = namedCopies(of: b, others: others)
+                    let free = { (path: String) in !seen.contains(real(path)) }
+                    candidate = others.first { fileName($0) == title.lowercased() }
+                        ?? resolve(b).flatMap { scanned.contains(real($0)) && free($0) && !named.contains(real($0)) ? $0 : nil }
+                        ?? others.first { free($0) && !named.contains(real($0)) }
+                        ?? resolve(b).flatMap { scanned.contains(real($0)) && free($0) ? $0 : nil }
+                        ?? others.first(where: free)
                         ?? others[0] // every copy imported already: a duplicate
                 } else {
                     candidate = resolve(b).flatMap { keeps($0) ? $0 : nil }

@@ -34,6 +34,51 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.recentlyPruned.isEmpty)
     }
 
+    /// An app first on its page is away during an update while items are put at that page's
+    /// front: it comes back behind them, where it would be had it stayed.
+    @Test(arguments: [
+        ("delete the page before", [["A", "B"], ["C", "D", "E"]], "C", 3, nil as String?),
+        ("delete the first page before a titled one", [["A", "B"], ["C", "D"]], "C", 3, "titled"),
+        ("delete a page that overflows", [["A", "B", "C"], ["D", "E"], ["F", "G"]], "F", 3, nil),
+        ("resize", [["A", "B", "C", "D"], ["E", "F"]], "E", 4, nil),
+        ("ungroup", [["A", "F", "D"], ["E", "G"]], "E", 3, nil),
+        ("move onto a full page", [["A", "B", "C"], ["D", "E"], ["X"]], "D", 3, nil),
+    ])
+    func anUpdatingAppStaysBehindItemsPutBeforeIt(_ name: String, layout: [[String]], missingName: String,
+                                                  columns: Int, flag: String?) throws {
+        let source = layout.flatMap { $0 }.map { installed($0) }
+        var pages = layout.map { names in Page(items: names.map { n in .app(source.first { $0.name == n }!.makeRef()) }) }
+        if flag == "titled" { pages[1].title = "Work" }
+        var g = Grid(rows: 1, columns: columns, pages: pages)
+        if name == "ungroup" {
+            g.pages[0].items[1] = .folder(Folder(name: "F", apps: [
+                AppRef(bundleID: "com.test.x", path: "/Applications/X.app", name: "X"),
+                AppRef(bundleID: "com.test.y", path: "/Applications/Y.app", name: "Y")]))
+        }
+        let all = source.filter { $0.name != "F" || name != "ungroup" }
+            + (name == "ungroup" ? [installed("X"), installed("Y")] : [])
+        func op(_ g: inout Grid) {
+            switch name {
+            case "resize": g.resize(rows: 1, columns: 3)
+            case "ungroup": if case .folder(let f) = g.pages[0].items[1] { g.ungroup(f.id) }
+            case "move onto a full page": g.move([g.pages[2].items[0].id], toPage: 0, at: 1)
+            case "delete a page that overflows": g.deletePage(1)
+            default: g.deletePage(0)
+            }
+        }
+        var expected = g
+        op(&expected)
+        let missing = try #require(all.first { $0.name == missingName })
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: all.filter { $0 != missing }, autoAdd: false,
+                                 pathExists: { $0 != missing.path }, now: now)
+        op(&g)
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: now + 5)
+        // In order; where pages break can differ, since more fit while one was away.
+        #expect(g.pages.flatMap { $0.items.map(\.title) } == expected.pages.flatMap { $0.items.map(\.title) }, "\(name)")
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
     @Test(arguments: [false, true], [3, 6].flatMap { columns in (0...2).map { (columns, $0) } })
     func deletingAPageKeepsSeveralUpdatingAppsInOrder(returnLastFirst: Bool, configuration: (Int, Int)) {
         let (columns, visibleIndex) = configuration
@@ -739,6 +784,23 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         let renamed = Reconciler.reconcile(&h, installed: [beta], autoAdd: false, pathExists: { _ in false },
                                            wasInstalledBefore: { _ in false })
         #expect(renamed.moved == ["Xcode-beta"])
+    }
+
+    @Test func aTileStillOnDiskReservesNoCopyFromARename() {
+        // Foo.app was renamed Foo Pro.app; another copy, in Downloads, sits outside the scan
+        // and is named Foo Pro too. It stays put, so it must not keep the rename from following.
+        let downloads = AppRef(bundleID: "com.foo", path: "/Users/u/Downloads/Foo Pro.app", name: "Foo Pro")
+        let foo = AppRef(bundleID: "com.foo", path: "/Applications/Foo.app", name: "Foo")
+        let pro = installed("Foo Pro", id: "com.foo")
+        var g = Grid(rows: 2, columns: 2, pages: [Page(items: [.app(downloads), .app(foo)])])
+        let fooID = g.allApps[1].id
+        let report = Reconciler.reconcile(&g, installed: [pro], autoAdd: true, pathExists: { $0 == downloads.path })
+        #expect(report.moved == ["Foo Pro"] && report.removed.isEmpty && report.added.isEmpty)
+        #expect(g.allApps.map(\.path) == [downloads.path, pro.path])
+        #expect(g.allApps[1].id == fooID, "the renamed app keeps its tile")
+        #expect(Reconciler.missingApps(in: Grid(pages: [Page(items: [.app(downloads), .app(foo)])]), installed: [pro],
+                                       pathExists: { $0 == downloads.path }).isEmpty,
+                "nor does the Downloads copy leave the rename missing")
     }
 
     @Test func movedRefSkipsACopyTheUserRemoved() {
@@ -1967,6 +2029,27 @@ func tempDir(_ prefix: String) -> URL {
                                         installed: [xcode.path, beta.path]) { _ in xcode.path }
         #expect(r.grid.allApps.map { ($0.path as NSString).lastPathComponent } == ["Xcode-beta.app", "Xcode.app"])
         #expect(r.duplicates == ["Xcode"], "a row listed twice is still a duplicate")
+    }
+
+    @Test func aCopyNamedByALaterRowIsKeptForIt() throws {
+        // The row whose title names no copy comes first: Launch Services' answer, or the first
+        // unused copy, would take the copy the later row is named after.
+        let dir = tempDir("import-named-later")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try makeFakeApp("Xcode.app", id: "com.apple.dt.Xcode", in: dir)
+        try makeFakeApp("Xcode-beta.app", id: "com.apple.dt.Xcode", in: dir)
+        let xcode = dir.appendingPathComponent("Xcode.app"), beta = dir.appendingPathComponent("Xcode-beta.app")
+        typealias Row = LaunchpadImporter.Row
+        let items = [Row(id: 1, type: 1, parent: 0, ordering: 0), Row(id: 10, type: 3, parent: 1, ordering: 0),
+                     Row(id: 11, type: 4, parent: 10, ordering: 0), Row(id: 12, type: 4, parent: 10, ordering: 1)]
+        let apps = [11: LaunchpadImporter.AppRow(title: "Xcode 16 beta", bundleID: "com.apple.dt.Xcode"),
+                    12: LaunchpadImporter.AppRow(title: "Xcode", bundleID: "com.apple.dt.Xcode")]
+        for answer in [xcode.path, nil] {
+            let r = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [:], rows: 5, columns: 7,
+                                            installed: [xcode.path, beta.path]) { _ in answer }
+            #expect(r.grid.allApps.map { ($0.path as NSString).lastPathComponent } == ["Xcode-beta.app", "Xcode.app"])
+            #expect(r.duplicates.isEmpty)
+        }
     }
 
     @Test func theOneCopyTheScanFoundWinsOverLaunchServices() throws {

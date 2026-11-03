@@ -125,7 +125,11 @@ public enum Reconciler {
         // A copy, so `match` reads no part of `grid` while the loops below write to it.
         let removed = grid.removedBundleIDs
         let exactMoves = exactMoves(of: grid.allApps + returning.map(\.app), byBundle: byBundle,
-                                    present: { byPath[$0.path] != nil || aliases[$0.path] != nil }) {
+                                    present: { ref in
+            // As `match` has it: only a ref whose app is gone from a reachable path can move, so
+            // one still on disk outside the scan, or out of reach, reserves no copy.
+            byPath[ref.path] != nil || aliases[ref.path] != nil || !isReachable(ref.path) || pathExists(ref.path)
+        }) {
             gridPaths.contains($0.path) || removed.contains($0.key) || removed.contains($0.path)
         }
 
@@ -469,7 +473,9 @@ public enum Reconciler {
         let offGrid = installed.filter { !paths.contains($0.path) }
         let byKey = Dictionary(grouping: offGrid, by: \.key)
         var claimed = Set<String>()
-        let reservations = exactMoves(of: grid.allApps, byBundle: byKey, present: { installedPaths.contains($0.path) }) {
+        let reservations = exactMoves(of: grid.allApps, byBundle: byKey, present: {
+            installedPaths.contains($0.path) || !isReachable($0.path) || pathExists($0.path)
+        }) {
             grid.isExcluded($0)
         }
         for ref in grid.allApps where !installedPaths.contains(ref.path) && isReachable(ref.path) && !pathExists(ref.path) {
