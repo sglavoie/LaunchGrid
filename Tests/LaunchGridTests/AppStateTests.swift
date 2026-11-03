@@ -1812,6 +1812,21 @@ func installed(_ name: String) -> InstalledApp {
         #expect(next.grid.pages.flatMap(\.items).map(\.title) == ["A", "B", "Shown"])
     }
 
+    @Test func removingAnOpenFoldersLastItemFocusesTheFoldersSlot() throws {
+        let x = installed("X").makeRef()
+        let folder = Folder(name: "F", apps: [x])
+        let state = makeState()
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [
+            .app(installed("A").makeRef()), .app(installed("B").makeRef()), .folder(folder), .app(installed("C").makeRef()),
+        ])]))
+        state.openFolder(folder.id)
+        state.focusIndex = 0
+        state.remove([x.id]) // ⌃Return › Remove from Grid, not ⌫
+        #expect(state.openFolderID == nil)
+        #expect(state.focusIndex == 2)
+        #expect(state.currentItems[2].title == "C")
+    }
+
     @Test func rebuildingKeepsActionsOnPagesInFoldersAndSearchOnly() {
         let state = makeState(["A"])
         state.catalogScanned(["A", "B"].map(installed))

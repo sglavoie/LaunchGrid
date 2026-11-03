@@ -453,12 +453,20 @@ final class AppState {
             }
         }
         currentPage = min(currentPage, grid.pages.count - 1)
+        // The open folder's slot on its page, when it went (its last item removed): the focus
+        // inside it lands there, on the item that took its place.
+        var vanishedFolderSlot: Int?
         if let id = openFolderID {
             if grid.folder(id) != nil, let location = grid.locate(id) {
                 // An insertion or restoration can spill the open folder onto another page.
                 // Keep its background and the focus returned on closing with its icon.
                 currentPage = location.page
             } else {
+                if let location = old.locate(id), location.folderIndex == nil,
+                   let p = grid.pages.firstIndex(where: { $0.id == old.pages[location.page].id }) {
+                    currentPage = p
+                    vanishedFolderSlot = location.index
+                }
                 openFolderID = nil
             }
         }
@@ -477,7 +485,7 @@ final class AppState {
             let ids = !query.isEmpty ? searchResults.map(\.id) : openFolder?.items.map(\.id) ?? currentItems.map(\.id)
             // Keep the same item when it is still in this view. If it left, focus the
             // item taking its slot, or the last item when the view became shorter.
-            focusIndex = ids.isEmpty ? nil : focusedID.flatMap { ids.firstIndex(of: $0) } ?? min(i, ids.count - 1)
+            focusIndex = ids.isEmpty ? nil : focusedID.flatMap { ids.firstIndex(of: $0) } ?? min(vanishedFolderSlot ?? i, ids.count - 1)
             // Insertions and removals can move the focused app across a folder page
             // boundary too, even when the grid dimensions haven't changed.
             if query.isEmpty, openFolder != nil, let focusIndex {

@@ -499,11 +499,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             } else if !state.selection.isEmpty {
                 state.remove(state.orderedSelection)
             } else if state.editing, let id = focusedID {
-                // The open folder's slot, in case removing its last app takes the folder too.
-                let folderSlot = state.openFolderID.flatMap { f in state.currentItems.firstIndex { $0.id == f } }
+                // Stays on the item that took its place: in the folder, or where the folder was.
                 state.remove([id])
-                // Stay on the item that took its place: in the folder, or where the folder was.
-                if let folderSlot, state.openFolder == nil { state.focusIndex = folderSlot }
                 let count = focusableCount
                 state.focusIndex = count > 0 ? state.focusIndex.map { min($0, count - 1) } : nil
             }
