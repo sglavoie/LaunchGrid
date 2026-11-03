@@ -38,13 +38,16 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't go inside a [[ … ]] test that compares numbers (-eq, -lt and the like) or checks -v or -t, where the shell would run what's typed as code. Compare it as text with == instead."))
         }
         static var placeholderInBuiltin: Failure {
-            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset, vared, getopts or sysread, a variable name for typeset, declare, local or export (or after [ -v, test -v, set -A, strftime -s or zstat -A), or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
+            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, break, continue, logout, read, unset, vared, getopts, getln, sysread or zformat, a variable name for typeset, declare, local, private or export (or after [ -v, test -v, set -A, strftime -s, zstat -A, syserror -e or sysopen -u), an argument of zstyle with an option, or an argument of printf %d (and other number formats), print -v, print -P or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
+        }
+        static var placeholderAsOption: Failure {
+            Failure(message: String(localized: "{query} can't go where print, printf, set, strftime, zstat, syserror, sysopen, zstyle or zformat still read options, where what's typed could start one that names a variable (-v, -A) and zsh would run it as code. Put -- before it: print -r -- {query}."))
         }
         static var placeholderInArithmeticVariable: Failure {
             Failure(message: String(localized: "A variable that holds {query} (n={query}, read n, for n in {query}, or $1 and the like) can't be used in $((…)), ((…)), $[…], a subscript, let, a [[ … ]] test that compares numbers or printf %d, where zsh would run what's typed as code. Compare or print it as text instead."))
         }
         static var placeholderInCode: Failure {
-            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, in a tmux or screen command, after vim -c or git -c, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
+            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, in a function, alias or PS4 it's stored in, in a tmux or screen command, after vim -c or git -c, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
         }
         static var placeholderInGlobQualifier: Failure {
             Failure(message: String(localized: "{query} can't go inside parentheses that end a word, like the glob qualifier in *(e:'…':), where zsh would run what's typed as code. Use $LAUNCHGRID_QUERY there instead."))
@@ -612,6 +615,8 @@ final class ActionRunner {
         if !assignedNames.isDisjoint(with: numericNames) { throw Failure.placeholderInBuiltin }
         // Nor anywhere it's read as a number: `n={query}; (( n > 3 ))`, `set -- {query}; $(( $1 ))`.
         if placeholderSoFar, ActionRunner.feedsArithmetic(String(out)) { throw Failure.placeholderInArithmeticVariable }
+        // `functions[f]={query}`, or `x={query}; aliases[a]=$x`: refused wherever it's from.
+        if placeholderSoFar, ActionRunner.storesCode(String(out)) { throw Failure.placeholderInCode }
         return (String(out), changed)
     }
 
@@ -641,6 +646,16 @@ final class ActionRunner {
         var formatOptionArgument = false
         /// `typeset -i` and the like: values are evaluated as numbers.
         var numericTypes = false
+        /// `print -P`: prompt escapes, which run `$(…)` when `promptsubst` is set.
+        var promptExpands = false
+        /// `zstyle` with an option: one that reads a style into a variable or evaluates it.
+        var zstyleOption = false
+        /// For builtins whose options name a variable (`print -v`, `set -A`): whether their
+        /// options ended (`--`, or an argument that isn't one), and whether the next word is
+        /// an option's argument. Until then, `{query}` can start an option of its own:
+        /// `print {query}` with `-vpath[$(…)]` typed assigns to that name.
+        var optionsEnded = false
+        var optionArgumentNext = false
         /// After `sed` or `awk`: how many of the next words that aren't options may be its program,
         /// given as an argument without `-e`. Its files come after.
         var programWordsLeft = 0
@@ -709,6 +724,7 @@ final class ActionRunner {
                     throw Failure.placeholderInCode
                 }
                 if evaluates(word, command: command) { throw Failure.placeholderInBuiltin }
+                if startsOption(word, command: command) { throw Failure.placeholderAsOption }
                 // sqlite3's arguments after the database are SQL, whose `.shell` and writefile()
                 // reach anything; the database name too can be a URI with options.
                 if ActionRunner.readsSQL(command) { throw Failure.placeholderInCode }
@@ -735,6 +751,7 @@ final class ActionRunner {
                 }
             } else {
                 noteArgument(word)
+                noteOptionEnd(word)
                 previous = word
                 notice(option: word)
                 noteDeclaration(word)
@@ -877,6 +894,44 @@ final class ActionRunner {
             if stdinForced || !programGiven { throw Failure.placeholderInCode }
         }
 
+        /// Whether `{query}` in `word` can be read as an option of `command`, one that names a
+        /// variable: `print {query}`, `set {query}`, `print -{query}`.
+        private func startsOption(_ word: String, command: String) -> Bool {
+            guard ActionRunner.optionsNameVariables.contains(command), !optionsEnded, !optionArgumentNext else { return false }
+            let text = ActionRunner.unquoted(word)
+            return text.hasPrefix(ActionKind.argumentPlaceholder) || text.hasPrefix("-") || text.hasPrefix("+")
+        }
+
+        /// Follows where the options of `command` end: at `--` or `-`, or at a word that isn't
+        /// an option nor an option's argument. `print -f '%s' -vX` still reads `-vX`.
+        private mutating func noteOptionEnd(_ word: String) {
+            guard let command, ActionRunner.optionsNameVariables.contains(command), !optionsEnded else { return }
+            let text = ActionRunner.unquoted(word)
+            if optionArgumentNext {
+                optionArgumentNext = false
+                // `set -A name a b`: what follows the name are its values.
+                if command == "set" { optionsEnded = true }
+            } else if text == "--" || text == "-" {
+                optionsEnded = true
+            } else if text.count > 1, text.hasPrefix("-") || (text.hasPrefix("+") && command == "set") {
+                let takesArgument: Set<Character> = switch command {
+                case "print": ["f", "u", "v", "C", "x", "X"]
+                case "printf": ["v"]
+                case "set": ["A", "o"]
+                case "strftime": ["s"]
+                case "zstat", "stat": ["A", "H", "f", "F"]
+                case "syserror": ["e", "p"]
+                case "sysopen": ["u", "m", "o"]
+                case "zstyle": ["d", "g", "m"]
+                case "zformat": ["f", "a"]
+                default: []
+                }
+                if let last = text.last, takesArgument.contains(last) { optionArgumentNext = true }
+            } else {
+                optionsEnded = true
+            }
+        }
+
         /// The names `typeset`, `integer` and the like declare as numbers or assign `{query}` to.
         private mutating func noteDeclaration(_ word: String) {
             guard let command, ActionRunner.declares.contains(command),
@@ -894,6 +949,9 @@ final class ActionRunner {
                     assigns = true
                 }
                 if ActionRunner.hasNumericConversion(word) { numericFormat = true }
+                if command == "print", word.hasPrefix("-"), !word.hasPrefix("--"), word.contains("P"), !optionsEnded {
+                    promptExpands = true
+                }
                 // `{query}` in the format can add its own `%d`, making the arguments after it numbers.
                 if !formatSeen {
                     var isFormat = false
@@ -913,8 +971,10 @@ final class ActionRunner {
                         if hasPlaceholder { numericFormat = true }
                     }
                 }
-            case "typeset", "declare", "local", "export", "readonly":
+            case "typeset", "declare", "local", "export", "readonly", "private":
                 if word.hasPrefix("-") || word.hasPrefix("+"), word.contains(where: { "iEF".contains($0) }) { numericTypes = true }
+            case "zstyle":
+                if word.hasPrefix("-"), word.count > 1, !optionsEnded { zstyleOption = true }
             default: break
             }
         }
@@ -924,7 +984,7 @@ final class ActionRunner {
         private func evaluates(_ word: String, command: String) -> Bool {
             switch command {
             case "let", "integer", "float", "repeat", "shift", "exit", "return", "read", "unset", "vared",
-                 "getopts", "sysread":
+                 "getopts", "sysread", "break", "continue", "logout", "bye", "getln", "zformat":
                 return true
             // A variable's name: `[ -v name ]`, `set -A name …`, `strftime -s name …`, `zstat -A name …`.
             case "[", "test":
@@ -935,13 +995,20 @@ final class ActionRunner {
                 return previous == "-s"
             case "zstat", "stat":
                 return previous == "-A" || previous == "-H"
-            case "typeset", "declare", "local", "export", "readonly":
+            case "syserror":
+                return previous == "-e"
+            case "sysopen":
+                return previous == "-u"
+            // `zstyle -s ctx style {query}` names a variable; `zstyle -e` stores code.
+            case "zstyle":
+                return zstyleOption
+            case "typeset", "declare", "local", "export", "readonly", "private":
                 // A name (`typeset {query}`), or a number (`typeset -i x={query}`); a plain value is text.
                 if numericTypes { return true }
                 guard let equals = word.firstIndex(of: "=") else { return true }
                 return word[..<equals].contains(ActionKind.argumentPlaceholder)
             case "print", "printf":
-                return assigns || numericFormat
+                return assigns || numericFormat || promptExpands
             default:
                 return false
             }
@@ -1126,7 +1193,7 @@ final class ActionRunner {
             read.formUnion(names(in: m[1], bare: true))
         }
         // Builtins that evaluate their arguments, and printf with a number format.
-        for m in matches(#"(?:^|[\s;&|({])(let|integer|float|repeat|shift|exit|return|printf)\b([^;&|\n]*)"#, in: text) {
+        for m in matches(#"(?:^|[\s;&|({])(let|integer|float|repeat|shift|exit|return|break|continue|logout|bye|printf)\b([^;&|\n]*)"#, in: text) {
             if m[1] == "printf" {
                 guard hasNumericConversion(m[2]) else { continue }
                 let arguments = m[2].replacingOccurrences(of: #"\\.|%[-+ 0#.*0-9]*[A-Za-z]"#, with: " ", options: .regularExpression)
@@ -1143,7 +1210,19 @@ final class ActionRunner {
     }
 
     /// The commands that declare variables, with options that make them numbers.
-    nonisolated static let declares: Set<String> = ["typeset", "declare", "local", "export", "readonly", "integer", "float"]
+    nonisolated static let declares: Set<String> = ["typeset", "declare", "local", "export", "readonly", "private", "integer", "float"]
+
+    /// Builtins with an option that names a variable, which `{query}` could give itself.
+    nonisolated static let optionsNameVariables: Set<String> = [
+        "print", "printf", "set", "strftime", "zstat", "stat", "syserror", "sysopen", "zstyle", "zformat",
+    ]
+
+    /// zsh's variables that hold code it runs later: functions and aliases by name, and the
+    /// prompts `set -x` prints (with `promptsubst`, which a startup file may set).
+    nonisolated static func storesCode(_ text: String) -> Bool {
+        text.range(of: #"(^|[\s;&|({])(functions|dis_functions|aliases|dis_aliases|galiases|dis_galiases|saliases|dis_saliases|PS4|PROMPT4)(\[[^\]]*\])?\+?="#,
+                   options: .regularExpression) != nil
+    }
 
     /// zsh's own variables that hold numbers, whose values it evaluates as arithmetic.
     nonisolated static let numericVariables: Set<String> = [

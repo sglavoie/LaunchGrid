@@ -443,6 +443,25 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.map(\.path) == [upper.path, lower.path])
     }
 
+    /// Tiles are followed in visual order. A deleted Xcode-beta ahead of Xcode on the grid must
+    /// not take the moved Xcode.app as "the first new copy": that copy has Xcode's file name,
+    /// so it is Xcode's, and Xcode's tile follows it instead of being pruned.
+    @Test func aDeletedCopyDoesNotTakeTheMovedCopyOfAnotherTile() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID)
+        let other = installed("Other")
+        var g = Grid(pages: [Page(items: [.app(beta.makeRef()), .app(other.makeRef()), .app(original.makeRef())])])
+        let moved = installed("Xcode", id: original.bundleID, path: "/Applications/Dev/Xcode.app")
+        let scan = [other, moved]
+
+        #expect(Reconciler.missingApps(in: g, installed: scan, pathExists: { $0 == other.path }).isEmpty)
+        let report = Reconciler.reconcile(&g, installed: scan, autoAdd: true, pathExists: { $0 == other.path })
+
+        #expect(g.allApps.map(\.path) == [other.path, moved.path])
+        #expect(report.removed == ["Xcode-beta"])
+        #expect(report.added.isEmpty)
+    }
+
     @Test func addingAnExcludedCopyThroughAnotherCapitalizationClearsItsExclusion() {
         let original = installed("Xcode", id: "com.apple.dt.Xcode")
         let beta = installed("Xcode-beta", id: original.bundleID)
@@ -1622,6 +1641,31 @@ func tempDir(_ prefix: String) -> URL {
         #expect(result.grid.pages.map(\.title) == ["Work", "Work"])
         #expect(result.grid.allApps.map(\.name) == ["Mail", "Notes"])
         #expect(result.imported == 2)
+    }
+
+    /// Apple's database keeps an empty holding page beside the real pages under the layout
+    /// root. It isn't imported, so the grid doesn't open on a blank page; a titled empty page is.
+    @Test func anEmptyUntitledPageIsNotImported() {
+        typealias Row = LaunchpadImporter.Row
+        let items = [
+            Row(id: 1, type: 1, parent: 0, ordering: 0),
+            Row(id: 2, type: 3, parent: 1, ordering: 0),
+            Row(id: 3, type: 1, parent: 0, ordering: 1),
+            Row(id: 4, type: 3, parent: 3, ordering: 0),
+            Row(id: 7, type: 3, parent: 1, ordering: 1),
+            Row(id: 8, type: 4, parent: 7, ordering: 0),
+            Row(id: 9, type: 3, parent: 1, ordering: 2),
+            Row(id: 10, type: 3, parent: 1, ordering: 3),
+            Row(id: 11, type: 4, parent: 10, ordering: 0),
+        ]
+        let apps = [
+            8: LaunchpadImporter.AppRow(title: "Mail", bundleID: "com.apple.mail"),
+            11: LaunchpadImporter.AppRow(title: "Notes", bundleID: "com.apple.Notes"),
+        ]
+        let result = LaunchpadImporter.build(items: items, apps: apps, groupTitles: [9: "Later"],
+                                             rows: 5, columns: 7) { "/Applications/\($0).app" }
+        #expect(result.grid.pages.map { $0.items.map(\.title) } == [["Mail"], [], ["Notes"]])
+        #expect(result.grid.pages.map(\.title) == [nil, "Later", nil])
     }
 
     /// A damaged database can list an app entry with no app record: it is counted, so the

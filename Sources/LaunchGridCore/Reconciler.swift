@@ -124,6 +124,10 @@ public enum Reconciler {
         var emptiedPages = Set<UUID>()
         // A copy, so `match` reads no part of `grid` while the loops below write to it.
         let removed = grid.removedBundleIDs
+        let exactMoves = exactMoves(of: grid.allApps + returning.map(\.app), byBundle: byBundle,
+                                    present: { byPath[$0.path] != nil || aliases[$0.path] != nil }) {
+            gridPaths.contains($0.path) || removed.contains($0.key) || removed.contains($0.path)
+        }
 
         /// The installed app `ref` stands for: the one at its path, else (when its own app
         /// is gone from there, not merely out of reach) an unclaimed, unexcluded one with its
@@ -147,7 +151,8 @@ public enum Reconciler {
                let other = likelyMove(of: ref, among: byBundle[id]?.filter {
                    !gridPaths.contains($0.path) && !seen.contains($0.path)
                        && !removed.contains($0.key) && !removed.contains($0.path)
-               } ?? [], wasInstalledBefore: wasInstalledBefore) {
+               } ?? [], wasInstalledBefore: wasInstalledBefore,
+                  reserved: Set(exactMoves.filter { $0.value != ref.path }.keys)) {
                 return (other, true)
             }
             // Another app now lives at this path (e.g. an update changed the bundle ID): adopt
@@ -416,13 +421,36 @@ public enum Reconciler {
 
     /// Of the copies of a moved app (same bundle ID), the one it most likely moved to: the
     /// one with its file name, then the one with its name, then the first that is new (the
-    /// app renamed), not one that was there beside it all along.
+    /// app renamed), not one that was there beside it all along. That last guess skips the
+    /// copies in `reserved`, which another tile's file name or name points to.
     static func likelyMove(of ref: AppRef, among candidates: [InstalledApp],
-                           wasInstalledBefore: (String) -> Bool = { _ in false }) -> InstalledApp? {
+                           wasInstalledBefore: (String) -> Bool = { _ in false },
+                           reserved: Set<String> = []) -> InstalledApp? {
+        exactMove(of: ref, among: candidates)
+            ?? candidates.first { !wasInstalledBefore($0.path) && !reserved.contains($0.path) }
+    }
+
+    /// The copy with `ref`'s file name, else the one with its name.
+    static func exactMove(of ref: AppRef, among candidates: [InstalledApp]) -> InstalledApp? {
         let file = (ref.path as NSString).lastPathComponent
         return candidates.first { ($0.path as NSString).lastPathComponent == file }
             ?? candidates.first { $0.name == ref.name }
-            ?? candidates.first { !wasInstalledBefore($0.path) }
+    }
+
+    /// For each tile whose app is gone from its path, the copy its file name or name points to.
+    /// Tiles are followed in visual order, so without these a deleted Xcode-beta earlier on the
+    /// grid would take the moved Xcode.app as "the first new copy" and leave Xcode's own tile
+    /// to be pruned. Keyed by the copy's path, to the ref path of the tile it belongs to.
+    static func exactMoves(of refs: [AppRef], byBundle: [String: [InstalledApp]], present: (AppRef) -> Bool,
+                           excluded: (InstalledApp) -> Bool) -> [String: String] {
+        var out: [String: String] = [:]
+        for ref in refs where !present(ref) {
+            guard let id = ref.bundleID,
+                  let copy = exactMove(of: ref, among: (byBundle[id] ?? []).filter { !excluded($0) }),
+                  out[copy.path] == nil else { continue }
+            out[copy.path] = ref.path
+        }
+        return out
     }
 
     /// Installed apps that are not on the grid, for "Add Missing Apps…". A copy sharing its
@@ -441,11 +469,17 @@ public enum Reconciler {
         let offGrid = installed.filter { !paths.contains($0.path) }
         let byKey = Dictionary(grouping: offGrid, by: \.key)
         var claimed = Set<String>()
+        let reservations = exactMoves(of: grid.allApps, byBundle: byKey, present: { installedPaths.contains($0.path) }) {
+            grid.isExcluded($0)
+        }
         for ref in grid.allApps where !installedPaths.contains(ref.path) && isReachable(ref.path) && !pathExists(ref.path) {
             // As in reconcile, a stale tile cannot follow an excluded copy. That copy
             // stays in the picker so the user can explicitly include it again.
             let free = (byKey[ref.key] ?? []).filter { !claimed.contains($0.path) && !grid.isExcluded($0) }
-            if let copy = likelyMove(of: ref, among: free, wasInstalledBefore: wasInstalledBefore) { claimed.insert(copy.path) }
+            let reserved = Set(reservations.filter { $0.value != ref.path }.keys)
+            if let copy = likelyMove(of: ref, among: free, wasInstalledBefore: wasInstalledBefore, reserved: reserved) {
+                claimed.insert(copy.path)
+            }
         }
         return offGrid
             .filter { !claimed.contains($0.path) }

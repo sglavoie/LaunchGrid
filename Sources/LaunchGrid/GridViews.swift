@@ -459,14 +459,17 @@ struct PageView: View {
         // Read here once, not in every cell: a cell's body then reruns only when its own
         // focus, selection or merge highlight changes, not on every arrow key.
         let entries = entries
-        let focus = page == state.currentPage && state.openFolder == nil ? state.focusIndex : nil
+        // By ID: `focusIndex` counts the page's items, but during a drag the cells leave out the
+        // dragged ones and hold a gap, so their positions no longer match it.
+        let focus = page == state.currentPage && state.openFolder == nil
+            ? state.focusIndex.flatMap { state.grid.pages[safe: page]?.items[safe: $0]?.id } : nil
         let selection = state.selection
         let mergeTarget = state.drag.mergeTarget
         let editing = state.editing
         ZStack(alignment: .topLeading) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 if let item = entry.item {
-                    ItemCell(item: item, iconSize: icon, selected: selection.contains(item.id), focused: focus == index,
+                    ItemCell(item: item, iconSize: icon, selected: selection.contains(item.id), focused: focus == item.id,
                              mergeTarget: mergeTarget == item.id, editing: editing)
                         .accessibilityFocused($voiceOverFocus, equals: item.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
@@ -479,8 +482,8 @@ struct PageView: View {
         .environment(\.gridJiggles, page == state.currentPage)
         // VoiceOver follows the keyboard focus, also onto a page drawn afresh with focus on it
         // (⌘4, End, a page dot further away, a search result revealed).
-        .onChange(of: focus, initial: true) { _, i in
-            if let i, entries.indices.contains(i) { voiceOverFocus = entries[i].id }
+        .onChange(of: focus, initial: true) { _, id in
+            if let id { voiceOverFocus = id }
         }
         // And the keyboard focus follows VoiceOver, so ⌫, Return or Space act on the item it
         // reads out, not on one the focus ring was left on.
@@ -1036,13 +1039,14 @@ struct FolderPageContent: View {
         }
         let start = state.folderPage * perPage
         let visible = Array(entries.enumerated()).filter { $0.offset >= start && $0.offset < start + perPage }
-        let focus = state.focusIndex
+        // By ID, as on a page: a drag leaves out the dragged members and adds a gap.
+        let focus = state.focusIndex.flatMap { folder.items[safe: $0]?.id }
         let selection = state.selection
         let editing = state.editing
         return ZStack(alignment: .topLeading) {
             ForEach(visible, id: \.element.id) { offset, entry in
                 if let member = entry.member {
-                    FolderItemCell(member: member, iconSize: icon, selected: selection.contains(member.id), focused: focus == offset, editing: editing)
+                    FolderItemCell(member: member, iconSize: icon, selected: selection.contains(member.id), focused: focus == member.id, editing: editing)
                         .accessibilityFocused($voiceOverFocus, equals: member.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(offset - start))
@@ -1052,8 +1056,8 @@ struct FolderPageContent: View {
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         // VoiceOver follows the keyboard focus, also into a folder opened with focus in it.
-        .onChange(of: focus, initial: true) { _, i in
-            if let i, entries.indices.contains(i), let member = entries[i].member { voiceOverFocus = member.id }
+        .onChange(of: focus, initial: true) { _, id in
+            if let id { voiceOverFocus = id }
         }
         .onChange(of: voiceOverFocus) { _, id in
             guard let id, state.openFolderID == folder.id, !state.drag.active,

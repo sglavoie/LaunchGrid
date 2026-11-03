@@ -313,9 +313,14 @@ public enum LaunchpadImporter {
             // A page fuller than this grid holds splits into several, so its overflow doesn't
             // spill onto the next imported page and shift every page after it.
             let capacity = grid.capacity
-            grid.pages = pageRows.flatMap { row in
+            grid.pages = pageRows.flatMap { row -> [Page] in
                 let items = pageItems(row.id)
-                if items.isEmpty { return [Page(title: groupTitles[row.id])] }
+                // An empty page without a title isn't one to keep: Apple's database has an empty
+                // holding page beside the real ones, which would open the grid on a blank page.
+                if items.isEmpty {
+                    guard let title = groupTitles[row.id], !title.isEmpty else { return [] }
+                    return [Page(title: title)]
+                }
                 return stride(from: 0, to: items.count, by: capacity).map {
                     Page(title: groupTitles[row.id], items: Array(items[$0..<min($0 + capacity, items.count)]))
                 }

@@ -479,8 +479,16 @@ import Testing
             "zmodload zsh/system; sysread {query} < /dev/null",
             "[ -t {query} ] && echo tty", "test -t \"{query}\"",
             // A format holding `{query}` can gain a `%d` that makes the arguments after it numbers.
-            "printf \"{query}\\n\" {query}", "printf 'Found {query}: %s\\n' \"{query}\"",
+            "printf 'Found {query}: %s\\n' \"{query}\"",
             "printf -v out '{query}' {query}", "print -f '{query}' {query}", "print -rf {query} {query}",
+            // Builtins that exit loops or the shell evaluate their count as arithmetic.
+            "for i in 1; do break {query}; done", "while true; do continue \"{query}\"; done", "logout {query}", "bye {query}",
+            // Builtins given a variable's name, or a format that names one.
+            "getln {query}", "getln -A {query}", "private {query}", "private -i x={query}",
+            "zmodload zsh/system; syserror -e {query} 1", "zmodload zsh/system; sysopen -r -u {query} /dev/null",
+            "zstyle -s :x s {query}", "zstyle -e :x s {query}", "zmodload zsh/zutil; zformat -f {query} x",
+            // Prompt escapes, which run `$(…)` with promptsubst, set in a startup file.
+            "print -P {query}", "print -rP -- {query}",
         ]
         let dir = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -530,15 +538,73 @@ import Testing
         }
     }
 
+    /// zsh reads options from a quoted word too, until `--` or a word that isn't one: `{query}`
+    /// where print, set and the like still read options could start `-vname[$(…)]`, which
+    /// assigns to that name and runs the subscript. After `--`, or after an argument, it's text.
+    @Test func placeholdersWhereBuiltinsReadOptionsAreRefused() async throws {
+        let dir = try temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("ran")
+        let refused = [
+            "print {query}", "print -r {query} | pbcopy", "print -n {query}", "print -l {query} | sort",
+            "noglob print {query}", "print {query} > /dev/null", "print -f '%s' {query}", "print -{query}",
+            "builtin print \"{query}\"", "set {query}", "set -x {query}", "set +x '{query}'", "printf {query}",
+            "zmodload zsh/datetime; strftime {query} 0", "zmodload zsh/stat; zstat {query} /",
+            "zmodload zsh/system; syserror {query}", "zstyle {query} s v", "printf \"{query}\\n\" {query}",
+        ]
+        let payloads = ["-vpath[$(touch \(ActionRunner.shellQuoted(marker.path)))]",
+                        "-Apath[$(touch \(ActionRunner.shellQuoted(marker.path)))]"]
+        for template in refused {
+            for payload in payloads {
+                #expect(throws: ActionRunner.Failure.placeholderAsOption, "\(template)") {
+                    try ActionRunner.plan(shell(template), argument: payload)
+                }
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [ActionRunner.Failure.placeholderAsOption.message], "\(template)")
+        }
+
+        let runner = ActionRunner()
+        let accepted = [
+            "print -r -- {query}", "print -rn - {query}", "print x{query} | cut -c2-", "print -r -- x | read -r _; print -r -- {query}",
+            "set -- {query}; print -r -- \"$1\"", "set -A a {query}; print -r -- \"$a[1]\"",
+            "printf '%s\\n' {query}", "print -r -- {query} | tail -n 1", "echo -E -- x >/dev/null; printf '%s\\n' {query}",
+        ]
+        for template in accepted {
+            for payload in payloads {
+                let plan = try ActionRunner.plan(shell("cd \(ActionRunner.shellQuoted(dir.path)); " + template), argument: payload)
+                guard case .code(let job) = plan else { Issue.record("not code: \(template)"); continue }
+                let result = await runner.runToEnd(job)
+                #expect(result.output.trimmingCharacters(in: .newlines) == payload, "\(template): \(result.errorOutput)")
+                #expect(!FileManager.default.fileExists(atPath: marker.path), "\(template) ran it")
+            }
+        }
+    }
+
+    /// Variables zsh runs as code later: functions and aliases by name, and PS4 with
+    /// promptsubst. Assigning to them anywhere in a command that holds `{query}` is refused.
+    @Test func placeholdersStoredAsCodeAreRefused() throws {
+        for template in ["functions[f]={query}; f", "x={query}; functions[f]=$x; f", "aliases[x]={query}; eval x",
+                         "galiases[g]=\"{query}\"", "PS4={query}; set -x; true", "echo {query}; PROMPT4=x"] {
+            #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {
+                try ActionRunner.plan(shell(template), argument: "$(touch /nonexistent/x)")
+            }
+        }
+    }
+
     /// zsh evaluates a variable's value when arithmetic reads it, by name or expanded, so a
     /// variable holding what's typed is refused there as `{query}` itself is.
     @Test func variablesHoldingThePlaceholderAreRefusedInArithmetic() throws {
         let refused = [
             "n={query}; (( n > 3 )) && echo big", "n={query}; open \"https://x/p/$((n + 1))\"",
             "n={query}; [[ $n -gt 3 ]]", "set -- {query}; echo $(( $1 * 2 ))",
-            "n=\"{query}\"; m=$n; (( m ))", "read n <<< {query}; (( n ))", "print {query} | read n; let n+1",
+            "n=\"{query}\"; m=$n; (( m ))", "read n <<< {query}; (( n ))", "print -r -- {query} | read n; let n+1",
             "for n in {query}; do echo $[n]; done", "n={query}; echo $a[n]", "n={query}; printf '%d\\n' \"$n\"",
             "f() { return $(( $1 )) }; f {query}", "n={query}; exit $n",
+            "n={query}; for i in 1; do break $n; done", "n={query}; while true; do continue \"$n\"; done",
         ]
         for template in refused {
             #expect(throws: ActionRunner.Failure.placeholderInArithmeticVariable, "\(template)") {
