@@ -429,6 +429,10 @@ import Testing
             "let x=$(printf %s {query} # note\n)", "let x=\"$(true; printf %s {query})\"",
             "typeset -i n; n={query}", "integer n; n=\"{query}\"", "n={query}; local -i n",
             "typeset -i n; n+={query}", "SECONDS={query}", "HISTSIZE=\"{query}\" true", "export UID={query}",
+            // Builtins given a variable's name.
+            "[ -v {query} ] && echo set", "test -v {query}", "getopts ab {query}", "set -A {query} x",
+            "zmodload zsh/datetime; strftime -s {query} %Y 0", "zmodload zsh/stat; zstat -A {query} /",
+            "zmodload zsh/system; sysread {query} < /dev/null",
         ]
         let dir = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -456,6 +460,8 @@ import Testing
             "let n=1; printf '[%s]' {query}",
             "typeset -i n=1; m={query}; printf '[%s]' \"$m\"",
             "s={query}; printf '[%s]' \"$s\"",
+            "[ -n {query} ] && printf '[%s]' {query}", "test -z {query} || printf '[%s]' {query}",
+            "set -- {query}; printf '[%s]' \"$1\"", "set -A a {query}; printf '[%s]' \"$a[1]\"",
         ]
         let runner = ActionRunner()
         for template in accepted {

@@ -38,7 +38,7 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't go inside a [[ … ]] test that compares numbers (-eq, -lt and the like) or checks -v or -t, where the shell would run what's typed as code. Compare it as text with == instead."))
         }
         static var placeholderInBuiltin: Failure {
-            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset or vared, a variable name for typeset, declare, local or export, or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
+            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset, vared, getopts or sysread, a variable name for typeset, declare, local or export (or after [ -v, test -v, set -A, strftime -s or zstat -A), or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
         }
         static var placeholderInCode: Failure {
             Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
@@ -877,8 +877,18 @@ final class ActionRunner {
         /// or a subscript in a variable name runs `$(…)` in what's typed.
         private func evaluates(_ word: String, command: String) -> Bool {
             switch command {
-            case "let", "integer", "float", "repeat", "shift", "exit", "return", "read", "unset", "vared":
+            case "let", "integer", "float", "repeat", "shift", "exit", "return", "read", "unset", "vared",
+                 "getopts", "sysread":
                 return true
+            // A variable's name: `[ -v name ]`, `set -A name …`, `strftime -s name …`, `zstat -A name …`.
+            case "[", "test":
+                return previous == "-v"
+            case "set":
+                return previous == "-A" || previous == "+A"
+            case "strftime":
+                return previous == "-s"
+            case "zstat", "stat":
+                return previous == "-A" || previous == "-H"
             case "typeset", "declare", "local", "export", "readonly":
                 // A name (`typeset {query}`), or a number (`typeset -i x={query}`); a plain value is text.
                 if numericTypes { return true }
