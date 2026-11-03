@@ -588,10 +588,16 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
     @Test func rejectsOutOfRangeSize() {
         let data = Data(#"{"version": 1, "rows": 51, "columns": 7, "pages": []}"#.utf8)
         #expect(throws: GridFileError.self) { try GridStore.decode(data) }
+        // Below 1 too, though the in-memory grid raises its size to 1.
+        for size in [#""rows": 0, "columns": 7"#, #""rows": 5, "columns": -3"#] {
+            let small = Data(#"{"version": 1, \#(size), "pages": [{"items": [{"type": "app", "path": "/Applications/A.app"}]}]}"#.utf8)
+            #expect(throws: GridFileError.self, "\(size)") { try GridStore.decode(small) }
+        }
     }
 
-    @Test func zeroSizeIsClampedToOne() throws {
-        let g = try GridStore.decode(Data(#"{"version": 1, "rows": 0, "columns": -3, "pages": []}"#.utf8))
+    /// In memory only: a file with that size is damaged and rejected (`rejectsOutOfRangeSize`).
+    @Test func zeroSizeIsClampedToOne() {
+        let g = Grid(rows: 0, columns: -3)
         #expect(g.rows == 1 && g.columns == 1)
     }
 

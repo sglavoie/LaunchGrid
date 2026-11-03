@@ -526,9 +526,17 @@ extension Grid {
         guard c.contains(.pages), try !c.decodeNil(forKey: .pages) else {
             throw DecodingError.keyNotFound(CodingKeys.pages, .init(codingPath: c.codingPath, debugDescription: "No pages"))
         }
+        let rows = (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? 5
+        let columns = (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7
+        // `init` raises a size below 1 to 1, which GridStore's range check could then never
+        // see: a damaged size would load as a 1×1 grid and be saved over the layout.
+        guard rows >= 1, columns >= 1 else {
+            throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath,
+                                                    debugDescription: "grid size \(rows)×\(columns) is out of range"))
+        }
         self.init(
-            rows: (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? 5,
-            columns: (try? c.decodeIfPresent(Int.self, forKey: .columns)) ?? 7,
+            rows: rows,
+            columns: columns,
             pages: try c.decodeLossily(Page.self, forKey: .pages) ?? [],
             removedBundleIDs: Set(try c.decodeLossily(String.self, forKey: .removedBundleIDs, countingLayoutEntries: false) ?? []),
             // Keep readable restoration records even when another one is damaged.
