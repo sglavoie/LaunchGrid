@@ -129,6 +129,7 @@ final class ActionEditorModel {
         case .userScript(let file, let arguments, let mode):
             (scriptName, runMode) = (file, mode)
             argumentsText = arguments.joined(separator: "\n")
+            loadedArguments = (arguments, argumentsText)
         }
         switch action.icon {
         case action.kind.defaultIcon: iconChoice = .automatic
@@ -145,6 +146,9 @@ final class ActionEditorModel {
 
     /// The fields as first filled in, for `hasChanges`.
     @ObservationIgnored private var initialFields: [String] = []
+    /// The script's arguments as loaded, and the text shown for them. One line per argument
+    /// can't show an empty one or one with a line break; they're kept unless the text changes.
+    @ObservationIgnored private var loadedArguments: (list: [String], text: String)?
 
     /// Everything the person can change, as text, to compare.
     private var fields: [String] {
@@ -165,9 +169,11 @@ final class ActionEditorModel {
         keywordsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
     }
 
-    /// The script's arguments: one per line, blank lines left out.
+    /// The script's arguments: one per line (any line break, CRLF too), blank lines left out;
+    /// as loaded while their text is unchanged.
     var arguments: [String] {
-        argumentsText.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        if let loadedArguments, argumentsText == loadedArguments.text { return loadedArguments.list }
+        return argumentsText.split(whereSeparator: \.isNewline).map(String.init)
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 

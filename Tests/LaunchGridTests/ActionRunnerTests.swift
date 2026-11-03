@@ -1035,6 +1035,15 @@ private final class FakeScriptTasks: @unchecked Sendable {
         #expect(reopened.argumentsText == "--name\n{query}")
     }
 
+    @Test func argumentsTheLinesCannotShowAreKeptUntilTheyAreEdited() {
+        let kind = ActionKind.userScript(fileName: "tag.sh", arguments: ["--sep", "", "two\nlines", "{query}"], runMode: .background)
+        let model = ActionEditorModel(action: Action(name: "Tag", kind: kind), pageID: nil, others: [])
+        model.fill("name", "Tagged")
+        #expect(model.draft?.kind == kind, "a name change leaves the arguments as they were")
+        model.argumentsText = "a\r\nb\rc\n\n"
+        #expect(model.draft?.kind == .userScript(fileName: "tag.sh", arguments: ["a", "b", "c"], runMode: .background))
+    }
+
     #if APP_STORE
     @Test func aCommandCannotBeMadeButOneInTheLayoutIsKept() {
         let model = ActionEditorModel(action: nil, pageID: nil, others: [])
