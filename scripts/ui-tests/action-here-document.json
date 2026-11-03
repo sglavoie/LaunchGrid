@@ -1,0 +1,50 @@
+{
+  "name": "A backslash at a line's end inside a quoted here-document runs as written",
+  "fixture": {
+    "rows": 3,
+    "columns": 4,
+    "pages": [
+      [
+        "Delta",
+        "Heredoc"
+      ]
+    ],
+    "pageTitles": [
+      ""
+    ],
+    "folders": {},
+    "actions": [
+      {
+        "name": "Heredoc",
+        "kind": {
+          "type": "shell",
+          "command": "cat <<'EOF'\nC:\\\nEOF\necho done"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "run": "show"
+    },
+    {
+      "expect": {
+        "keyWindow": true,
+        "pagerReady": true
+      }
+    },
+    {
+      "run": "runaction:Heredoc"
+    },
+    {
+      "expect": {
+        "lastRuns": {
+          "Heredoc": "exit:0"
+        },
+        "lastOutput": {
+          "Heredoc": "C:\\\ndone\n"
+        }
+      }
+    }
+  ]
+}

@@ -554,6 +554,19 @@ import Testing
         _ = model.errors
     }
 
+    /// After `<<` the shell reads a here-document body, where a quoted delimiter keeps each
+    /// backslash-newline as typed: the command runs as written.
+    @Test func backslashNewlinesInHereDocumentsAreKept() async throws {
+        for template in ["cat <<'EOF'\nC:\\\nEOF\necho done", "cat <<EOF\nls \\\n  -la\nEOF"] {
+            #expect(try ActionRunner.substitutingArgument(in: template) == template)
+        }
+        let result = try await run("cat <<'EOF'\nC:\\\nEOF\necho done")
+        #expect(result.ending == .exited(0))
+        #expect(result.output == "C:\\\ndone\n")
+        // Before the `<<`, continuations are still joined.
+        #expect(try ActionRunner.substitutingArgument(in: "ec\\\nho {query} <<EOF\nx\nEOF") == "echo \"${LAUNCHGRID_QUERY}\" <<EOF\nx\nEOF")
+    }
+
     /// Runs a terminal command file the way the terminal would, through zsh.
     private func runZsh(_ file: URL) throws -> (status: Int32, output: String) {
         let process = Process()

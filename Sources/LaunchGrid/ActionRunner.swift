@@ -423,7 +423,9 @@ final class ActionRunner {
         }
         while i < text.count {
             let context = stack.last ?? .top
-            if text[i] == "\\", at(1) == "\n", ![.single, .ansiSingle, .comment].contains(context) {
+            // Not after `<<`: a here-document whose delimiter is quoted keeps them as written, and
+            // the shell joins the rest itself.
+            if text[i] == "\\", at(1) == "\n", !afterHereDocument, ![.single, .ansiSingle, .comment].contains(context) {
                 text.removeSubrange(i...(i + 1))
                 changed = true
                 continue
