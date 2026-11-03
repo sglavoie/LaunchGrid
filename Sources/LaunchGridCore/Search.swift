@@ -155,6 +155,17 @@ public enum Search {
         // Composed first: a name in decomposed form (from an HFS+ disk or a zip) keeps
         // conjoining Hangul letters that no typed query would equal.
         var s = s.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        // Half-width katakana's sound marks are characters of their own (ﾊﾟ), which width
+        // folding leaves apart: as combining marks they join their letter (パ), as typed.
+        if s.unicodeScalars.contains(where: { $0.value == 0xFF9E || $0.value == 0xFF9F }) {
+            s = String(String.UnicodeScalarView(s.unicodeScalars.map {
+                switch $0.value {
+                case 0xFF9E: "\u{3099}"
+                case 0xFF9F: "\u{309A}"
+                default: $0
+                }
+            })).precomposedStringWithCanonicalMapping
+        }
         // Letters the folding leaves alone, written as their plain-letter spelling.
         if s.unicodeScalars.contains(where: { letterSpellings[$0] != nil }) {
             s = String(String.UnicodeScalarView(s.unicodeScalars.flatMap { letterSpellings[$0].map { Array($0.unicodeScalars) } ?? [$0] }))

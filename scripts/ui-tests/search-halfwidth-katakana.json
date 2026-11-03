@@ -1,0 +1,49 @@
+{
+  "name": "Half-width katakana with sound marks is found by the full-width spelling, and the reverse",
+  "fixture": {
+    "rows": 3,
+    "columns": 4,
+    "pages": [
+      [
+        "ﾊﾟｽﾜｰﾄﾞ",
+        "バンド",
+        "Delta"
+      ]
+    ],
+    "pageTitles": [
+      ""
+    ],
+    "folders": {}
+  },
+  "steps": [
+    {
+      "run": "show"
+    },
+    {
+      "expect": {
+        "keyWindow": true,
+        "pagerReady": true
+      }
+    },
+    {
+      "run": "search:パスワード"
+    },
+    {
+      "expect": {
+        "searchResults": [
+          "ﾊﾟｽﾜｰﾄﾞ"
+        ]
+      }
+    },
+    {
+      "run": "search:ﾊﾞﾝﾄﾞ"
+    },
+    {
+      "expect": {
+        "searchResults": [
+          "バンド"
+        ]
+      }
+    }
+  ]
+}

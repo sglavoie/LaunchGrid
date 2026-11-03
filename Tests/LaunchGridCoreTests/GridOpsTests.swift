@@ -967,6 +967,11 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(Search.score("Google Chrome", query: "gc") != nil, "initials, not the subsequence")
         #expect(Search.score("Mail", query: "ml") == nil, "two ASCII letters still aren't a subsequence")
         #expect(Search.score("カメラ", query: "かめら") == 1000)
+        // Half-width katakana's sound marks join their letter, as the full-width spelling has them.
+        #expect(Search.score("ﾊﾟｽﾜｰﾄﾞ", query: "パスワード") == 1000)
+        #expect(Search.score("パスワード", query: "ﾊﾟｽﾜｰﾄﾞ") == 1000)
+        #expect(Search.score("ﾊﾞﾝﾄﾞ", query: "ばんど") == 1000)
+        #expect(Search.normalize("ﾊﾟｽﾜｰﾄﾞ").unicodeScalars.elementsEqual("パスワード".unicodeScalars))
         #expect(Search.score("Æther", query: "aeth") != nil)
         #expect(Search.score("Wi-Fi Explorer", query: "-") == nil)
         #expect(Search.score("Wi-Fi Explorer", query: " - ") == nil)
