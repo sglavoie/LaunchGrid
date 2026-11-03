@@ -40,6 +40,9 @@ final class ActionRunner {
         static var placeholderInBuiltin: Failure {
             Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset, vared, getopts or sysread, a variable name for typeset, declare, local or export (or after [ -v, test -v, set -A, strftime -s or zstat -A), or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
         }
+        static var placeholderInArithmeticVariable: Failure {
+            Failure(message: String(localized: "A variable that holds {query} (n={query}, read n, for n in {query}, or $1 and the like) can't be used in $((…)), ((…)), $[…], a subscript, let, a [[ … ]] test that compares numbers or printf %d, where zsh would run what's typed as code. Compare or print it as text instead."))
+        }
         static var placeholderInCode: Failure {
             Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, in a tmux or screen command, after vim -c or git -c, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
         }
@@ -607,6 +610,8 @@ final class ActionRunner {
         }
         // zsh evaluates a value given to a variable that holds a number as arithmetic, quoted too.
         if !assignedNames.isDisjoint(with: numericNames) { throw Failure.placeholderInBuiltin }
+        // Nor anywhere it's read as a number: `n={query}; (( n > 3 ))`, `set -- {query}; $(( $1 ))`.
+        if placeholderSoFar, ActionRunner.feedsArithmetic(String(out)) { throw Failure.placeholderInArithmeticVariable }
         return (String(out), changed)
     }
 
@@ -629,6 +634,11 @@ final class ActionRunner {
         var assigns = false
         /// `printf` (or `print -f`) with a format that evaluates its arguments as numbers.
         var numericFormat = false
+        /// `printf`'s format (or `print -f`'s): whether it was read, and whether the next word is
+        /// it (after `print -f`) or an option's argument (after `printf -v`).
+        var formatSeen = false
+        var formatNext = false
+        var formatOptionArgument = false
         /// `typeset -i` and the like: values are evaluated as numbers.
         var numericTypes = false
         /// After `sed` or `awk`: how many of the next words that aren't options may be its program,
@@ -884,6 +894,25 @@ final class ActionRunner {
                     assigns = true
                 }
                 if ActionRunner.hasNumericConversion(word) { numericFormat = true }
+                // `{query}` in the format can add its own `%d`, making the arguments after it numbers.
+                if !formatSeen {
+                    var isFormat = false
+                    if formatNext {
+                        formatNext = false
+                        isFormat = true
+                    } else if formatOptionArgument {
+                        formatOptionArgument = false
+                    } else if command == "printf" {
+                        if word == "-v" { formatOptionArgument = true }
+                        else if !(word.hasPrefix("-") && word.count > 1) { isFormat = true }
+                    } else if word.hasPrefix("-"), !word.hasPrefix("--"), word.hasSuffix("f") {
+                        formatNext = true
+                    }
+                    if isFormat {
+                        formatSeen = true
+                        if hasPlaceholder { numericFormat = true }
+                    }
+                }
             case "typeset", "declare", "local", "export", "readonly":
                 if word.hasPrefix("-") || word.hasPrefix("+"), word.contains(where: { "iEF".contains($0) }) { numericTypes = true }
             default: break
@@ -899,7 +928,7 @@ final class ActionRunner {
                 return true
             // A variable's name: `[ -v name ]`, `set -A name …`, `strftime -s name …`, `zstat -A name …`.
             case "[", "test":
-                return previous == "-v"
+                return previous == "-v" || previous == "-t"
             case "set":
                 return previous == "-A" || previous == "+A"
             case "strftime":
@@ -1040,6 +1069,77 @@ final class ActionRunner {
     /// `sed 's/…/…/'`, `awk '{…}'`, which can run commands (`s/…/…/e`, `system(…)`).
     nonisolated static func takesProgramAsArgument(_ word: String) -> Bool {
         ["sed", "gsed", "awk", "gawk", "mawk", "nawk"].contains(programName(word))
+    }
+
+    /// Whether `text`, a command with `{query}` already swapped for `"${LAUNCHGRID_QUERY}"`, reads
+    /// a variable holding what's typed as a number, where zsh evaluates its value as arithmetic
+    /// and runs a `$(…)` in a subscript of it. A variable holds it when assigned from one that
+    /// does (`n={query}`, `m=$n`), read (`read n`) or looped over (`for n in {query}`); the
+    /// positional parameters (`set -- {query}`, a function's arguments) always might.
+    /// Approximate on purpose: a name that only looks read as a number is refused too.
+    nonisolated static func feedsArithmetic(_ text: String) -> Bool {
+        func matches(_ pattern: String, in text: String) -> [[String]] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let ns = text as NSString
+            return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { m in
+                (0..<m.numberOfRanges).map { m.range(at: $0).location == NSNotFound ? "" : ns.substring(with: m.range(at: $0)) }
+            }
+        }
+        /// The names an expression reads: bare (`n`, as arithmetic reads them) or expanded
+        /// (`$n`, `${n}`, `$1`, `$@`), but not a length (`${#n}`), which is a number anyway.
+        func names(in expression: String, bare: Bool) -> Set<String> {
+            let lengthless = expression.replacingOccurrences(of: #"\$\{?#[A-Za-z_0-9@*]+\}?"#, with: " ", options: .regularExpression)
+            var found = Set(matches(#"\$\{?[=~^+]*([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*])"#, in: lengthless).map { $0[1] })
+            if bare { found.formUnion(matches(#"[A-Za-z_][A-Za-z_0-9]*"#, in: lengthless).map { $0[0] }) }
+            return found
+        }
+        var held: Set<String> = ["LAUNCHGRID_QUERY", "argv", "@", "*"]
+        held.formUnion((0...9).map(String.init))
+        // `read n`, `read -A a`, `sysread n`: what's piped in.
+        for m in matches(#"(?:^|[\s;&|({])(?:read|sysread|vared)((?:[ \t]+[^\s;&|)]+)*)"#, in: text) {
+            for word in m[1].split(whereSeparator: { $0 == " " || $0 == "\t" }) {
+                let name = word.split(separator: "?").first.map(String.init) ?? ""
+                if name.range(of: #"^[A-Za-z_][A-Za-z_0-9]*$"#, options: .regularExpression) != nil { held.insert(name) }
+            }
+        }
+        let assignments = matches(#"(?:^|[\s;&|({])([A-Za-z_][A-Za-z_0-9]*)(?:\[[^\]]*\])?\+?=(\([^)]*\)|"(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|)]*)"#, in: text)
+            .map { ($0[1], $0[2]) }
+            + matches(#"\bfor[ \t]+([A-Za-z_][A-Za-z_0-9]*)(?:[ \t]+in\b([^;\n]*)|[ \t]*\(([^)]*)\))"#, in: text)
+            .map { ($0[1], $0[2] + " " + $0[3]) }
+        var grew = true
+        while grew {
+            grew = false
+            for (name, value) in assignments where !held.contains(name) && !names(in: value, bare: false).isDisjoint(with: held) {
+                held.insert(name)
+                grew = true
+            }
+        }
+        var read: Set<String> = []
+        // `((…))`, `$((…))`, `$[…]` and subscripts read names as numbers.
+        for m in matches(#"\(\(([\s\S]*?)\)\)"#, in: text) + matches(#"\$\[([^\]]*)\]"#, in: text)
+            + matches(#"[A-Za-z_0-9}@*]\[([^\]]*)\]"#, in: text) {
+            read.formUnion(names(in: m[1], bare: true))
+        }
+        // `[[ … ]]` comparing numbers.
+        for m in matches(#"\[\[([\s\S]*?)\]\]"#, in: text)
+        where m[1].range(of: #"(^|\s)-(eq|ne|lt|le|gt|ge|t|v)(\s|$)"#, options: .regularExpression) != nil {
+            read.formUnion(names(in: m[1], bare: true))
+        }
+        // Builtins that evaluate their arguments, and printf with a number format.
+        for m in matches(#"(?:^|[\s;&|({])(let|integer|float|repeat|shift|exit|return|printf)\b([^;&|\n]*)"#, in: text) {
+            if m[1] == "printf" {
+                guard hasNumericConversion(m[2]) else { continue }
+                let arguments = m[2].replacingOccurrences(of: #"\\.|%[-+ 0#.*0-9]*[A-Za-z]"#, with: " ", options: .regularExpression)
+                read.formUnion(names(in: arguments, bare: true))
+            } else if ["let", "integer", "float"].contains(m[1]) {
+                read.formUnion(names(in: m[2], bare: true))
+            } else {
+                // `repeat 2 echo …`: only the count.
+                let count = m[2].split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? ""
+                read.formUnion(names(in: count, bare: true))
+            }
+        }
+        return !read.isDisjoint(with: held)
     }
 
     /// The commands that declare variables, with options that make them numbers.

@@ -923,6 +923,18 @@ func installed(_ name: String) -> InstalledApp {
         #expect(!state.hasGridFile)
     }
 
+    @Test func sizeChosenBeforeTheFirstLayoutIsSaved() throws {
+        let dir = TempDir.url
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = GridStore(url: dir.appendingPathComponent("grid.json"))
+        let state = AppState(prefs: testPreferences(), store: store)
+        state.resize(rows: 6, columns: 9)
+        #expect(state.saveNow())
+        let again = AppState(prefs: testPreferences(), store: store)
+        #expect(again.grid.rows == 6 && again.grid.columns == 9)
+        #expect(!again.hasGridFile, "the welcome window still comes up")
+    }
+
     @Test func corruptFileIsSetAside() throws {
         let state = try load("not json")
         #expect(state.loadProblem?.backup.lastPathComponent.hasPrefix("grid.corrupt-") == true)

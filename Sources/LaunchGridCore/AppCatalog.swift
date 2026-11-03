@@ -234,7 +234,7 @@ public enum AppScanner {
 
     static func read(appAt url: URL, info: [String: Any]) -> InstalledApp {
         let path = url.path
-        let bundleID = info["CFBundleIdentifier"] as? String
+        let bundleID = AppRef.usableBundleID(info["CFBundleIdentifier"] as? String)
         var name = FileManager.default.displayName(atPath: path)
         if name.lowercased().hasSuffix(".app") { name = String(name.dropLast(4)) }
         // Finder can append a lowercase extension to an uppercase bundle filename:

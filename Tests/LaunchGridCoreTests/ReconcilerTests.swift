@@ -1471,6 +1471,23 @@ func tempDir(_ prefix: String) -> URL {
         #expect(AppScanner.read(appAt: root.appendingPathComponent("Real.app"))?.bundleID == "t.real")
     }
 
+    @Test func blankBundleIDsCountAsMissing() throws {
+        let root = tempDir("scan")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try makeFakeApp("Blank.app", id: "t.blank", in: root)
+        let url = root.appendingPathComponent("Blank.app")
+        let plist: [String: Any] = ["CFBundleIdentifier": " ", "CFBundlePackageType": "APPL"]
+        try (plist as NSDictionary).write(to: url.appendingPathComponent("Contents/Info.plist"))
+        let app = try #require(AppScanner.read(appAt: url))
+        #expect(app.bundleID == nil)
+        #expect(app.key == app.path)
+        // A layout saved with an empty ID loads keyed by path as well.
+        let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","bundleID":"","path":"/Applications/X.app"}"#
+        let ref = try JSONDecoder().decode(AppRef.self, from: Data(json.utf8))
+        #expect(ref.bundleID == nil)
+        #expect(ref.key == "/Applications/X.app")
+    }
+
     @Test func readSeesAnUpdatedInfoPlist() throws {
         let root = tempDir("scan")
         defer { try? FileManager.default.removeItem(at: root) }

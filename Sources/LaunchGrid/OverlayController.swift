@@ -428,18 +428,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if Int(event.keyCode) == kVK_Escape, !composing { state.textEdit = nil; return nil }
             return event
         }
-        // While an input method composes, it has every key (Return commits, Esc cancels).
-        if textInput.hasMarkedText(), textInput.handle(event) { return nil }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let code = Int(event.keyCode)
         let cmd = mods.contains(.command)
-        // Mid-drag, only Esc (cancel) and ⌘1…9 (carry the items to a page) do anything.
+        // Mid-drag, only Esc (cancel) and ⌘1…9 (carry the items to a page) do anything, even
+        // while an input method composes: committing would start a search under the drag.
         if state.drag.active && code != kVK_Escape {
             if cmd, let digit = Int(Self.shortcutKey(event)), (1...9).contains(digit) {
                 state.dragGoToPage(digit - 1)
             }
             return nil
         }
+        // While an input method composes, it has every key (Return commits, Esc cancels).
+        if !state.drag.active, textInput.hasMarkedText(), textInput.handle(event) { return nil }
 
         switch code {
         case kVK_Escape:
@@ -631,7 +632,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func insertIntoSearch(_ text: String) {
-        guard !text.isEmpty else { return }
+        // Text arriving mid-drag would swap the pages under the dragged icon for results.
+        guard !text.isEmpty, !state.drag.active else { return }
         if state.query.isEmpty {
             state.folderBeforeSearch = state.openFolderID.map { ($0, state.folderPage) }
             state.openFolderID = nil

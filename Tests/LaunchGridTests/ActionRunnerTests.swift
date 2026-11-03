@@ -477,6 +477,10 @@ import Testing
             "[ -v {query} ] && echo set", "test -v {query}", "getopts ab {query}", "set -A {query} x",
             "zmodload zsh/datetime; strftime -s {query} %Y 0", "zmodload zsh/stat; zstat -A {query} /",
             "zmodload zsh/system; sysread {query} < /dev/null",
+            "[ -t {query} ] && echo tty", "test -t \"{query}\"",
+            // A format holding `{query}` can gain a `%d` that makes the arguments after it numbers.
+            "printf \"{query}\\n\" {query}", "printf 'Found {query}: %s\\n' \"{query}\"",
+            "printf -v out '{query}' {query}", "print -f '{query}' {query}", "print -rf {query} {query}",
         ]
         let dir = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -506,6 +510,10 @@ import Testing
             "s={query}; printf '[%s]' \"$s\"",
             "[ -n {query} ] && printf '[%s]' {query}", "test -z {query} || printf '[%s]' {query}",
             "set -- {query}; printf '[%s]' \"$1\"", "set -A a {query}; printf '[%s]' \"$a[1]\"",
+            "printf '[%s]' {query} {query} | head -c 0; printf '[%s]' {query}",
+            "n={query}; [[ $n == x ]]; printf '[%s]' \"$n\"",
+            "n={query}; printf '[%s]' \"$n\"; m=1; (( m > 0 ))",
+            "n={query}; (( ${#n} > 0 )) && printf '[%s]' \"$n\"",
         ]
         let runner = ActionRunner()
         for template in accepted {
@@ -519,6 +527,28 @@ import Testing
             let terminal = try runZsh(file)
             #expect(terminal.output == "[\(argument)]", "\(template) in a terminal")
             #expect(!FileManager.default.fileExists(atPath: marker.path), "\(template) ran it")
+        }
+    }
+
+    /// zsh evaluates a variable's value when arithmetic reads it, by name or expanded, so a
+    /// variable holding what's typed is refused there as `{query}` itself is.
+    @Test func variablesHoldingThePlaceholderAreRefusedInArithmetic() throws {
+        let refused = [
+            "n={query}; (( n > 3 )) && echo big", "n={query}; open \"https://x/p/$((n + 1))\"",
+            "n={query}; [[ $n -gt 3 ]]", "set -- {query}; echo $(( $1 * 2 ))",
+            "n=\"{query}\"; m=$n; (( m ))", "read n <<< {query}; (( n ))", "print {query} | read n; let n+1",
+            "for n in {query}; do echo $[n]; done", "n={query}; echo $a[n]", "n={query}; printf '%d\\n' \"$n\"",
+            "f() { return $(( $1 )) }; f {query}", "n={query}; exit $n",
+        ]
+        for template in refused {
+            #expect(throws: ActionRunner.Failure.placeholderInArithmeticVariable, "\(template)") {
+                try ActionRunner.plan(shell(template), argument: "path[$(touch /nonexistent/x)]")
+            }
+            let model = ActionEditorModel(action: nil, pageID: nil, others: [])
+            model.fill("name", "Refused")
+            model.fill("kind", "command")
+            model.fill("command", template)
+            #expect(model.errors == [ActionRunner.Failure.placeholderInArithmeticVariable.message], "\(template)")
         }
     }
 

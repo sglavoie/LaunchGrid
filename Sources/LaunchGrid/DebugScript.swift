@@ -71,6 +71,9 @@ enum DebugScript {
                 case "group": state.groupSelection()
                 case "folder":
                     if let f = state.grid.pages.flatMap(\.items).compactMap(\.folder).first { state.openFolder(f.id) }
+                case "fpage":
+                    // Shows the open folder's page N, as flipping to it does.
+                    if let n = Int(arg), n >= 0, n < state.shownFolderPageCount { state.folderPage = n }
                 case "focus": state.focusIndex = Int(arg) ?? 0
                 case "rename": if let item = state.currentItems.first { state.beginRename(item.id) }
                 case "renamesnap", "editsnap":

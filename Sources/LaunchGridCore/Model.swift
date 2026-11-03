@@ -159,6 +159,13 @@ public struct AppRef: Codable, Equatable, Identifiable, Sendable {
     /// Identity used for matching against installed apps: bundle ID first, path otherwise.
     public var key: String { bundleID ?? path }
 
+    /// nil for a missing or blank bundle ID: apps with an empty `CFBundleIdentifier`
+    /// would otherwise all share one key and be taken for copies of each other.
+    public static func usableBundleID(_ id: String?) -> String? {
+        guard let id, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return id
+    }
+
     public static func defaultName(forPath path: String) -> String {
         let last = (path as NSString).lastPathComponent
         return last.lowercased().hasSuffix(".app") ? String(last.dropLast(4)) : last
@@ -594,7 +601,7 @@ extension AppRef {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             id: (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID(),
-            bundleID: try? c.decodeIfPresent(String.self, forKey: .bundleID),
+            bundleID: AppRef.usableBundleID(try? c.decodeIfPresent(String.self, forKey: .bundleID)),
             path: try c.decode(String.self, forKey: .path),
             name: try? c.decodeIfPresent(String.self, forKey: .name),
             displayName: try? c.decodeIfPresent(String.self, forKey: .displayName)

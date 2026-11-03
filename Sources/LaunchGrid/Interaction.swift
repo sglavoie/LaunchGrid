@@ -341,6 +341,9 @@ extension AppState {
         let before = siblings.prefix { $0 != hit }.filter { !ids.contains($0) }.count
         drag.gap = before
         withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.8))) { drag.active = true }
+        // Dragging several apps out of a folder can leave fewer pages than it had: don't stay
+        // on one that is no longer shown (blank, with no page dot lit).
+        if openFolder != nil { folderPage = min(folderPage, max(shownFolderPageCount - 1, 0)) }
         // In the common modes: in the default mode alone it doesn't fire while the run loop
         // is in another (event tracking, a modal panel), and no dwell would ever complete.
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
