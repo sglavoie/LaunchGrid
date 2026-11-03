@@ -1,0 +1,89 @@
+{
+  "name": "Dragging two of a folder's apps doesn't flip to a page its remaining apps don't fill",
+  "fixture": {
+    "rows": 3,
+    "columns": 4,
+    "pages": [
+      [
+        "Tools",
+        "Delta"
+      ]
+    ],
+    "pageTitles": [
+      ""
+    ],
+    "folders": {
+      "Tools": [
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+        "A5",
+        "A6",
+        "A7",
+        "A8",
+        "A9"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "run": "show"
+    },
+    {
+      "expect": {
+        "keyWindow": true,
+        "pagerReady": true
+      }
+    },
+    {
+      "run": "windowsize:718,534"
+    },
+    {
+      "run": "keys:cmd+e@14"
+    },
+    {
+      "run": "click:0"
+    },
+    {
+      "expect": {
+        "editing": true,
+        "folder": "Tools",
+        "folderReady": true
+      }
+    },
+    {
+      "run": "fselect:0,1"
+    },
+    {
+      "expect": {
+        "selection": [
+          "A1",
+          "A2"
+        ]
+      }
+    },
+    {
+      "run": "fedge:0,0"
+    },
+    {
+      "expect": {
+        "dragging": false,
+        "folder": "Tools",
+        "folders": {
+          "Tools": [
+            "A1",
+            "A2",
+            "A3",
+            "A4",
+            "A5",
+            "A6",
+            "A7",
+            "A8",
+            "A9"
+          ]
+        }
+      }
+    }
+  ]
+}

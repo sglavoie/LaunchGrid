@@ -612,6 +612,34 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.swipeOffset == 0)
     }
 
+    /// Dragging two of a folder's apps leaves one page where its items filled two: holding at
+    /// the edge doesn't flip to an empty page, and the dots show the one page.
+    @Test func draggingSeveralFolderAppsCountsThePagesTheyLeave() {
+        let state = makeState()
+        let perPage = FolderLayout.perPage(Grid(rows: 5, columns: 7))
+        let refs = (1...(perPage + 1)).map { installed("App\($0)").makeRef() }
+        let folder = Folder(name: "F", apps: refs)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: [.folder(folder)])]))
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        state.drag.folderGridFrame = CGRect(x: 0, y: 0, width: 700, height: 400)
+        state.drag.folderPanelFrame = CGRect(x: 0, y: 0, width: 700, height: 440)
+        state.openFolder(folder.id)
+        state.editing = true
+        state.toggleSelection(refs[0].id)
+        state.toggleSelection(refs[1].id)
+        #expect(state.shownFolderPageCount == 2)
+        let start = state.iconCenter(0, inFolder: true)
+        let edge = CGPoint(x: 695, y: start.y)
+        state.dragChanged(start: start, location: edge)
+        #expect(state.drag.ids.count == 2)
+        #expect(state.shownFolderPageCount == 1)
+        state.drag.edgeSince = .distantPast
+        state.drag.timer?.fire()
+        #expect(state.folderPage == 0, "no second page to flip to")
+        state.dragEnded(start: start, location: edge, predicted: edge)
+        #expect(state.shownFolderPageCount == 2)
+    }
+
     @Test func draggingAcrossFolderPagesKeepsKeyboardFocusVisible() {
         let state = makeState()
         let refs = (1...30).map { installed("App\($0)").makeRef() }

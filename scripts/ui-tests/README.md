@@ -62,7 +62,7 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | `windowsize:718,534` | Resize the overlay window in points to cover compact layouts |
 | `keys:cmd+e@14`, `keys:125`, `keys: @49` | Post keyboard events: edit mode, Down, Space |
 | `click:0`, `press:0`, `fclick:0`, `fpress:0` | Click or long-press a page cell, or a cell of the open folder |
-| `drag:0,2`, `fdrag:1,1`, `finside:0,2`, `merge:0,1`, `edge:0,0` | Send mouse events through the gesture path |
+| `drag:0,2`, `fdrag:1,1`, `finside:0,2`, `merge:0,1`, `edge:0,0`, `fedge:0,0` | Send mouse events through the gesture path; `edge` and `fedge` dwell at the page or open folder's right edge first |
 | `hold:0,2`, `fhold:1,1`, `release` | Hold/release a mouse drag; Escape can cancel it |
 | `page:1`, `folder`, `focus:0`, `edit`, `select:0,1`, `fselect:0` | Set up a specific interaction context |
 | `search:beta`, `type:beta` | Set search directly or insert text at its caret |

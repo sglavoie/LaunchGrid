@@ -96,7 +96,7 @@ enum DebugUITest {
     // Regression scenarios use this subset of the demo driver's commands.
     private static let commands: Set<String> = [
         "show", "hide", "keys", "click", "fclick", "fpress", "press", "drag", "merge", "edge",
-        "fdrag", "finside", "fhold", "hold", "release", "page", "folder", "focus",
+        "fdrag", "fedge", "finside", "fhold", "hold", "release", "page", "folder", "focus",
         "edit", "select", "fselect", "search", "type", "group", "undo", "redo",
         "deletepage", "pagemenuhold", "menuhold", "menurun", "fakeinstall", "pagetitle",
         "movetopage", "titleedit", "autoadd", "windowsize", "addaction", "runaction",

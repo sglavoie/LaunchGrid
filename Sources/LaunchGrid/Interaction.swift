@@ -197,6 +197,14 @@ extension AppState {
         return drag.active ? f.items.filter { !drag.ids.contains($0.id) } : f.items
     }
 
+    /// The open folder's pages as shown: during a drag from it, the members left plus the gap
+    /// the dragged ones go into, so several dragged at once don't count as more pages.
+    var shownFolderPageCount: Int {
+        guard let f = openFolder else { return 0 }
+        guard drag.active, case .folder(f.id) = drag.source else { return FolderLayout.pageCount(apps: f.items.count, grid: grid) }
+        return FolderLayout.pageCount(apps: remainingFolderItems().count + 1, grid: grid)
+    }
+
     /// Whether the pager shows an extra empty page to drop onto.
     var showsVirtualPage: Bool { drag.active && currentPage >= grid.pages.count }
 
@@ -445,7 +453,7 @@ extension AppState {
         if let folder = openFolder {
             guard case .folder(folder.id) = drag.source, now.timeIntervalSince(drag.edgeSince) > Self.edgeDwell else { return }
             drag.edgeSince = now
-            let pages = FolderLayout.pageCount(apps: folder.items.count, grid: grid)
+            let pages = shownFolderPageCount
             let target = folderPage + drag.edgeSide
             guard target >= 0, target < pages else { return }
             // As with a page-dot click, keyboard focus must follow the page now shown.

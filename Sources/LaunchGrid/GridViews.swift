@@ -981,9 +981,11 @@ struct FolderPanel: View {
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                     state.drag.folderGridFrame = $0
                 }
+                // During a drag, the pages its items leave fewer of.
+                let dots = state.shownFolderPageCount
                 if pages > 1 {
                     HStack(spacing: 10) {
-                        ForEach(0..<pages, id: \.self) { p in
+                        ForEach(0..<dots, id: \.self) { p in
                             // Hit target as large as the page dots'.
                             Circle()
                                 .fill(.white.opacity(p == state.folderPage ? 0.95 : contrast == .increased ? 0.6 : 0.35))
@@ -991,7 +993,7 @@ struct FolderPanel: View {
                                 .padding(4)
                                 .contentShape(Circle().inset(by: -4))
                                 .onTapGesture { state.flipPage(p - state.folderPage) }
-                                .accessibilityLabel("Folder page \(p + 1) of \(pages)")
+                                .accessibilityLabel("Folder page \(p + 1) of \(dots)")
                                 .accessibilityAddTraits(p == state.folderPage ? [.isButton, .isSelected] : .isButton)
                                 .accessibilityAction { state.flipPage(p - state.folderPage) }
                         }
