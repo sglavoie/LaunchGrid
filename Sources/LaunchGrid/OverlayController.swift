@@ -31,7 +31,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var visibilityGeneration = 0
     /// The last app opened behind the grid while it stayed up ("Hide after opening an app"
     /// off), brought forward when the grid hides.
-    var launchedBehind: NSRunningApplication?
+    private(set) var launchedBehind: NSRunningApplication?
     /// A window frame waiting to be saved once a move stops.
     private var frameSaveTask: Task<Void, Never>?
 
@@ -105,6 +105,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Whether ←/→ moved keyboard focus onto the empty page shown, which has nothing to focus.
     private var arrowedOntoEmptyPage = false
 
+    /// An app opened behind the grid finished launching. Hidden meanwhile (a slow app, then
+    /// Esc), it comes forward at once, as it would have at the hide's end.
+    func openedBehind(_ app: NSRunningApplication) {
+        if state.isShown { return launchedBehind = app }
+        guard let progress = hideProgress else { return }
+        // Still fading: its end brings it forward.
+        if !progress.gone { return launchedBehind = app }
+        if progress.deactivate, !otherWindowsShown { Launcher.bringForward(app) }
+    }
+
+    /// Whether another of our windows (Settings, an editor) is up, which keeps the focus.
+    private var otherWindowsShown: Bool {
+        NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }
+    }
+
     /// The last hide's save and fade, while it fades out.
     private var hideProgress: HideProgress?
 
@@ -154,7 +169,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 if progress.saved == true { self.state.reportLastBackupFailure() }
                 // Hand focus back to the previous app unless another of our windows is up, or
                 // to the last app opened behind the grid while it stayed up.
-                let others = NSApp.windows.contains { $0 !== panel && $0.isVisible && $0.level == .normal && !($0 is NSPanel) }
+                let others = self.otherWindowsShown
                 if progress.deactivate, !others, let app = self.launchedBehind {
                     Launcher.bringForward(app)
                 } else if progress.deactivate && NSApp.isActive && !others {

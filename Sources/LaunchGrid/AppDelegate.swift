@@ -216,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
         state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
-        state.onLaunchedBehind = { [weak self] in self?.overlay.launchedBehind = $0 }
+        state.onLaunchedBehind = { [weak self] in self?.overlay.openedBehind($0) }
         state.onError = { [weak self] title, detail in self?.showError(title, detail) }
         state.onSaveFailure = { [weak self] title, detail in self?.showSaveFailure(title, detail) }
         state.onOpenSettings = { [weak self] in self?.showSettings() }
