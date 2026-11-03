@@ -885,6 +885,12 @@ enum DebugScript {
                 try? await Task.sleep(for: .milliseconds(100))
                 held += 1
             }
+            if state.drag.mergeTarget == nil {
+                // What a failed merge saw, for a run that can't be watched (CI).
+                let target = state.pageLayout.center(to)
+                let pager = state.drag.pagerFrame
+                NSLog("LaunchGrid debug: merge missed: active=\(state.drag.active) ids=\(state.drag.ids.count) candidate=\(String(describing: state.drag.candidate)) icon=\(state.drag.iconCenter) target=\(CGPoint(x: pager.minX + target.x, y: pager.minY + target.y)) end=\(end) pager=\(pager) iconSize=\(state.pageIconSize) gap=\(String(describing: state.drag.gap))")
+            }
         case "edge":
             let frame = state.drag.pagerFrame
             let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)
