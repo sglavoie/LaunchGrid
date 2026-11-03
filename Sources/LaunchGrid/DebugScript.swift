@@ -703,6 +703,15 @@ enum DebugScript {
                         state.prefs.windowMode = mode
                         overlay.modeChanged()
                     }
+                case "nudgeplace":
+                    // Window mode: a move AppKit makes itself (keeping the window on a smaller
+                    // screen), then the screen change that places the panel, before the move's save.
+                    guard let window = overlay.window else { break }
+                    window.setFrameOrigin(NSPoint(x: window.frame.minX + 1, y: window.frame.minY))
+                    NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
+                    try? await Task.sleep(for: .milliseconds(600))
+                    print("nudgeplace: window=\(window.frame.size) saved=\(state.prefs.windowFrames)")
+                    fflush(stdout)
                 case "screenchange":
                     // As if a display was added, removed or changed resolution.
                     NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)

@@ -236,6 +236,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let id = screen?.displayID
         screen = NSScreen.screens.first { $0.displayID == id } ?? NSScreen.main
         guard let panel, let screen else { return }
+        // A save AppKit's own move scheduled (keeping the window on a smaller screen) would store
+        // the fitted frame below once its delay ends.
+        frameSaveTask?.cancel()
+        frameSaveTask = nil
         placing = true
         defer { placing = false }
         showBackground(for: screen)
