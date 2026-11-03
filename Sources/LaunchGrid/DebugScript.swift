@@ -212,6 +212,10 @@ enum DebugScript {
                 case "problem":
                     print("problem: \(state.hotkeyProblem ?? "-")")
                     fflush(stdout)
+                case "loadproblem":
+                    // What the welcome window says about a layout that couldn't be loaded.
+                    print("loadproblem: \(state.loadProblem?.message ?? "-")")
+                    fflush(stdout)
                 case "missing": delegate.showAddMissing()
                 case "choose": delegate.showChooseApps()
                 case "welcome": delegate.showFirstRun()
@@ -343,6 +347,10 @@ enum DebugScript {
                     if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
                     if let f = state.openFolder { print("folder: \(f.items.count) apps, first \(f.items.prefix(3).map(\.title)), last \(f.items.suffix(3).map(\.title))") }
                     fflush(stdout)
+                case "pagerframe":
+                    // The page grid's frame and cell size, to place a drag near its edge columns.
+                    print("pagerframe: \(state.drag.pagerFrame) cell=\(state.pageLayout.cell) columns=\(state.grid.columns)")
+                    fflush(stdout)
                 case "textedit":
                     // The rename or page-title card: open or not, its field's text and what an input
                     // method is still composing there.
@@ -463,7 +471,7 @@ enum DebugScript {
                     let screen = window.convertPoint(toScreen: local)
                     let top = NSScreen.screens.first?.frame.maxY ?? 0
                     print("where: \(arg) \(Int(screen.x)),\(Int(top - screen.y))"); fflush(stdout)
-                case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold":
+                case "drag", "merge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold", "nudgehold", "fnudgehold":
                     // An optional third number grabs the icon that many points right of its centre.
                     let n = arg.split(separator: ",").compactMap { Int($0) }
                     guard let window = overlay.window, let from = n.first else { break }
@@ -852,7 +860,7 @@ enum DebugScript {
             // Between two icons, where a drag swipes the page rather than lifting an icon.
             start = rootPoint(from, dx: layout.cell.width / 2)
         }
-        if kind == "fdrag" || kind == "fedge" || kind == "finside" || kind == "fhold" {
+        if kind == "fdrag" || kind == "fedge" || kind == "finside" || kind == "fhold" || kind == "fnudgehold" {
             let f = state.drag.folderGridFrame
             let fl = state.folderLayout
             let c = fl.center(from)
@@ -913,6 +921,14 @@ enum DebugScript {
         case "hold", "fhold":
             end = rootPoint(to, dx: -layout.cell.width * 0.4)
             await glide(approach, end)
+            for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
+            heldAt = (end, window)
+            return
+        case "nudgehold", "fnudgehold":
+            // Lifts item `from`, moves it `to` points sideways (just past the drag's start) and
+            // holds it there: near its own slot, as when aiming at an edge column's slot.
+            end = CGPoint(x: start.x + CGFloat(to), y: start.y)
+            await glide(start, end, steps: 4)
             for _ in 0..<5 { send(.leftMouseDragged, end); try? await Task.sleep(for: .milliseconds(100)) }
             heldAt = (end, window)
             return

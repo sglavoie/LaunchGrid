@@ -416,6 +416,25 @@ import Testing
         }
     }
 
+    /// A program named by its path is the same program: `/usr/bin/ssh` hands its command to
+    /// the remote shell as `ssh` does. zsh's `zpty NAME …` runs what follows the name as `eval`.
+    @Test func programsByPathAndZptyAreReadAsTheirNames() {
+        let refused = [
+            #"/usr/bin/ssh host "ls {query}""#, #"/usr/bin/ssh host ls {query}"#,
+            #"/usr/bin/env -S "find . -name {query}""#, #"sudo /usr/bin/env -S "find . -name {query}""#,
+            #"/opt/homebrew/bin/watch "ls {query}""#, #"'/usr/bin/ssh' host "ls {query}""#,
+            #"zmodload zsh/zpty; zpty p "echo {query}""#, #"zpty p echo {query}"#,
+        ]
+        for template in refused {
+            #expect(throws: ActionRunner.Failure.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
+        }
+        // As with `ssh host {query}`, a whole argument may start the command.
+        for template in [#"/usr/bin/ssh {query}"#, #"/usr/bin/env ls {query}"#, #"/opt/homebrew/bin/watch -n {query} ls"#,
+                         #"zpty -b p {query}"#] {
+            #expect(throws: Never.self, "\(template)") { try ActionRunner.substitutingArgument(in: template) }
+        }
+    }
+
     /// A glob qualifier (`*(e:'…':)`) is code zsh runs for each file: `{query}` in one is
     /// refused. Function definitions, arrays and `$(…)` still take it.
     @Test func placeholdersInGlobQualifiersAreRefused() async throws {

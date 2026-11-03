@@ -74,9 +74,26 @@ public enum Reconciler {
         // An excluded copy can be found under another spelling just like a visible tile:
         // a case-only rename or a symlink must not make it a new, unexcluded app. Keep
         // bundle-wide exclusions and paths the scan can't resolve as they were.
-        grid.removedBundleIDs = Set(grid.removedBundleIDs.map { key in
+        // A copy excluded by path (it shares its bundle ID with another) and then moved, as a
+        // tile follows its app: the copy new to this scan with its file name, which no tile owns.
+        let tilePaths = Set(grid.allApps.map(\.path))
+        var claimedByExclusion = Set(grid.removedBundleIDs)
+        func movedCopy(excludedAt key: String) -> String? {
+            guard isReachable(key), !pathExists(key) else { return nil }
+            let file = (key as NSString).lastPathComponent
+            guard let copy = installed.first(where: { app in
+                (app.path as NSString).lastPathComponent == file
+                    && !wasInstalledBefore(app.path) && !tilePaths.contains(app.path)
+                    && !claimedByExclusion.contains(app.path)
+                    && app.bundleID.map { (byBundle[$0]?.count ?? 0) > 1 } == true
+            }) else { return nil }
+            claimedByExclusion.insert(copy.path)
+            return copy.path
+        }
+        grid.removedBundleIDs = Set(grid.removedBundleIDs.sorted().map { key in
             guard key.hasPrefix("/"), byPath[key] == nil else { return key }
-            return aliases[key].flatMap { byPath[$0]?.path } ?? respelt(at: key)?.path ?? key
+            return aliases[key].flatMap { byPath[$0]?.path } ?? respelt(at: key)?.path
+                ?? movedCopy(excludedAt: key) ?? key
         })
         var returning = grid.recentlyPruned.filter {
             isRecent($0.prunedAt, now: now)

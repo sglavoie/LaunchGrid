@@ -332,7 +332,7 @@ public struct GridStore: Sendable {
         if nothingLeft && (skipped.layoutCount > 0 || (skipped.restorationCount > 0 && grid.removedBundleIDs.isEmpty)) {
             throw GridFileError.invalid("none of its \(skipped.layoutCount + skipped.restorationCount) entries could be read")
         }
-        guard (1...50).contains(grid.rows), (1...50).contains(grid.columns) else {
+        guard (1...Grid.maxDimension).contains(grid.rows), (1...Grid.maxDimension).contains(grid.columns) else {
             throw GridFileError.invalid("grid size \(grid.rows)×\(grid.columns) is out of range")
         }
         grid.version = Grid.currentVersion

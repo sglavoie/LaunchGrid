@@ -518,12 +518,20 @@ extension Grid {
     /// Deletes a page; its items move to the end of the previous page (or, for the first
     /// page, to the start of the next one). What doesn't fit there goes on an untitled page in
     /// its place, unless the page after has room for it and no title it would end up under.
+    /// A titled next page keeps its own items: those of the first page that don't fit stay
+    /// on an untitled page before it.
     public mutating func deletePage(_ index: Int) {
         guard pages.indices.contains(index) else { return }
         let removed = pages.remove(at: index)
         let items = removed.items
         let target = max(0, index - 1)
         let start = index == 0 ? 0 : pages[target].items.count
+        // Deleting the first page before a titled one: how many of its items stay on an
+        // untitled page in its place, so the titled page's own items aren't pushed off it.
+        var head = 0
+        if index == 0, let next = pages.first, next.title != nil {
+            head = max(0, items.count - max(0, capacity - next.items.count))
+        }
         defer {
             // Apps temporarily absent during an update move with the page's visible
             // contents. Otherwise their deleted page ID sends them to the first free
@@ -532,9 +540,17 @@ extension Grid {
             for k in recentlyPruned.indices where recentlyPruned[k].pageID == removed.id {
                 let slot = min(max(0, Self.slot(after: recentlyPruned[k].before,
                     fallback: recentlyPruned[k].index, in: items.map(\.id))), items.count)
-                let absolute = start + slot
-                let page = min(target + absolute / capacity, pages.count - 1)
-                let at = min(absolute - (page - target) * capacity, pages[page].items.count)
+                let page: Int, at: Int
+                if head > 0 {
+                    // The untitled first page holds `items[..<head]`, the titled one the rest.
+                    page = min(slot < head ? slot / capacity : (head + capacity - 1) / capacity, pages.count - 1)
+                    at = slot < head ? min(slot - page * capacity, pages[page].items.count)
+                                     : min(slot - head, pages[page].items.count)
+                } else {
+                    let absolute = start + slot
+                    page = min(target + absolute / capacity, pages.count - 1)
+                    at = min(absolute - (page - target) * capacity, pages[page].items.count)
+                }
                 recentlyPruned[k].pageID = pages[page].id
                 recentlyPruned[k].index = at
                 let prefix = pages[page].items.prefix(at).map(\.id)
@@ -551,6 +567,19 @@ extension Grid {
         if pages.isEmpty {
             pages = [Page(items: items)]
             spill(from: 0)
+            return
+        }
+        if head > 0 {
+            pages[0].items.insert(contentsOf: items[head...], at: 0)
+            pages.insert(Page(items: Array(items[..<head])), at: 0)
+            // Only a page holding more than fits (from an older, larger grid) spills here.
+            if head > capacity {
+                let overflow = Array(pages[0].items[capacity...])
+                pages[0].items.removeSubrange(capacity...)
+                for (n, chunk) in stride(from: 0, to: overflow.count, by: capacity).enumerated() {
+                    pages.insert(Page(items: Array(overflow[chunk..<min(chunk + capacity, overflow.count)])), at: n + 1)
+                }
+            }
             return
         }
         if index == 0 {
@@ -578,13 +607,17 @@ extension Grid {
 
     // MARK: Resizing
 
+    /// The most rows or columns a grid file may have and still load.
+    public static let maxDimension = 50
+
     /// Changes the grid size. When every page still fits, the pages stay as they are, so a
     /// layout built by category keeps its pages. Otherwise every item re-flows, in order, so
     /// each page is filled before the next one starts; an empty page stays where it was, between
     /// the items around it. Page `n` keeps the old page `n`'s ID, and takes the title of the page
     /// its first item came from, so a title stays with what it names.
     public mutating func resize(rows: Int, columns: Int) {
-        let rows = max(1, rows), columns = max(1, columns)
+        // A size a saved file can't be loaded back with would set the whole layout aside.
+        let rows = min(max(1, rows), Grid.maxDimension), columns = min(max(1, columns), Grid.maxDimension)
         guard pages.contains(where: { $0.items.count > rows * columns }) else {
             self.rows = rows
             self.columns = columns

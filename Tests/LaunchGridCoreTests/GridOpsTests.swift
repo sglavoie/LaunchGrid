@@ -316,6 +316,40 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(h.pages.map(titles) == [["A", "B"], ["C", "D"]], "an untitled page with room takes them")
     }
 
+    @Test func deletingTheFirstPageKeepsTheNextTitledPagesOwnItems() {
+        var g = grid([["A", "B", "C"], ["W1", "W2", "W3"]], columns: 4)
+        g.pages[1].title = "Work"
+        g.deletePage(0)
+        #expect(g.pages.map(titles) == [["A", "B"], ["C", "W1", "W2", "W3"]])
+        #expect(g.pages.map(\.title) == [nil, "Work"])
+
+        var h = grid([["A"], ["W1", "W2"]], columns: 4)
+        h.pages[1].title = "Work"
+        h.deletePage(0)
+        #expect(h.pages.map(titles) == [["A", "W1", "W2"]], "with room, the items join it")
+    }
+
+    @Test func deletingTheFirstPageKeepsAnAppAwaitingReturnBesideItsNeighbours() {
+        var g = grid([["A", "B", "C"], ["W1", "W2", "W3", "W4"]], columns: 4)
+        g.pages[1].title = "Work"
+        let ids = g.pages[0].items.map(\.id)
+        var pruned = PrunedApp(app: g.pages[0].items[1].app!, prunedAt: Date(), pageID: g.pages[0].id, index: 1)
+        pruned.before = [ids[0]]
+        g.pages[0].items.remove(at: 1)
+        g.recentlyPruned = [pruned]
+        g.deletePage(0)
+        #expect(g.pages.map(titles) == [["A", "C"], ["W1", "W2", "W3", "W4"]])
+        #expect(g.recentlyPruned.first?.pageID == g.pages[0].id)
+        #expect(g.recentlyPruned.first?.index == 1)
+    }
+
+    @Test func resizingStopsAtASizeThatStillLoads() {
+        var g = grid([["A"]])
+        g.resize(rows: 60, columns: 7)
+        #expect(g.rows == Grid.maxDimension)
+        #expect(g.columns == 7)
+    }
+
     @Test func ungroupInPlace() {
         var g = grid([["A", "B", "C"]])
         let fid = g.group([g.pages[0].items[1].id, g.pages[0].items[2].id], name: "F")!

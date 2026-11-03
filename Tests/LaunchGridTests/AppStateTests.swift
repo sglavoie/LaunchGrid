@@ -432,6 +432,16 @@ func installed(_ name: String) -> InstalledApp {
 }
 
 @Suite struct GridHitTests {
+    /// An icon in an edge column, picked up and moved a few points (a drag starts after 6),
+    /// isn't in the zone that flips the page; past the side of the grid always is.
+    @Test(arguments: [(70.0, 202.0), (66.8, 92.8), (33.2, 55.3), (36.0, 40.0), (70.0, 0.0)])
+    func theEdgeZoneStopsShortOfAnEdgeIconsSlot(preferred: CGFloat, cellWidth: CGFloat) {
+        let zone = AppState.edgeZone(preferred, cellWidth: cellWidth)
+        #expect(zone >= 0 && zone <= preferred)
+        #expect(cellWidth / 2 - zone >= AppState.edgeSlotMargin || zone == 0)
+        if cellWidth >= 2 * (preferred + AppState.edgeSlotMargin) { #expect(zone == preferred, "a roomy grid keeps it") }
+    }
+
     @Test func anUnmeasuredGridHasNoDropTarget() {
         let layout = GridLayout(size: .zero, rows: 5, columns: 7)
         #expect(layout.cellIndex(at: .zero) == nil)
@@ -930,8 +940,18 @@ func installed(_ name: String) -> InstalledApp {
         #expect(!state.hasGridFile)
         #expect(state.recoveryNotice == nil)
         #expect(state.loadProblem?.message.contains("previous-save backup") == true)
-        #expect(try String(contentsOf: store.backupURL, encoding: .utf8) == backup)
-        #expect(throws: GridFileError.self) { try store.loadBackup() }
+        // Set aside where the message says, so the next saves' backups can't replace it.
+        let files = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        let aside = try #require(files.first { $0.hasPrefix("grid.partial-backup-") })
+        #expect(state.loadProblem?.message.contains(aside) == true)
+        let kept = dir.appendingPathComponent(aside)
+        #expect(try String(contentsOf: kept, encoding: .utf8) == backup)
+
+        state.apply { $0.appendAtEnd([.app(AppRef(bundleID: "b", path: "/Applications/B.app", name: "B"))]) }
+        #expect(state.saveNow())
+        state.apply { $0.appendAtEnd([.app(AppRef(bundleID: "c", path: "/Applications/C.app", name: "C"))]) }
+        #expect(state.saveNow())
+        #expect(try String(contentsOf: kept, encoding: .utf8) == backup)
     }
 
     @Test(arguments: [

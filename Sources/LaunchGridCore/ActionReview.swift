@@ -67,6 +67,8 @@ extension ActionKind {
     static func launchesAnotherApp(_ appPath: String, opening path: String) -> Bool {
         if isTerminal(appPath) { return true }
         let app = URL(fileURLWithPath: appPath).standardizedFileURL.resolvingSymlinksInPath()
+        // A link with another name (`Viewer.app`) can lead to Terminal itself, in /System.
+        if isTerminal(app.path) { return true }
         if app.path.hasPrefix("/System/Applications/") { return false }
         let target = URL(fileURLWithPath: path).resolvingSymlinksInPath()
         if let own = LSCopyDefaultApplicationURLForURL(target as CFURL, .all, nil)?.takeRetainedValue() as URL? {

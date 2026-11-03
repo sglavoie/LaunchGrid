@@ -81,6 +81,10 @@ import Testing
             #expect(ActionKind.openFile(path: "/etc/hosts", appPath: app).isRunnableCode, "\(app)")
             #expect(ActionKind.openFile(path: plain.path, appPath: app).isRunnableCode, "\(app)")
         }
+        // Terminal itself, through a link with another name.
+        let viewer = dir.appendingPathComponent("Viewer.app")
+        try FileManager.default.createSymbolicLink(at: viewer, withDestinationURL: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
+        #expect(ActionKind.openFile(path: plain.path, appPath: viewer.path).isRunnableCode, "a link to Terminal")
         let text = dir.appendingPathComponent("notes.txt.plain.txt")
         try Data("hi".utf8).write(to: text)
         if let own = NSWorkspace.shared.urlForApplication(toOpen: text) {

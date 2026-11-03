@@ -680,19 +680,22 @@ final class ActionRunner {
         mutating func add(_ word: String) throws {
             let alone = ActionRunner.isAlone(word)
             if hasPlaceholder, let command {
+                // By path too: `/usr/bin/ssh` and `/usr/bin/env` are the same programs.
+                let program = ActionRunner.programName(command)
                 let codeOption = previous.map { ActionRunner.runsNextWordAsCode($0, program: interpreter) } == true
                 let isCode = (interpreterSeen && (codeOption || (codePending && !word.hasPrefix("-"))))
                     || (programWordsLeft > 0 && !programOptionArgument && !word.hasPrefix("-"))
-                    || ["eval", "ssh", "trap", "sched", "watch"].contains(command)
+                    // zsh's `zpty NAME cmd…` runs its arguments after the name as `eval` does.
+                    || ["eval", "ssh", "trap", "sched", "watch", "zpty"].contains(program)
                     || ActionRunner.runsAsCommand(word, after: previous, in: command)
                     // `env -S '…'` splits its argument into a command line.
-                    || (command == "env" && wrapper != nil && previous.map { $0 == "-S" || $0 == "--split-string" } == true)
-                    || (command == "env" && wrapper != nil && (word.hasPrefix("-S") || word.hasPrefix("--split-string")))
+                    || (program == "env" && wrapper != nil && previous.map { $0 == "-S" || $0 == "--split-string" } == true)
+                    || (program == "env" && wrapper != nil && (word.hasPrefix("-S") || word.hasPrefix("--split-string")))
                 if !alone, isCode { throw Failure.placeholderInCode }
                 // `eval echo {query}` joins its arguments and reads them again, so even a whole
                 // argument is code there, unless it starts the command (`ssh host {query}`).
                 if alone, !joinedOptionArgument, !word.hasPrefix("-"),
-                   ["eval", "watch", "ssh"].contains(command), joinedOperands > (command == "ssh" ? 1 : 0) {
+                   ["eval", "watch", "ssh", "zpty"].contains(program), joinedOperands > (["ssh", "zpty"].contains(program) ? 1 : 0) {
                     throw Failure.placeholderInCode
                 }
                 if evaluates(word, command: command) { throw Failure.placeholderInBuiltin }
@@ -812,13 +815,13 @@ final class ActionRunner {
                     programWordsLeft -= 1
                 }
             }
-            if let command, ["eval", "watch", "ssh"].contains(command) {
+            if let command, case let program = ActionRunner.programName(command), ["eval", "watch", "ssh", "zpty"].contains(program) {
                 if joinedOptionArgument {
                     joinedOptionArgument = false
                 } else if isOption {
-                    let takesArgument: Set<String> = command == "ssh"
+                    let takesArgument: Set<String> = program == "ssh"
                         ? ["-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w", "-B"]
-                        : ["-n", "--interval", "-d", "-q"]
+                        : program == "zpty" ? [] : ["-n", "--interval", "-d", "-q"]
                     joinedOptionArgument = takesArgument.contains(word)
                 } else {
                     joinedOperands += 1

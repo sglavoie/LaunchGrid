@@ -495,6 +495,39 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.allApps.map(\.path) == [original.path, listed.path])
     }
 
+    @Test func pathExclusionsFollowAMovedCopy() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID)
+        var g = Grid(pages: [Page(items: [.app(original.makeRef()), .app(beta.makeRef())])])
+        g.remove([g.allApps[1].id], installed: [original, beta])
+        let moved = installed("Xcode-beta", id: original.bundleID, path: "/Applications/Betas/Xcode-beta.app")
+
+        let report = Reconciler.reconcile(&g, installed: [original, moved], autoAdd: true,
+                                          pathExists: { _ in false },
+                                          wasInstalledBefore: { $0 != moved.path })
+
+        #expect(g.allApps.map(\.path) == [original.path])
+        #expect(g.removedBundleIDs == [moved.path])
+        #expect(report.added.isEmpty)
+    }
+
+    @Test func pathExclusionsDontFollowACopyThatWasAlreadyThereOrOnTheGrid() {
+        let original = installed("Xcode", id: "com.apple.dt.Xcode")
+        let beta = installed("Xcode-beta", id: original.bundleID)
+        let other = installed("Xcode-beta", id: original.bundleID, path: "/Applications/Betas/Xcode-beta.app")
+        // Already installed before the removed copy went away: another copy, not it moved.
+        var g = Grid(pages: [Page(items: [.app(original.makeRef())])], removedBundleIDs: [beta.path])
+        _ = Reconciler.reconcile(&g, installed: [original, other], autoAdd: false,
+                                 pathExists: { _ in false }, wasInstalledBefore: { _ in true })
+        #expect(g.removedBundleIDs == [beta.path])
+        // New, but with a tile of its own: the user's choice for that copy stands.
+        var h = Grid(pages: [Page(items: [.app(original.makeRef()), .app(other.makeRef())])], removedBundleIDs: [beta.path])
+        _ = Reconciler.reconcile(&h, installed: [original, other], autoAdd: false,
+                                 pathExists: { _ in false })
+        #expect(h.removedBundleIDs == [beta.path])
+        #expect(h.allApps.map(\.path) == [original.path, other.path])
+    }
+
     @Test func addsNewAppsWhenAutoAddIsOn() {
         var g = Grid(rows: 1, columns: 2, pages: [Page(items: [.app(app("A"))])])
         let report = Reconciler.reconcile(&g, installed: [installed("A"), installed("C"), installed("B")], autoAdd: true)

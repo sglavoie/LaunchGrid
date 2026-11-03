@@ -377,8 +377,9 @@ extension AppState {
     private func updateFolderGap(_ p: CGPoint, immediately: Bool = false) {
         let frame = drag.folderGridFrame
         // Holding at the side of a folder with several pages flips its pages. The zone is
-        // narrow and extends past the grid into the panel's margin.
-        let edge = min(36, frame.width * 0.05)
+        // narrow and extends past the grid into the panel's margin. It stops short of an edge
+        // icon's own slot (`edgeZone`), so a dense folder doesn't flip while one is held there.
+        let edge = Self.edgeZone(min(36, frame.width * 0.05), cellWidth: folderLayout.cell.width)
         let side = p.x < frame.minX + edge ? -1 : (p.x > frame.maxX - edge ? 1 : 0)
         if side != drag.edgeSide {
             drag.edgeSide = side
@@ -402,10 +403,20 @@ extension AppState {
         }
     }
 
+    /// How far in from the side of the grid holding a dragged icon flips the page: `preferred`,
+    /// but ending `edgeSlotMargin` short of the centre of an icon in the first or last column.
+    /// On a dense grid that centre is close to the side, and an icon picked up there (a drag
+    /// moves it at least a few points) or aimed at that slot would otherwise flip page after
+    /// page. Past the side of the grid always counts.
+    nonisolated static func edgeZone(_ preferred: CGFloat, cellWidth: CGFloat) -> CGFloat {
+        max(0, min(preferred, cellWidth / 2 - edgeSlotMargin))
+    }
+    nonisolated static let edgeSlotMargin: CGFloat = 16
+
     private func updatePageTargets(_ p: CGPoint) {
         let frame = drag.pagerFrame
         let local = CGPoint(x: p.x - frame.minX, y: p.y - frame.minY)
-        let edge = min(70, frame.width * 0.06)
+        let edge = Self.edgeZone(min(70, frame.width * 0.06), cellWidth: pageLayout.cell.width)
         let side = local.x < edge ? -1 : (local.x > frame.width - edge ? 1 : 0)
         if side != drag.edgeSide {
             drag.edgeSide = side
