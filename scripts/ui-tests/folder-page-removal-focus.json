@@ -1,0 +1,119 @@
+{
+  "name": "Removing an open folder's apps, and with them its page, focuses the last item of the page before",
+  "fixture": {
+    "rows": 3,
+    "columns": 4,
+    "pages": [
+      [
+        "Alpha",
+        "Beta",
+        "Gamma",
+        "Delta",
+        "Echo",
+        "Foxtrot"
+      ],
+      [
+        "Tools"
+      ]
+    ],
+    "pageTitles": [
+      "",
+      ""
+    ],
+    "folders": {
+      "Tools": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "run": "show"
+    },
+    {
+      "expect": {
+        "keyWindow": true,
+        "pagerReady": true
+      }
+    },
+    {
+      "run": "windowsize:718,534"
+    },
+    {
+      "run": "keys:cmd+e@14"
+    },
+    {
+      "run": "page:1"
+    },
+    {
+      "expect": {
+        "editing": true,
+        "currentPage": 1
+      }
+    },
+    {
+      "run": "click:0"
+    },
+    {
+      "expect": {
+        "folder": "Tools",
+        "folderReady": true
+      }
+    },
+    {
+      "run": "keys:125"
+    },
+    {
+      "run": "keys:124"
+    },
+    {
+      "run": "keys:124"
+    },
+    {
+      "run": "keys:124"
+    },
+    {
+      "expect": {
+        "focus": "T4"
+      }
+    },
+    {
+      "run": "fselect:0,1,2,3,4"
+    },
+    {
+      "expect": {
+        "selection": [
+          "T1",
+          "T2",
+          "T3",
+          "T4",
+          "T5"
+        ]
+      }
+    },
+    {
+      "run": "keys:51"
+    },
+    {
+      "expect": {
+        "folder": "",
+        "currentPage": 0,
+        "focus": "Foxtrot",
+        "pages": [
+          [
+            "Alpha",
+            "Beta",
+            "Gamma",
+            "Delta",
+            "Echo",
+            "Foxtrot"
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -449,7 +449,8 @@ final class AppState {
                 // deleting a page does, with focus on its last item rather than whichever item
                 // now has the focused one's number.
                 currentPage = old.pages[..<currentPage].reversed().lazy.compactMap { pageIndex($0.id) }.first ?? 0
-                if focusIndex != nil, openFolderID == nil, query.isEmpty { focusIndex = Int.max }
+                // An open folder that went with the page has no slot left to return to either.
+                if focusIndex != nil, query.isEmpty, openFolderID.map({ grid.folder($0) == nil }) ?? true { focusIndex = Int.max }
             }
         }
         currentPage = min(currentPage, grid.pages.count - 1)

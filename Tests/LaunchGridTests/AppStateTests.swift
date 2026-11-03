@@ -1138,6 +1138,26 @@ func installed(_ name: String) -> InstalledApp {
         #expect(selected(state) == ["A"])
     }
 
+    /// Removing the open folder's apps empties its page too: the view goes back a page, with
+    /// focus on its last item, as when the page shown goes with no folder open.
+    @Test func removingAnOpenFoldersPageFocusesTheLastItemBefore() throws {
+        let state = makeState()
+        let ref = { (n: String) in AppRef(bundleID: "com.test.\(n)", path: "/Applications/\(n).app", name: n) }
+        let members = ["F1", "F2", "F3", "F4", "F5"].map(ref)
+        let folder = Folder(name: "F", apps: members)
+        state.replaceGrid(Grid(rows: 5, columns: 7, pages: [Page(items: ["A", "B", "C", "D", "E"].map { .app(ref($0)) }), Page(items: [.folder(folder)])]))
+        state.goToPage(1)
+        state.openFolder(folder.id)
+        state.focusIndex = 3
+
+        state.remove(members.map(\.id))
+
+        #expect(state.grid.pages.count == 1)
+        #expect(state.openFolderID == nil)
+        #expect(state.currentPage == 0)
+        #expect(state.focusIndex == 4, "the last item, not the folder's fourth item's number")
+    }
+
     @Test func revealingAResultInTheFolderTheSearchStartedInKeepsItsSelection() throws {
         let state = makeState(["A", "B", "C"])
         let id = ids(state)
