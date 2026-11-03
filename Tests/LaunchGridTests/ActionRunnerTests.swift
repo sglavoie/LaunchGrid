@@ -333,6 +333,10 @@ import Testing
             "echo {query} | xargs -I% sh -c 'echo %'", "echo {query} | xargs sh -c 'echo \"$@\"' _",
             // A script read from the input.
             "echo {query} | source /dev/stdin", ". /dev/stdin <<< {query}", "echo {query} | sh /dev/fd/0",
+            // Tcl through expect and wish, m4's macros, and sqlite3's SQL and dot-commands.
+            "expect -c 'puts \"{query}\"'", "echo {query} | expect", "wish -c 'puts {query}'", "echo {query} | m4",
+            "m4 <<< {query}", "sqlite3 ~/x.db \"select * from t where n='{query}'\"", "sqlite3 db {query}",
+            "echo {query} | sqlite3 db", "sqlite3 db <<< {query}", "/usr/bin/sqlite3 :memory: \".shell echo {query}\"",
         ]
         for template in refused {
             #expect(throws: ActionRunner.Failure.placeholderInCode, "\(template)") {

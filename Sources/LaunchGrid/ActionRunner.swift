@@ -41,7 +41,7 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, read, unset or vared, a variable name for typeset, declare, local or export, or an argument of printf %d (and other number formats), print -v or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
         }
         static var placeholderInCode: Failure {
-            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, with eval, trap, watch or ssh, or in input piped to a shell or osascript), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
+            Failure(message: String(localized: "{query} can't be part of code another program runs (after -c, -e or -pe, in a sed or awk program, in sqlite3's SQL, with eval, trap, watch or ssh, or in input piped to a shell, osascript or m4), where what's typed would run as code. Pass it as an argument of its own, or read $LAUNCHGRID_QUERY in that code instead."))
         }
         static var placeholderInGlobQualifier: Failure {
             Failure(message: String(localized: "{query} can't go inside parentheses that end a word, like the glob qualifier in *(e:'…':), where zsh would run what's typed as code. Use $LAUNCHGRID_QUERY there instead."))
@@ -682,6 +682,9 @@ final class ActionRunner {
                     throw Failure.placeholderInCode
                 }
                 if evaluates(word, command: command) { throw Failure.placeholderInBuiltin }
+                // sqlite3's arguments after the database are SQL, whose `.shell` and writefile()
+                // reach anything; the database name too can be a URI with options.
+                if ActionRunner.readsSQL(command) { throw Failure.placeholderInCode }
             }
             // A `<(…)` with `{query}` that a program runs: its script (`sh <(…)`, `source <(…)`)
             // or its program file (`awk -f <(…)`).
@@ -841,6 +844,8 @@ final class ActionRunner {
             // `xargs sh -c '…'` hands the input to the code, into it with `-I`: refuse it whatever
             // the options, as for `sh -c` itself.
             if sourcesInput || (viaXargs && interpreterSeen) { throw Failure.placeholderInCode }
+            // Its input is SQL even with a database named.
+            if ActionRunner.readsSQL(command) { throw Failure.placeholderInCode }
             guard ActionRunner.readsProgramFromInput(command) else { return }
             if stdinForced || !programGiven { throw Failure.placeholderInCode }
         }
@@ -966,12 +971,20 @@ final class ActionRunner {
     }
 
     /// Whether `command` reads its program from its input when not given one: a shell or a
-    /// scripting language (`echo … | sh`, `osascript <<< …`), or `at` and `batch`. Not sed or awk,
-    /// whose input is text.
+    /// scripting language (`echo … | sh`, `osascript <<< …`), `m4`, or `at` and `batch`. Not sed
+    /// or awk, whose input is text.
     nonisolated static func readsProgramFromInput(_ command: String) -> Bool {
         let name = programName(command)
         return isUnknownProgram(command) || isShell(name) || ["osascript", "perl", "python", "ruby", "node", "nodejs", "bun", "php", "lua",
-                                 "tclsh", "pwsh", "powershell", "at", "batch"].contains(name)
+                                 "tclsh", "wish", "expect", "pwsh", "powershell", "at", "batch"].contains(name)
+            // Named whole: version digits are trimmed from the others' names.
+            || ["m4", "gm4"].contains(unquoted(command).split(separator: "/").last.map(String.init) ?? "")
+    }
+
+    /// Whether `command` is sqlite3, whose arguments after the database, and input, are SQL
+    /// and its dot-commands (`.shell`, `.system`).
+    nonisolated static func readsSQL(_ command: String) -> Bool {
+        ["sqlite", "sqlcipher"].contains(programName(command))
     }
 
     /// Whether `word` names a program whose first argument, without `-e`, is its program:
@@ -1010,7 +1023,7 @@ final class ActionRunner {
     nonisolated static func isInterpreter(_ word: String) -> Bool {
         let name = programName(word)
         return ["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "osascript", "perl",
-                "python", "ruby", "node", "nodejs", "deno", "bun", "php", "lua", "tclsh", "pwsh", "powershell", "su",
+                "python", "ruby", "node", "nodejs", "deno", "bun", "php", "lua", "tclsh", "wish", "expect", "pwsh", "powershell", "su",
                 "sed", "gsed", "awk", "gawk", "mawk", "nawk"].contains(name)
     }
 
