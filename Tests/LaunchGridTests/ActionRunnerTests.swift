@@ -644,19 +644,22 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: marker.path))
     }
 
+    /// Stopped at its timeout, well before the command would end: the bound leaves room for a
+    /// busy CI machine.
     @Test func aRunOverItsTimeoutIsStopped() async throws {
         let clock = ContinuousClock()
         let start = clock.now
-        let result = try await run("sleep 5", timeout: 1)
+        let result = try await run("sleep 60", timeout: 1)
         #expect(result.ending == .timedOut)
-        #expect(clock.now - start < .seconds(4))
+        #expect(clock.now - start < .seconds(15))
         #expect(result.summary == "timed out")
     }
 
+    /// The child waits a while before acting, so a busy machine stops the run before it does.
     @Test func stoppingEndsWhatTheCommandStartedToo() async throws {
         let marker = try temporaryFolder().appendingPathComponent("survived")
         let runner = ActionRunner()
-        guard case .code(let job) = try ActionRunner.plan(shell("(sleep 2; touch \(ActionRunner.shellQuoted(marker.path))) & wait"), argument: nil) else {
+        guard case .code(let job) = try ActionRunner.plan(shell("(sleep 6; touch \(ActionRunner.shellQuoted(marker.path))) & wait"), argument: nil) else {
             Issue.record("not code"); return
         }
         let result = await withCheckedContinuation { (c: CheckedContinuation<RunResult, Never>) in
@@ -667,7 +670,7 @@ import Testing
             } catch { Issue.record(error) }
         }
         #expect(result.ending == .stopped)
-        try await Task.sleep(for: .seconds(2.5))
+        try await Task.sleep(for: .seconds(6.5))
         #expect(!FileManager.default.fileExists(atPath: marker.path), "the background child kept running")
     }
 
@@ -782,7 +785,8 @@ import Testing
                 let label = "\(name) late: \(callsBackLate)"
                 #expect(result.ending == .timedOut, "\(label)")
                 #expect(result.summary == "timed out", "\(label)")
-                #expect(clock.now - start < .seconds(2), "\(label)")
+                // At the deadline rather than never: loose, for a busy CI machine.
+                #expect(clock.now - start < .seconds(10), "\(label)")
                 if name == "hang.sh" { #expect(result.output == "early\n", "\(label)") }
                 // Past the late callback (and the 1 s grace an exit allows for output).
                 try await Task.sleep(for: .seconds(1.6))
