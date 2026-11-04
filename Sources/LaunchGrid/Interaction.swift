@@ -575,8 +575,13 @@ extension AppState {
                 keepFolderFocusOnShownPage()
             }
         } else {
-            // A drop right after moving counts, even if the pointer hadn't settled yet.
-            let gap = drag.pendingGap ?? drag.gap ?? remainingItems(page: page).count
+            // A drop right after moving counts, even if the pointer hadn't settled yet. Released on
+            // an icon before a merge armed, it takes that icon's slot, as just beside it would.
+            let remaining = remainingItems(page: page)
+            let shownGap = drag.gap ?? remaining.count
+            let onIcon = drag.candidate.flatMap { id in remaining.firstIndex { $0.id == id } }
+                .map { $0 < shownGap ? $0 : $0 + 1 }
+            let gap = drag.pendingGap ?? onIcon ?? drag.gap ?? remaining.count
             apply { g in g.removingEmptiedPages { $0.move(ids, toPage: page, at: gap) } }
         }
         // The selection is done with once it was moved, or something was dropped on one of it.

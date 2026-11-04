@@ -506,6 +506,14 @@ import Testing
             "getln {query}", "getln -A {query}", "private {query}", "private -i x={query}",
             "zmodload zsh/system; syserror -e {query} 1", "zmodload zsh/system; sysopen -r -u {query} /dev/null",
             "zstyle -s :x s {query}", "zstyle -e :x s {query}", "zmodload zsh/zutil; zformat -f {query} x",
+            "zparseopts -D -E -a {query} v", "zparseopts -D v={query}", "zparseopts -D v:={query}",
+            "zmodload zsh/zutil; zregexparse {query} p x", "zmodload zsh/zutil; zregexparse p {query} x",
+            "zmodload zsh/zselect; zselect -a {query} 0", "zmodload zsh/zselect; zselect -A {query} 0",
+            "zmodload zsh/system; zsystem flock -f {query} /dev/null", "zmodload zsh/system; syswrite -c {query} x",
+            "zmodload zsh/system; syswrite -o 1 -c '{query}' x",
+            "zmodload zsh/pcre; pcre_compile x; pcre_match -v {query} x",
+            "zmodload zsh/pcre; pcre_compile x; pcre_match -a \"{query}\" x",
+            "zmodload zsh/pcre; pcre_compile x; pcre_match -bv {query} x",
             // Prompt escapes, which run `$(…)` with promptsubst, set in a startup file.
             "print -P {query}", "print -rP -- {query}",
         ]
@@ -541,6 +549,9 @@ import Testing
             "n={query}; [[ $n == x ]]; printf '[%s]' \"$n\"",
             "n={query}; printf '[%s]' \"$n\"; m=1; (( m > 0 ))",
             "n={query}; (( ${#n} > 0 )) && printf '[%s]' \"$n\"",
+            "zmodload zsh/system; syswrite -- '['{query}']'",
+            "zmodload zsh/pcre; pcre_compile -- '.*'; pcre_match -- {query} && printf '[%s]' \"$MATCH\"",
+            "zmodload zsh/pcre; pcre_compile -- '.*'; pcre_match -v m -- {query} && printf '[%s]' \"$m\"",
         ]
         let runner = ActionRunner()
         for template in accepted {
@@ -570,6 +581,8 @@ import Testing
             "builtin print \"{query}\"", "set {query}", "set -x {query}", "set +x '{query}'", "printf {query}",
             "zmodload zsh/datetime; strftime {query} 0", "zmodload zsh/stat; zstat {query} /",
             "zmodload zsh/system; syserror {query}", "zstyle {query} s v", "printf \"{query}\\n\" {query}",
+            "zmodload zsh/system; syswrite {query}", "zmodload zsh/pcre; pcre_compile x; pcre_match {query} x",
+            "zmodload zsh/pcre; pcre_compile x; pcre_match -b {query} x",
         ]
         let payloads = ["-vpath[$(touch \(ActionRunner.shellQuoted(marker.path)))]",
                         "-Apath[$(touch \(ActionRunner.shellQuoted(marker.path)))]"]

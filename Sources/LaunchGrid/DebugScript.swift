@@ -474,7 +474,7 @@ enum DebugScript {
                     let screen = window.convertPoint(toScreen: local)
                     let top = NSScreen.screens.first?.frame.maxY ?? 0
                     print("where: \(arg) \(Int(screen.x)),\(Int(top - screen.y))"); fflush(stdout)
-                case "drag", "merge", "fmerge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold", "nudgehold", "fnudgehold":
+                case "drag", "quickdrop", "merge", "fmerge", "edge", "fdrag", "fedge", "finside", "edgehide", "edgehold", "hold", "fhold", "panhold", "nudgehold", "fnudgehold":
                     // An optional third number grabs the icon that many points right of its centre.
                     let n = arg.split(separator: ",").compactMap { Int($0) }
                     guard let window = overlay.window, let from = n.first else { break }
@@ -839,6 +839,7 @@ enum DebugScript {
     /// fedge: like fdrag, dwelling at the open folder's right edge to flip its page first.
     /// finside: drag open-folder app `from` to the gap at folder slot `to`, staying inside it.
     /// hold / fhold: like drag / fdrag, without releasing ("release" does).
+    /// quickdrop: drag item `from` onto the centre of item `to` and release before a merge arms.
     /// panhold: swipe the page from beside item `from` by `to` points, without releasing.
     /// edgehide: dwell at the right edge until the page flips, then hide without releasing.
     static func simulateDrag(_ kind: String, from: Int, to: Int, grab: CGFloat = 0, state: AppState, window: NSWindow,
@@ -912,6 +913,11 @@ enum DebugScript {
                 let pager = state.drag.pagerFrame
                 NSLog("LaunchGrid debug: merge missed: active=\(state.drag.active) ids=\(state.drag.ids.count) candidate=\(String(describing: state.drag.candidate)) icon=\(state.drag.iconCenter) target=\(CGPoint(x: pager.minX + target.x, y: pager.minY + target.y)) end=\(end) pager=\(pager) iconSize=\(state.pageIconSize) gap=\(String(describing: state.drag.gap)) mode=\(RunLoop.main.currentMode?.rawValue ?? "-")")
             }
+        case "quickdrop":
+            end = rootPoint(to)
+            await glide(approach, end, steps: 4)
+            print("quickdrop: candidate=\(state.drag.candidate != nil) merge=\(state.drag.mergeTarget != nil)")
+            fflush(stdout)
         case "edge":
             let frame = state.drag.pagerFrame
             let edge = CGPoint(x: frame.maxX - 10, y: frame.midY)

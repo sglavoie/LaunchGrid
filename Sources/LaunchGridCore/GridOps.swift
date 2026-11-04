@@ -199,6 +199,7 @@ extension Grid {
     /// items have been taken out, which is what a live-reordering drag displays (a folder the
     /// move empties still counts, as it's still on screen).
     public mutating func move(_ ids: [UUID], toPage page: Int, at index: Int) {
+        forgetNeighbours(ids)
         let items = detach(ids)
         // The displayed gap counts folders the move just emptied. Translate it to a slot
         // among the remaining items before reserving room on the destination page.
@@ -285,6 +286,9 @@ extension Grid {
         // Count items before the anchor on its page that will be detached, to keep its slot.
         let wanted = Set(ids)
         let shift = pages[target.page].items[..<target.index].filter { wanted.contains($0.id) }.count
+        // The folder takes the anchor's place; the other items left theirs.
+        let anchorStays = loc.folderIndex == nil && wanted.contains(anchorID)
+        forgetNeighbours(ids.filter { !anchorStays || $0 != anchorID })
         let taken = detach(ids)
         let members = taken.flatMap(\.members)
         guard !members.isEmpty else { return nil }
@@ -292,6 +296,7 @@ extension Grid {
         let index = min(target.index - shift, pages[target.page].items.count)
         pages[target.page].items.insert(.folder(folder), at: max(0, index))
         normalize()
+        if anchorStays { replaceNeighbour(anchorID, with: [folder.id]) }
         movePrunedContents(of: taken, to: folder.id, at: 0)
         return folder.id
     }
@@ -300,6 +305,7 @@ extension Grid {
     /// folders among them are flattened into it. Search-only actions stay where they are.
     public mutating func addToFolder(_ ids: [UUID], folder folderID: UUID, at index: Int? = nil) {
         let moving = onPages(ids).filter { $0 != folderID }
+        forgetNeighbours(moving)
         let taken = detach(moving)
         let members = taken.flatMap(\.members)
         guard let loc = locate(folderID), loc.folderIndex == nil,
@@ -382,6 +388,40 @@ extension Grid {
             entry.pageTitle = nil
             entry.pageBefore = nil
             recentlyPruned[k] = entry
+        }
+        // Apps waiting after the folder now go after its last item.
+        replaceNeighbour(folderID, with: f.itemIDs)
+    }
+
+    // MARK: Waiting apps' neighbours
+
+    /// Items the user is moving away from their slots: apps an updater took out go back after
+    /// their nearest remembered neighbour wherever it is, so they would follow these. They
+    /// stop counting, and an app's fallback slot on their page closes up behind them.
+    /// Call before the items move, while their places are still known.
+    private mutating func forgetNeighbours(_ ids: [UUID]) {
+        guard !recentlyPruned.isEmpty, !ids.isEmpty else { return }
+        let gone = Set(ids)
+        for k in recentlyPruned.indices {
+            guard let before = recentlyPruned[k].before, before.contains(where: gone.contains) else { continue }
+            let pageID = recentlyPruned[k].pageID
+            let fromItsPage = before.filter { id in
+                gone.contains(id) && locate(id).map { $0.folderIndex == nil && pages[$0.page].id == pageID } == true
+            }.count
+            recentlyPruned[k].before = before.filter { !gone.contains($0) }
+            recentlyPruned[k].index = max(0, recentlyPruned[k].index - fromItsPage)
+        }
+    }
+
+    /// An item replaced in place by others (a folder by its contents, an item by the folder
+    /// made on it): apps waiting after it go after the last of those instead.
+    private mutating func replaceNeighbour(_ id: UUID, with ids: [UUID]) {
+        for k in recentlyPruned.indices {
+            guard let before = recentlyPruned[k].before, before.contains(id) else { continue }
+            // Nearest last: keep each ID's last occurrence.
+            var seen = Set<UUID>()
+            let replaced = before.flatMap { $0 == id ? ids : [$0] }
+            recentlyPruned[k].before = Array(replaced.reversed().filter { seen.insert($0).inserted }.reversed())
         }
     }
 

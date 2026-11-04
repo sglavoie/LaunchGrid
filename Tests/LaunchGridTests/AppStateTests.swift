@@ -974,6 +974,22 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.map(\.name) == ["B", "C", "A"])
     }
 
+    /// Released on an icon's centre before the merge arms, the item takes that icon's slot, as a
+    /// release just beside it does, rather than going back where it started.
+    @Test(arguments: [(1, ["B", "A", "C"]), (2, ["B", "C", "A"])])
+    func aQuickDropOnAnIconTakesItsSlot(target: Int, expected: [String]) {
+        let state = makeState(["A", "B", "C"])
+        state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let start = state.iconCenter(0, inFolder: false)
+        let center = state.iconCenter(target, inFolder: false)
+        state.dragChanged(start: start, location: center)
+        #expect(state.drag.candidate != nil)
+        #expect(state.drag.mergeTarget == nil)
+        state.dragEnded(start: start, location: center, predicted: center)
+        #expect(state.grid.pages[0].items.compactMap(\.folder).isEmpty)
+        #expect(state.grid.allApps.map(\.name) == expected)
+    }
+
     @Test func releasingAwayFromAMergeTargetDoesNotMakeAFolder() {
         let state = makeState(["A", "B", "C"])
         state.drag.pagerFrame = CGRect(x: 0, y: 0, width: 700, height: 500)

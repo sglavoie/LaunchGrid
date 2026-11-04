@@ -38,10 +38,10 @@ final class ActionRunner {
             Failure(message: String(localized: "{query} can't go inside a [[ … ]] test that compares numbers (-eq, -lt and the like) or checks -v or -t, where the shell would run what's typed as code. Compare it as text with == instead."))
         }
         static var placeholderInBuiltin: Failure {
-            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, break, continue, logout, read, unset, vared, getopts, getln, sysread or zformat, a variable name for typeset, declare, local, private or export (or after [ -v, test -v, set -A, strftime -s, zstat -A, syserror -e or sysopen -u), an argument of zstyle with an option, or an argument of printf %d (and other number formats), print -v, print -P or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
+            Failure(message: String(localized: "{query} can't be an argument of let, integer, float, repeat, shift, exit, return, break, continue, logout, read, unset, vared, getopts, getln, sysread, zformat, zparseopts, zregexparse, zsystem or zselect, a variable name for typeset, declare, local, private or export (or after [ -v, test -v, set -A, strftime -s, zstat -A, syserror -e, sysopen -u, syswrite -c, pcre_match -v or pcre_match -a), an argument of zstyle with an option, or an argument of printf %d (and other number formats), print -v, print -P or printf -v, or the value of a variable that holds a number (typeset -i n and then n={query}, or zsh's own, like SECONDS), where zsh would run what's typed as code. Use it as plain text instead."))
         }
         static var placeholderAsOption: Failure {
-            Failure(message: String(localized: "{query} can't go where print, printf, set, strftime, zstat, syserror, sysopen, zstyle or zformat still read options, where what's typed could start one that names a variable (-v, -A) and zsh would run it as code. Put -- before it: print -r -- {query}."))
+            Failure(message: String(localized: "{query} can't go where print, printf, set, strftime, zstat, syserror, sysopen, zstyle, zformat, syswrite or pcre_match still read options, where what's typed could start one that names a variable (-v, -A) and zsh would run it as code. Put -- before it: print -r -- {query}."))
         }
         static var placeholderInArithmeticVariable: Failure {
             Failure(message: String(localized: "A variable that holds {query} (n={query}, read n, for n in {query}, or $1 and the like) can't be used in $((…)), ((…)), $[…], a subscript, let, a [[ … ]] test that compares numbers or printf %d, where zsh would run what's typed as code. Compare or print it as text instead."))
@@ -972,6 +972,8 @@ final class ActionRunner {
                 case "sysopen": ["u", "m", "o"]
                 case "zstyle": ["d", "g", "m"]
                 case "zformat": ["f", "a"]
+                case "syswrite": ["c", "o"]
+                case "pcre_match": ["v", "a", "n"]
                 default: []
                 }
                 if let last = text.last, takesArgument.contains(last) { optionArgumentNext = true }
@@ -1032,7 +1034,10 @@ final class ActionRunner {
         private func evaluates(_ word: String, command: String) -> Bool {
             switch command {
             case "let", "integer", "float", "repeat", "shift", "exit", "return", "read", "unset", "vared",
-                 "getopts", "sysread", "break", "continue", "logout", "bye", "getln", "zformat":
+                 "getopts", "sysread", "break", "continue", "logout", "bye", "getln", "zformat",
+                 // Their specs and options name variables (`zparseopts v=name`, `zregexparse name
+                 // name`, `zsystem flock -f name`), and zselect reads options after its fds too.
+                 "zparseopts", "zregexparse", "zsystem", "zselect":
                 return true
             // A variable's name: `[ -v name ]`, `set -A name …`, `strftime -s name …`, `zstat -A name …`.
             case "[", "test":
@@ -1047,6 +1052,11 @@ final class ActionRunner {
                 return previous == "-e"
             case "sysopen":
                 return previous == "-u"
+            // `syswrite -c name`, `pcre_match -v name`, `pcre_match -a name` (or `-bv name`).
+            case "syswrite":
+                return follows(option: "c")
+            case "pcre_match":
+                return follows(option: "v") || follows(option: "a")
             // `zstyle -s ctx style {query}` names a variable; `zstyle -e` stores code.
             case "zstyle":
                 return zstyleOption
@@ -1060,6 +1070,14 @@ final class ActionRunner {
             default:
                 return false
             }
+        }
+
+        /// Whether the word before is a cluster of single-letter options ending in `letter`, whose
+        /// argument is then this word: `-v`, `-bv`.
+        private func follows(option letter: Character) -> Bool {
+            guard let previous else { return false }
+            let text = ActionRunner.unquoted(previous)
+            return text.count > 1 && text.hasPrefix("-") && !text.hasPrefix("--") && text.last == letter
         }
     }
 
@@ -1286,6 +1304,7 @@ final class ActionRunner {
     /// Builtins with an option that names a variable, which `{query}` could give itself.
     nonisolated static let optionsNameVariables: Set<String> = [
         "print", "printf", "set", "strftime", "zstat", "stat", "syserror", "sysopen", "zstyle", "zformat",
+        "syswrite", "pcre_match",
     ]
 
     /// zsh's variables that hold code it runs later: functions and aliases by name, and the

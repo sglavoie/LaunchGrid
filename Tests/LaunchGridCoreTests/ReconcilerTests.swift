@@ -79,6 +79,58 @@ func installed(_ name: String, id: String? = nil, path: String? = nil, category:
         #expect(g.recentlyPruned.isEmpty)
     }
 
+    /// An app away during an update goes back after its nearest remembered neighbour. A folder
+    /// made on that neighbour or ungrouped in its place takes it in; a neighbour the user moves
+    /// away (dragged, grouped onto another item, put in a folder) no longer counts.
+    static let neighbourCases: [(String, [[String]], [[String]])] = [
+        ("ungroup the folder before it", [["F(X,Y)", "A"]], [["X", "Y", "A"]]),
+        ("ungroup the folder between", [["B", "F(X,Y)", "A"]], [["B", "X", "Y", "A"]]),
+        ("group onto its neighbour", [["B", "P", "A", "Q"]], [["B", "New", "A"]]),
+        ("group its neighbour onto another", [["B", "P", "A", "Q"]], [["B", "A", "New"]]),
+        ("drag its neighbour to another page", [["B", "P", "A"], ["C"]], [["B", "A"], ["C", "P"]]),
+        ("drag its only neighbour away", [["P", "A", "X"], ["C"]], [["A", "X"], ["C", "P"]]),
+        ("move its neighbour on along the page", [["B", "P", "A", "D"]], [["B", "A", "D", "P"]]),
+        ("add its neighbour to a folder", [["B", "P", "A", "G(Z)"]], [["B", "A", "G"]]),
+    ]
+
+    @Test(arguments: neighbourCases)
+    func anUpdatingAppReturnsAfterTheNeighbourInItsPlace(_ name: String, layout: [[String]], expected: [[String]]) throws {
+        var all: [InstalledApp] = []
+        func item(_ spec: String) -> GridItem {
+            if let open = spec.firstIndex(of: "(") {
+                let members = spec[spec.index(after: open)..<spec.index(before: spec.endIndex)].split(separator: ",").map { installed(String($0)) }
+                all += members
+                return .folder(Folder(name: String(spec[..<open]), apps: members.map { $0.makeRef() }))
+            }
+            let app = installed(spec)
+            all.append(app)
+            return .app(app.makeRef())
+        }
+        var g = Grid(rows: 1, columns: 6, pages: layout.map { Page(items: $0.map(item)) })
+        func id(_ title: String) throws -> UUID {
+            try #require(g.pages.flatMap(\.items).first { $0.title == title }?.id)
+        }
+        let missing = try #require(all.first { $0.name == "A" })
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        _ = Reconciler.reconcile(&g, installed: all.filter { $0 != missing }, autoAdd: false,
+                                 pathExists: { $0 != missing.path }, now: now)
+        #expect(g.recentlyPruned.count == 1)
+        switch name {
+        case "ungroup the folder before it", "ungroup the folder between": g.ungroup(try id("F"))
+        case "group onto its neighbour": g.group([try id("P"), try id("Q")], name: "New", anchor: try id("P"))
+        case "group its neighbour onto another": g.group([try id("Q"), try id("P")], name: "New", anchor: try id("Q"))
+        case "drag its neighbour to another page", "drag its only neighbour away":
+            let p = try id("P")
+            g.removingEmptiedPages { $0.move([p], toPage: 1, at: 1) }
+        case "move its neighbour on along the page": g.move([try id("P")], toPage: 0, at: 2)
+        case "add its neighbour to a folder": g.addToFolder([try id("P")], folder: try id("G"))
+        default: Issue.record("unknown case \(name)")
+        }
+        _ = Reconciler.reconcile(&g, installed: all, autoAdd: false, now: now + 5)
+        #expect(g.pages.map { $0.items.map(\.title) } == expected, "\(name)")
+        #expect(g.recentlyPruned.isEmpty)
+    }
+
     @Test(arguments: [false, true], [3, 6].flatMap { columns in (0...2).map { (columns, $0) } })
     func deletingAPageKeepsSeveralUpdatingAppsInOrder(returnLastFirst: Bool, configuration: (Int, Int)) {
         let (columns, visibleIndex) = configuration
