@@ -488,9 +488,11 @@ extension AppState {
         if let g = drag.pendingGap, now.timeIntervalSince(drag.pendingGapSince) > Self.reorderDwell {
             drag.pendingGap = nil
             withAnimation(Self.dragMotion(.spring(response: 0.3, dampingFraction: 0.8))) { drag.gap = g }
+            Haptics.perform(.alignment)
         }
         if let c = drag.candidate, drag.mergeTarget != c, now.timeIntervalSince(drag.candidateSince) > Self.mergeDwell {
             withAnimation(Self.dragMotion(.spring(response: 0.25, dampingFraction: 0.7))) { drag.mergeTarget = c }
+            Haptics.perform(.levelChange)
         }
         guard drag.edgeSide != 0 else { return }
         // An icon in the edge column reaches into the edge zone: while the pointer rests on
@@ -507,6 +509,7 @@ extension AppState {
             guard target >= 0, target < pages else { return }
             // As with a page-dot click, keyboard focus must follow the page now shown.
             flipPage(target - folderPage)
+            Haptics.perform(.generic)
             // The gap follows the pointer onto the new page.
             drag.pendingGap = nil
             updateFolderGap(drag.iconCenter, immediately: true)
@@ -525,8 +528,44 @@ extension AppState {
                 drag.gap = nil
                 drag.pendingGap = nil
             }
+            Haptics.perform(.generic)
             // As `goToPage` does: focus past this page's end would make ← turn the page back.
             clampFocus()
+        }
+    }
+
+    /// After a drop: the icon glides from where it was let go into its place, which stays empty
+    /// until it's there, or shrinks into the folder it joined. None with Reduce Motion.
+    private func land(_ item: GridItem?, count: Int, from: CGPoint, ids: [UUID], merged: UUID?, changed: Bool) {
+        guard let item, isShown, Self.dragMotion(.default) != nil, let loc = grid.locate(item.id) else { return }
+        let size = openFolder != nil ? folderIconSize : pageIconSize
+        if let folder = openFolder, loc.folderIndex != nil {
+            // Into its place in the open folder, when that's on the folder page shown.
+            let perPage = FolderLayout.perPage(grid)
+            guard let index = folder.itemIDs.firstIndex(of: item.id), index / perPage == folderPage else { return }
+            let local = iconCenter(index - folderPage * perPage, inFolder: true)
+            let frame = drag.folderGridFrame
+            landing = Landing(item: item, count: count, from: from, to: CGPoint(x: frame.minX + local.x, y: frame.minY + local.y),
+                              size: size, endScale: 1, hides: Set(ids))
+        } else if openFolder == nil, loc.page == currentPage {
+            // Onto the page: into the tile it now is, or the folder it went into.
+            let index = loc.index
+            let local = iconCenter(index, inFolder: false)
+            let frame = drag.pagerFrame
+            let into = loc.folderIndex != nil
+            landing = Landing(item: item, count: count, from: from, to: CGPoint(x: frame.minX + local.x, y: frame.minY + local.y),
+                              size: size, endScale: into ? 0.3 : 1, hides: into ? [] : Set(ids))
+        } else {
+            return
+        }
+        if merged != nil, changed { Haptics.perform(.levelChange) }
+        if let l = landing {
+            Landing.last = "\(l.item.title) from \(Int(l.from.x)),\(Int(l.from.y)) to \(Int(l.to.x)),\(Int(l.to.y)) scale \(l.endScale) hides \(l.hides.count)"
+        }
+        let id = landing?.id
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(Landing.duration * 1000) + 40))
+            if self?.landing?.id == id { self?.landing = nil }
         }
     }
 
@@ -544,6 +583,10 @@ extension AppState {
         let ids = drag.ids
         let before = grid
         let merged = drag.mergeTarget
+        let released = drag.iconCenter
+        let primary = drag.primary
+        let count = ids.count
+        defer { land(primary, count: count, from: released, ids: ids, merged: merged, changed: grid != before) }
         let page = currentPage
         // Emptying the source page removes it, which shifts later pages; follow the target by ID.
         let pageID = grid.pages.indices.contains(page) ? grid.pages[page].id : nil

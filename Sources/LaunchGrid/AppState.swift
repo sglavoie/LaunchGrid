@@ -49,7 +49,9 @@ final class AppState {
     /// `gridGeneration` as of the last save (or load), so saving an unchanged grid doesn't
     /// replace the backup of the save before it with a copy of the same one.
     @ObservationIgnored private var savedGeneration = 0
-    @ObservationIgnored private var searchCache: (query: String, generation: Int, results: [Search.Match])?
+    @ObservationIgnored private var searchCache: (query: String, generation: Int, usage: Int, results: [Search.Match])?
+    /// Bumped by each open recorded in `prefs.usage`, which search ranks by.
+    private var usageGeneration = 0
     private(set) var installed: [InstalledApp] = []
     @ObservationIgnored private(set) var installedByPath: [String: InstalledApp] = [:]
     /// The scan's paths in lower case: the disk ignores case, so a tile at zoom.us.app whose
@@ -150,6 +152,25 @@ final class AppState {
     var focusIndex: Int?
     var textEdit: TextEditRequest?
     var toast: String?
+    /// The toast tells of a change ⌘Z undoes: it shows an Undo button.
+    var toastUndoable = false
+    /// The item being opened as the grid hides: it zooms toward you while the rest recede.
+    var launchingID: UUID?
+    /// The last item opened with the grid staying up, and a count that bumps on each open, so
+    /// its tile pulses every time.
+    var launchPulse: (id: UUID, count: Int) = (UUID(), 0)
+    /// A dropped icon gliding into its place (or into the folder it joined).
+    var landing: Landing?
+    /// Bundle IDs and paths of the apps running, for the dot under their icons.
+    var runningApps: Set<String> = []
+    /// The mouse button is held down over the grid: the tile under the pointer sinks in.
+    var mouseDown = false
+    /// Set when the first layout is made: the next show builds the grid in with a flourish.
+    var introPending = false
+    /// The page (or the open folder's) bouncing at its first or last page: no page to turn to.
+    @ObservationIgnored private var bouncing = false
+    /// Bounces so far, for the debug scripts.
+    @ObservationIgnored private(set) var bounceCount = 0
     /// Bumped when cached icons were dropped, so icon views load them again.
     var iconGeneration = 0
     /// Horizontal offset of the pager while a trackpad swipe is in progress.
@@ -366,6 +387,7 @@ final class AppState {
             for action in grid.allActions where new.item(action.id) == nil { new.addAction(action) }
         }
         if !hasGridFile {
+            introPending = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
             undoStack.removeAll()
@@ -442,7 +464,7 @@ final class AppState {
         let focusedID: UUID? = focusIndex.flatMap { i in
             let ids: [UUID]
             if !query.isEmpty {
-                ids = Search.results(in: old.allSearchItems, query: query)
+                ids = rankedResults(in: old, query: query)
                     .dropFirst(searchPage * old.capacity).prefix(old.capacity).map(\.id)
             } else if let id = openFolderID, let folder = old.folder(id) {
                 ids = folder.items.map(\.id)
@@ -1137,7 +1159,7 @@ final class AppState {
         case (true, false): String(localized: "\(exclude.count) excluded — ⌘Z to undo")
         default: String(localized: "\(include.count) included, \(exclude.count) excluded — ⌘Z to undo")
         }
-        showToast(toast)
+        showToast(toast, undoable: true)
     }
 
     // MARK: Derived
@@ -1146,11 +1168,33 @@ final class AppState {
     /// handler read it on each keystroke.
     var allSearchResults: [Search.Match] {
         // Read both through observation so views still track them on a cache hit.
-        let q = query, g = grid
-        if let c = searchCache, c.query == q, c.generation == gridGeneration { return c.results }
-        let results = Search.results(in: g.allSearchItems, query: q)
-        searchCache = (q, gridGeneration, results)
+        let q = query, g = grid, u = usageGeneration
+        if let c = searchCache, c.query == q, c.generation == gridGeneration, c.usage == u { return c.results }
+        let results = rankedResults(in: g, query: q)
+        searchCache = (q, gridGeneration, u, results)
         return results
+    }
+
+    /// Search's matches in `grid`, ranked with what's opened most and lately among equals.
+    private func rankedResults(in grid: Grid, query: String) -> [Search.Match] {
+        let usage = prefs.usage, now = Date()
+        return Search.results(in: grid.allSearchItems, query: query, usage: { usage.score($0, at: now) })
+    }
+
+    /// With nothing found, the actions that take an argument, to run with what was typed:
+    /// the most used first, at most three.
+    var noResultSuggestions: [Action] {
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty, allSearchResults.isEmpty else { return [] }
+        let usage = prefs.usage
+        return grid.allActions
+            .filter { $0.kind.takesArgument && !$0.needsReview && unavailableReason($0) == nil }
+            .sorted { a, b in
+                let (ua, ub) = (usage.score(.action(a)), usage.score(.action(b)))
+                if ua != ub { return ua > ub }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            .prefix(3)
+            .map { $0 }
     }
 
     var searchPageCount: Int {
@@ -1198,6 +1242,7 @@ final class AppState {
     func launch(_ app: AppRef) {
         // A SwiftUI tile or an open menu can still hold a ref from before a scan moved it.
         guard let app = grid.item(app.id)?.app else { return }
+        recordUse(.app(app))
         // Get out of the way at once, as Launchpad does; a slow app can take seconds. Staying
         // up, the grid opens it behind itself and keeps the keyboard, to open more.
         let hides = prefs.hideAfterLaunch
@@ -1206,6 +1251,7 @@ final class AppState {
         let knownPaths = Set(installed.map(\.path) + grid.allApps.map(\.path))
         let excludedPaths = Set(grid.removedBundleIDs.filter { $0.hasPrefix("/") })
         let otherTilePaths = Set(grid.allApps.filter { $0.id != app.id && $0.bundleID == app.bundleID }.map(\.path))
+        showOpening(app.id, hides: hides)
         if hides { onHideForLaunch() }
         Task {
             do {
@@ -1383,10 +1429,14 @@ final class AppState {
         if case .code(let job) = plan, job.mode == .background {
             // It stays in view while it runs: the tile's badge and a toast say how it went.
             if runningActions[action.id] != nil, !onConfirmRunAgain(action) { return nil }
+            recordUse(.action(action))
+            showOpening(action.id, hides: false)
             startInBackground(action, job)
             return nil
         }
+        recordUse(.action(action))
         let hides = prefs.hideAfterLaunch
+        showOpening(action.id, hides: hides)
         if hides { onHideForLaunch() }
         return Task {
             do {
@@ -1408,6 +1458,23 @@ final class AppState {
                 reportRunFailure(of: action, error)
             }
         }
+    }
+
+    /// What opening `id` looks like: hiding, its tile zooms toward you as the others recede;
+    /// staying up, it pulses.
+    private func showOpening(_ id: UUID, hides: Bool) {
+        guard isShown else { return }
+        if hides {
+            launchingID = id
+        } else {
+            launchPulse = (id, launchPulse.count &+ 1)
+        }
+    }
+
+    /// Notes an open for search's ranking (`Usage`).
+    func recordUse(_ item: GridItem) {
+        prefs.usage.record(item)
+        usageGeneration &+= 1
     }
 
     /// Starts a command or script in the background and follows it to its end.
@@ -1599,11 +1666,39 @@ final class AppState {
         } else if let f = openFolder {
             let pages = FolderLayout.pageCount(apps: f.items.count, grid: grid)
             let p = max(0, min(folderPage + delta, pages - 1))
+            if p == folderPage { return bounce(delta) }
             withAnimationIfShown { folderPage = p }
             keepFolderFocusOnShownPage()
         } else {
+            let last = grid.pages.count - 1
+            if !drag.active, delta != 0, currentPage + delta < 0 || currentPage + delta > last { return bounce(delta) }
             goToPage(currentPage + delta)
         }
+    }
+
+    /// Turning past the first or last page (a key, the wheel): the page gives a little that
+    /// way and springs back, so it's clear there's no more. Not mid-swipe, nor with Reduce Motion.
+    private func bounce(_ delta: Int) {
+        guard isShown, abs(delta) == 1, !bouncing, swipeOffset == 0, folderSwipeOffset == 0,
+              let spring = Self.pageAnimation else { return }
+        bouncing = true
+        let give: CGFloat = delta < 0 ? 26 : -26
+        let inFolder = openFolder != nil
+        withAnimation(.easeOut(duration: 0.08)) {
+            if inFolder { folderSwipeOffset = give } else { swipeOffset = give }
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard let self else { return }
+            withAnimation(spring) {
+                // Only the bounce's own offset: a swipe started meanwhile keeps its own.
+                if self.swipeOffset == give { self.swipeOffset = 0 }
+                if self.folderSwipeOffset == give { self.folderSwipeOffset = 0 }
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+            self.bouncing = false
+        }
+        bounceCount += 1
     }
 
     /// The pager's offset for a swipe of `dx` on a pager `width` wide: at most 0.6 of a page,
@@ -1691,14 +1786,17 @@ final class AppState {
         let apps = folders.reduce(loose) { $0 + $1.items.count }
         let withActions = folders.contains { !$0.actions.isEmpty }
         let installed = self.installed
-        apply { g in g.removingEmptiedPages { $0.remove(ids, installed: installed) } }
+        // The tiles shrink away as the rest close up.
+        withAnimation(isShown ? Self.dragMotion(.spring(response: 0.32, dampingFraction: 0.82)) : nil) {
+            apply { g in g.removingEmptiedPages { $0.remove(ids, installed: installed) } }
+        }
         selection.subtract(ids)
         if !folders.isEmpty {
             showToast(withActions ? String(localized: "Removed \(apps) items — ⌘Z to undo")
-                      : String(localized: "Removed \(apps) apps — ⌘Z to undo"))
+                      : String(localized: "Removed \(apps) apps — ⌘Z to undo"), undoable: true)
         } else {
             showToast(count > 1 ? String(localized: "Removed \(count) items — ⌘Z to undo")
-                      : name.map { String(localized: "Removed \($0) — ⌘Z to undo") } ?? String(localized: "Removed — ⌘Z to undo"))
+                      : name.map { String(localized: "Removed \($0) — ⌘Z to undo") } ?? String(localized: "Removed — ⌘Z to undo"), undoable: true)
         }
     }
 
@@ -1805,7 +1903,7 @@ final class AppState {
         // Re-flowing makes page titles meaningless, so they go; say so. Every app may have moved:
         // say how to get them back either way.
         showToast(hadTitles ? String(localized: "Sorted; page titles were cleared — ⌘Z to undo")
-                  : String(localized: "Sorted everything — ⌘Z to undo"))
+                  : String(localized: "Sorted everything — ⌘Z to undo"), undoable: true)
     }
 
     /// What Sort Everything does, for the questions asked before it where the grid is out of view.
@@ -1863,8 +1961,9 @@ final class AppState {
 
     /// While the overlay is hidden (an action from Settings, the menu bar or Finder), the
     /// message waits for the next time it's shown, unless that's a minute or more later.
-    func showToast(_ text: String) {
+    func showToast(_ text: String, undoable: Bool = false) {
         toast = text
+        toastUndoable = undoable
         toastPostedAt = Date()
         toastTask?.cancel()
         toastTask = nil
@@ -1880,6 +1979,7 @@ final class AppState {
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled else { return }
             self?.toast = nil
+            self?.toastUndoable = false
             self?.toastTask = nil
         }
     }
@@ -1888,19 +1988,45 @@ final class AppState {
     func didShow() {
         isShown = true
         showCount &+= 1
+        prewarmNearbyIcons()
+        // Clears itself once the build-in has played (the next show is an ordinary one).
+        if introPending {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                self?.introPending = false
+            }
+        }
         if grid.allActions.contains(where: { if case .userScript = $0.kind { true } else { false } }) {
             Task { await refreshScripts() }
         }
         guard toast != nil, toastTask == nil else { return }
         if Date().timeIntervalSince(toastPostedAt) > 60 {
             toast = nil
+            toastUndoable = false
         } else {
             scheduleToastDismissal()
         }
     }
 
+    /// The icons of the page shown and those beside it (folders' too) first, so a page turned
+    /// to never shows placeholders; the rest were rendered at launch.
+    private func prewarmNearbyIcons() {
+        let pages = grid.pages.indices.filter { abs($0 - currentPage) <= 1 }
+        IconProvider.shared.prewarm(pages.flatMap { grid.pages[$0].items.flatMap { item -> [String] in
+            switch item {
+            case .app(let a): [a.path]
+            case .folder(let f): f.items.compactMap { if case .app(let a) = $0 { a.path } else { nil } }
+            case .action: []
+            }
+        } })
+    }
+
     /// Resets transient state when the overlay closes.
     func didHide() {
+        launchingID = nil
+        mouseDown = false
+        landing = nil
+        introPending = false
         query = ""
         openFolderID = nil
         editing = false
@@ -1962,6 +2088,24 @@ final class AppState {
         guard reconcileAfterDrag else { return }
         reconcileAfterDrag = false
         reconcile()
+    }
+
+    /// Bundle IDs and paths of the running apps, from NSWorkspace, for the dots under icons.
+    func refreshRunningApps() {
+        var set = Set<String>()
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            if let id = app.bundleIdentifier { set.insert(id) }
+            if let path = app.bundleURL?.path { set.insert(path) }
+        }
+        if set != runningApps { runningApps = set }
+    }
+
+    /// Whether `app` is running: the same copy, or any copy of its app when only one tile has it.
+    func isRunning(_ app: AppRef) -> Bool {
+        if runningApps.contains(app.path) { return true }
+        guard let id = app.bundleID, runningApps.contains(id) else { return false }
+        // Xcode and Xcode-beta share an ID: then only the copy's own path says which runs.
+        return grid.allApps.filter { $0.bundleID == id }.count < 2
     }
 
     /// Page and folder transitions; none with Reduce Motion, so nothing slides.

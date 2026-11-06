@@ -350,6 +350,49 @@ enum DebugScript {
                     if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
                     if let f = state.openFolder { print("folder: \(f.items.count) apps, first \(f.items.prefix(3).map(\.title)), last \(f.items.suffix(3).map(\.title))") }
                     fflush(stdout)
+                case "polish":
+                    // The motion and feedback state (`Polish.swift`), which snaps alone can't show.
+                    print("polish: showms=\(ShowTiming.lastMilliseconds.map { String(format: "%.1f", $0) } ?? "-") haptics=\(Haptics.count) bounces=\(state.bounceCount) launching=\(state.launchingID.flatMap { state.grid.item($0)?.title } ?? "-") pulse=\(state.launchPulse.count) landing=\(state.landing == nil ? "-" : "now") lastLanding='\(Landing.last)' toast='\(state.toast ?? "-")' undoable=\(state.toastUndoable) running=\(state.runningApps.count) runningShown=\(state.currentItems.filter { $0.app.map(state.isRunning) ?? false }.map(\.title)) intro=\(state.introPending) suggestions=\(state.noResultSuggestions.map(\.name)) results=\(state.searchResults.prefix(6).map(\.title))")
+                    fflush(stdout)
+                case "presssnap":
+                    // "presssnap:name": waits (up to 10 s) for the mouse button to go down over the
+                    // grid, then snaps 250 ms later, while it's held.
+                    for _ in 0..<500 where !state.mouseDown { try? await Task.sleep(for: .milliseconds(20)) }
+                    try? await Task.sleep(for: .milliseconds(250))
+                    print("presssnap: down=\(state.mouseDown)"); fflush(stdout)
+                    snapshot(name: arg.isEmpty ? "press" : arg, dir: dir)
+                case "film":
+                    // "film:ACTION|count|ms|name": does ACTION, then snaps `count` times, waiting `ms` before each (a snap takes ~200 ms itself)
+                    // (name-0…), to see an animation through. ACTION: show, hide, open (folder N
+                    // of the page, or the first), close, remove (item N), launch (item N), flip (+1/-1),
+                    // type (text), clear (the search), undo, none.
+                    let f = arg.split(separator: "|").map(String.init)
+                    guard f.count == 4, let count = Int(f[1]), let ms = Int(f[2]) else { break }
+                    let a = f[0].split(separator: "=", maxSplits: 1).map(String.init)
+                    let n = a.count > 1 ? Int(a[1]) : nil
+                    let began = CACurrentMediaTime()
+                    switch a[0] {
+                    case "show": overlay.show()
+                    case "hide": overlay.hide()
+                    case "open":
+                        if let n, let f = state.currentItems[safe: n]?.folder { state.openFolder(f.id) }
+                        else if let f = state.currentItems.compactMap(\.folder).first { state.openFolder(f.id) }
+                    case "close": state.closeFolder()
+                    case "remove": if let item = state.currentItems[safe: n ?? 0] { state.remove([item.id]) }
+                    case "launch": if let item = state.currentItems[safe: n ?? 0] { state.activate(item) }
+                    case "flip": state.flipPage(n ?? 1)
+                    case "type": for ch in (a.count > 1 ? a[1] : "") { state.searchLine.insert(String(ch)) }
+                    case "clear": state.query = ""
+                    case "undo": state.undo()
+                    default: break
+                    }
+                    for i in 0..<count {
+                        try? await Task.sleep(for: .milliseconds(ms))
+                        snapshot(name: "\(f[3])-\(i)", dir: dir)
+                        let w = overlay.window
+                        print("film: \(f[3])-\(i) at=\(Int((CACurrentMediaTime() - began) * 1000))ms alpha=\(String(format: "%.2f", w?.alphaValue ?? -1)) visible=\(w?.isVisible ?? false) launching=\(state.launchingID != nil)")
+                        fflush(stdout)
+                    }
                 case "pagerframe":
                     // The page grid's frame and cell size, to place a drag near its edge columns.
                     print("pagerframe: \(state.drag.pagerFrame) cell=\(state.pageLayout.cell) columns=\(state.grid.columns)")

@@ -354,6 +354,7 @@ struct AppearanceSettings: View {
             Section("Icons") {
                 ValueSlider(title: "Icon size", value: $prefs.iconScale, range: 0.6...1.4, valueText: percent(prefs.iconScale))
                 Toggle("Show app names", isOn: $prefs.showLabels)
+                Toggle("Show a dot under running apps", isOn: $prefs.showRunningIndicator)
             }
         }
         .formStyle(.grouped)

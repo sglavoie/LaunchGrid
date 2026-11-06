@@ -6,6 +6,7 @@ import LaunchGridCore
 struct GridRootView: View {
     @Environment(AppState.self) private var state
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var size: CGSize = .zero
 
     var body: some View {
         // A folder or the rename card is modal: VoiceOver stays out of what's beneath it.
@@ -48,7 +49,7 @@ struct GridRootView: View {
                         .accessibilityElement(children: .contain)
                         .accessibilityAddTraits(.isModal)
                         .accessibilityHidden(editModal)
-                        .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
+                        .transition(reduceMotion ? .opacity : folderTransition(folder))
                 }
             }
             // Opening and closing animate from here, not through `withAnimation`: called right
@@ -59,6 +60,7 @@ struct GridRootView: View {
             .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.openFolderID)
 
             DragLayer()
+            LandingLayer()
 
             ZStack {
                 if let edit = state.textEdit {
@@ -73,8 +75,9 @@ struct GridRootView: View {
             // `textEdit` changes outside any animation. With Reduce Motion, a short fade.
             .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.textEdit?.id)
 
+            // Only its Undo button takes clicks; the rest goes to the grid beneath.
             ToastLayer()
-                .allowsHitTesting(false)
+                .allowsHitTesting(state.toastUndoable)
         }
         .coordinateSpace(name: "root")
         .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: {
@@ -85,11 +88,27 @@ struct GridRootView: View {
                 .onChanged { state.dragChanged(start: $0.startLocation, location: $0.location) }
                 .onEnded { state.dragEnded(start: $0.startLocation, location: $0.location, predicted: $0.predictedEndLocation) }
         )
-        // With Reduce Motion the overlay only fades in.
-        .scaleEffect(state.isShown || reduceMotion ? 1 : 1.04)
-        .opacity(state.isShown ? 1 : 0)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        // The tiles themselves settle in and drift out (`AppearMotion`); the whole fades. Hiding to
+        // open an item, the window's own fade does it, so the opened tile's zoom stays in view.
+        .opacity(state.isShown || state.launchingID != nil ? 1 : 0)
         .animation(.easeOut(duration: 0.15), value: state.isShown)
         .environment(\.colorScheme, .dark)
+    }
+
+    /// The open folder grows out of its tile and shrinks back into it: from the tile's place and
+    /// size to the middle. Where the tile isn't on the page shown, it grows from the middle.
+    private func folderTransition(_ folder: Folder) -> AnyTransition {
+        let frame = state.drag.pagerFrame
+        guard size != .zero, frame != .zero,
+              let i = state.currentItems.firstIndex(where: { $0.id == folder.id }) else {
+            return .scale(scale: 0.85).combined(with: .opacity)
+        }
+        let c = state.iconCenter(i, inFolder: false)
+        let tile = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
+        let panel = state.drag.folderPanelFrame.width > 0 ? state.drag.folderPanelFrame.width : size.width * 0.6
+        let offset = CGSize(width: tile.x - size.width / 2, height: tile.y - size.height / 2)
+        return .folderZoom(offset: offset, startScale: min(0.5, state.pageIconSize / max(panel, 1)))
     }
 
     /// Steps back one level, in Esc's order: search, edit mode, then the selection.
@@ -113,20 +132,47 @@ struct ToastLayer: View {
     @Environment(AppState.self) private var state
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// "Removed Safari — ⌘Z to undo" as "Removed Safari", beside its Undo button.
+    static func withoutUndoHint(_ text: String) -> String {
+        let hint = String(localized: "— ⌘Z to undo")
+        guard let r = text.range(of: hint, options: .backwards) else { return text }
+        return text[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
+    }
+
     var body: some View {
         VStack {
             Spacer()
             if let toast = state.toast {
-                Text(toast)
-                    .font(.callout.weight(.medium))
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(.bottom, 80)
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                HStack(spacing: 12) {
+                    Text(state.toastUndoable ? Self.withoutUndoHint(toast) : toast)
+                        .font(.callout.weight(.medium))
+                    if state.toastUndoable {
+                        Button {
+                            state.undo()
+                            state.toast = nil
+                            state.toastUndoable = false
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("Undo")
+                                Text(verbatim: "⌘Z").foregroundStyle(.secondary)
+                            }
+                            .font(.callout.weight(.semibold))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(.white.opacity(0.16), in: Capsule())
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Undo")
+                    }
+                }
+                .padding(.leading, 16).padding(.trailing, state.toastUndoable ? 6 : 16).padding(.vertical, state.toastUndoable ? 5 : 9)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.bottom, 80)
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.easeOut(duration: 0.2), value: state.toast)
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.34, dampingFraction: 0.78), value: state.toast)
         // VoiceOver doesn't see a toast appear; "Removed — ⌘Z to undo" is worth hearing.
         .onChange(of: state.toast) { _, toast in
             if let toast { AccessibilityNotification.Announcement(toast).post() }
@@ -421,7 +467,7 @@ struct Pager: View {
                 if state.drag.pagerSize != $0.size { state.drag.pagerSize = $0.size }
             }
         }
-        .clipped()
+        .clippedSideways()
         // Pages run left to right in every language, as the swipes and arrow keys do.
         .environment(\.layoutDirection, .leftToRight)
         .onChange(of: state.currentPage) { old, _ in settledPage = old }
@@ -466,14 +512,26 @@ struct PageView: View {
         let selection = state.selection
         let mergeTarget = state.drag.mergeTarget
         let editing = state.editing
+        let current = page == state.currentPage
+        let hovers = current && !state.drag.active && state.openFolderID == nil && state.textEdit == nil
+        // Kept empty: the open folder's tile (the panel grew out of it), and tiles a dropped icon
+        // is still gliding into.
+        let hidden = (state.landing?.hides ?? []).union(state.openFolderID.map { [$0] } ?? [])
+        let columns = state.grid.columns, rows = state.grid.rows
         ZStack(alignment: .topLeading) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 if let item = entry.item {
+                    let dx = Double(index % columns) - Double(columns - 1) / 2
+                    let dy = Double(index / columns) - Double(rows - 1) / 2
                     ItemCell(item: item, iconSize: icon, selected: selection.contains(item.id), focused: focus == item.id,
-                             mergeTarget: mergeTarget == item.id, editing: editing)
+                             mergeTarget: mergeTarget == item.id, editing: editing, hovers: hovers)
+                        .modifier(AppearMotion(distance: hypot(dx, dy), order: index, current: current))
+                        .opacity(hidden.contains(item.id) ? 0 : 1)
                         .accessibilityFocused($voiceOverFocus, equals: item.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(index))
+                        // Removed, a tile shrinks away as the rest close up.
+                        .transition(.scale(scale: 0.3).combined(with: .opacity))
                 }
             }
         }
@@ -504,6 +562,8 @@ struct ItemCell: View {
     let focused: Bool
     let mergeTarget: Bool
     let editing: Bool
+    /// Whether it reacts to the pointer over it: not during a drag or behind a folder.
+    var hovers = true
     /// Set while a long press that entered edit mode is held: its release is not a tap.
     @State private var swallowTap = false
 
@@ -517,6 +577,8 @@ struct ItemCell: View {
             editing: editing,
             onDelete: { state.remove([item.id]) }
         )
+        .modifier(TileMotion(enabled: hovers, cornerRadius: 14))
+        .modifier(OpenMotion(id: item.id))
         .onTapGesture { tapped() }
         .modifier(ItemAccessibilityActions(id: item.id, selected: selected, isFolder: item.folder != nil, open: { state.activate(item) }))
         .simultaneousGesture(
@@ -569,6 +631,8 @@ struct ItemView: View {
     var editing = false
     /// The argument a search result for an action carries, shown under its name.
     var argument: String?
+    /// The search typed, whose letters show in bold in a result's name.
+    var query: String?
     var onDelete: (() -> Void)?
 
     var body: some View {
@@ -584,6 +648,11 @@ struct ItemView: View {
                         }
                     }
                     .scaleEffect(mergeTarget && !reduceMotion ? 1.12 : 1)
+                    .overlay(alignment: .bottom) {
+                        if case .app(let app) = item, state.prefs.showRunningIndicator, state.isRunning(app) {
+                            RunningDot(size: iconSize).offset(y: 4.5)
+                        }
+                    }
                 if editing, let onDelete {
                     // Smaller on small icons (a dense grid in a small window), so it doesn't hide them.
                     let badge = min(20, max(10, iconSize * 0.45))
@@ -603,7 +672,7 @@ struct ItemView: View {
             }
             .modifier(Jiggle(active: editing, seed: item.id.hashValue))
             if state.prefs.showLabels && labelsFit {
-                Text(item.title)
+                (query.map { highlightedTitle(item.title, query: $0, contrast: contrast) } ?? Text(item.title))
                     .font(.system(size: max(11, min(13, iconSize * 0.14))))
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -662,7 +731,7 @@ struct ItemView: View {
             case .unavailable: Text("Action, unavailable: \(state.unavailableReason(a) ?? "")")
             case nil: Text("Action")
             }
-        case .app: Text(verbatim: "")
+        case .app(let a): state.prefs.showRunningIndicator && state.isRunning(a) ? Text("Running") : Text(verbatim: "")
         }
     }
 
@@ -694,13 +763,19 @@ struct AppIcon: View {
     @State private var loaded: NSImage?
 
     var body: some View {
-        Group {
-            if let image = IconProvider.shared.cached(path) ?? loaded {
+        let image = IconProvider.shared.cached(path) ?? loaded
+        ZStack {
+            if let image {
                 Image(nsImage: image).resizable().interpolation(.high)
+                    .transition(.opacity)
             } else {
                 RoundedRectangle(cornerRadius: size * 0.22).fill(.white.opacity(0.08))
+                    .transition(.opacity)
             }
         }
+        // An icon drawn while the grid was up fades in over its placeholder rather than pop in.
+        // One already drawn shows at once: the value doesn't change.
+        .animation(.easeOut(duration: 0.18), value: image != nil)
         .frame(width: size, height: size)
         .task(id: "\(path)|\(state.iconGeneration)") {
             // Returns at once from the cache.
@@ -829,18 +904,24 @@ struct PageDots: View {
 
     var body: some View {
         let count = state.query.isEmpty ? state.grid.pages.count + (state.showsVirtualPage ? 1 : 0) : 0
+        // Where the pages are, in pages: follows a swipe as it goes, so the lit dot stretches
+        // toward the page coming in and settles there.
+        let width = max(state.drag.pagerSize.width, 1)
+        let at = Double(state.currentPage) - Double(state.swipeOffset / width)
+        let dim = contrast == .increased ? 0.6 : 0.35
         HStack(spacing: 10) {
             if count > 1 {
                 ForEach(0..<count, id: \.self) { p in
                     let title = state.grid.pages.indices.contains(p) ? state.grid.pages[p].title : nil
-                    Circle()
-                        .fill(.white.opacity(p == state.currentPage ? 0.95 : contrast == .increased ? 0.6 : 0.35))
-                        .frame(width: 8, height: 8)
+                    let near = max(0, 1 - abs(Double(p) - at))
+                    Capsule()
+                        .fill(.white.opacity(dim + (0.95 - dim) * near))
+                        .frame(width: 8 + 14 * near, height: 8)
                         // A dark edge, so the dots show on a light background too.
-                        .overlay(Circle().strokeBorder(.black.opacity(contrast == .increased ? 0.6 : 0.25), lineWidth: 0.5))
+                        .overlay(Capsule().strokeBorder(.black.opacity(contrast == .increased ? 0.6 : 0.25), lineWidth: 0.5))
                         .shadow(color: .black.opacity(0.35), radius: 1.5)
                         .padding(4)
-                        .contentShape(Circle().inset(by: -4))
+                        .contentShape(Capsule().inset(by: -4))
                         .onTapGesture { state.goToPage(p) }
                         .help(state.grid.pages.indices.contains(p) ? title.map { Text(verbatim: $0) } ?? Text("Page \(p + 1)") : Text("New page"))
                         .accessibilityLabel(state.grid.pages.indices.contains(p)
@@ -880,6 +961,7 @@ struct PageDots: View {
 struct SearchResultsView: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AccessibilityFocusState private var voiceOverFocus: UUID?
 
     var body: some View {
@@ -889,22 +971,27 @@ struct SearchResultsView: View {
             let results = state.searchResults
             ZStack(alignment: .topLeading) {
                 if results.isEmpty {
-                    Text("No Results")
-                        .font(.title2.weight(.medium))
-                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.85 : 0.6))
-                        .modifier(Legible())
+                    NoResultsView()
                         .frame(width: geo.size.width, height: geo.size.height)
+                        .transition(.opacity)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
-                    ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument)
+                    ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument,
+                             query: match.argument == nil ? state.query : nil)
+                        .modifier(TileMotion(enabled: true, cornerRadius: 14))
+                        .modifier(OpenMotion(id: match.item.id))
                         .onTapGesture { state.activateResult(match) }
                         .accessibilityAction { state.activateResult(match) }
                         .accessibilityFocused($voiceOverFocus, equals: match.id)
                         .contextMenu { ItemMenu(item: match.item) }
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(i))
+                        // New matches grow in where they rank, dropped ones shrink away.
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
                 }
             }
+            // Each keystroke re-ranks: results slide to their new places rather than jump.
+            .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.86), value: results.map(\.id))
             .onChange(of: state.focusIndex) { _, i in
                 if let i, results.indices.contains(i) { voiceOverFocus = results[i].id }
             }
@@ -929,6 +1016,74 @@ struct SearchResultsView: View {
             }
             AccessibilityNotification.Announcement(text).post()
         }
+    }
+}
+
+/// Nothing matched: what can still be done with what was typed, the actions that take an
+/// argument (Return runs the first), or how to make one.
+struct NoResultsView: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        let suggestions = state.noResultSuggestions
+        VStack(spacing: 18) {
+            Text("No Results")
+                .font(.title2.weight(.medium))
+                .foregroundStyle(.white.opacity(contrast == .increased ? 0.85 : 0.6))
+                .modifier(Legible())
+            if suggestions.isEmpty {
+                VStack(spacing: 8) {
+                    Text("An action with {query} in its link can search the web, or anything else, from here.")
+                        .font(.callout)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 0.85 : 0.6))
+                        .modifier(Legible())
+                        .frame(maxWidth: 420)
+                    Button("New Action…") { state.newAction() }
+                        .buttonStyle(PillButtonStyle())
+                }
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(Array(suggestions.enumerated()), id: \.element.id) { i, action in
+                        Button {
+                            state.run(action, argument: state.query.trimmingCharacters(in: .whitespaces))
+                        } label: {
+                            HStack(spacing: 10) {
+                                ActionTile(action: action, size: 26)
+                                Text("Search “\(state.query)” with \(action.name)")
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 8)
+                                if i == 0 {
+                                    Image(systemName: "return")
+                                        .foregroundStyle(.white.opacity(0.6))
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .frame(width: 380)
+                            .background(.white.opacity(i == 0 ? 0.16 : 0.08), in: RoundedRectangle(cornerRadius: 10))
+                            .contentShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .modifier(TileMotion(enabled: true, cornerRadius: 10))
+                        .accessibilityHint(i == 0 ? Text("Return runs it") : Text(verbatim: ""))
+                    }
+                }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Clipped at the sides only, where the pages beside it would show. Above and below, a
+    /// tile's ✕ badge, its hover glow and its lift reach past the frame in a tight grid, and
+    /// were cut off flat.
+    func clippedSideways() -> some View {
+        mask { Rectangle().padding(.vertical, -400) }
     }
 }
 
@@ -980,7 +1135,7 @@ struct FolderPanel: View {
                         .offset(x: state.folderSwipeOffset)
                 }
                 .frame(width: gridSize.width, height: gridSize.height)
-                .clipped()
+                .clippedSideways()
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                     state.drag.folderGridFrame = $0
                 }
@@ -1043,13 +1198,18 @@ struct FolderPageContent: View {
         let focus = state.focusIndex.flatMap { folder.items[safe: $0]?.id }
         let selection = state.selection
         let editing = state.editing
+        let hovers = !state.drag.active && state.textEdit == nil
+        let hidden = state.landing?.hides ?? []
         return ZStack(alignment: .topLeading) {
             ForEach(visible, id: \.element.id) { offset, entry in
                 if let member = entry.member {
-                    FolderItemCell(member: member, iconSize: icon, selected: selection.contains(member.id), focused: focus == member.id, editing: editing)
+                    FolderItemCell(member: member, iconSize: icon, selected: selection.contains(member.id), focused: focus == member.id,
+                                   editing: editing, hovers: hovers)
+                        .opacity(hidden.contains(member.id) ? 0 : 1)
                         .accessibilityFocused($voiceOverFocus, equals: member.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
                         .position(layout.center(offset - start))
+                        .transition(.scale(scale: 0.3).combined(with: .opacity))
                 }
             }
         }
@@ -1075,6 +1235,7 @@ struct FolderItemCell: View {
     let selected: Bool
     let focused: Bool
     let editing: Bool
+    var hovers = true
     /// Set while a long press that entered edit mode is held: its release is not a tap.
     @State private var swallowTap = false
 
@@ -1082,6 +1243,8 @@ struct FolderItemCell: View {
         let item = member.gridItem
         ItemView(item: item, iconSize: iconSize, selected: selected, focused: focused,
                  editing: editing, onDelete: { state.remove([member.id]) })
+            .modifier(TileMotion(enabled: hovers, cornerRadius: 14))
+            .modifier(OpenMotion(id: member.id))
             .onTapGesture {
                 if swallowTap { swallowTap = false; return }
                 let mods = NSEvent.modifierFlags

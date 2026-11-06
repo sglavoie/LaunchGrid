@@ -215,7 +215,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         overlay = OverlayController(state: state)
         state.onHide = { [weak self] in self?.overlay.hide() }
-        state.onHideForLaunch = { [weak self] in self?.overlay.hide(deactivate: false) }
+        state.onHideForLaunch = { [weak self] in
+            // Long enough to see the opened tile zoom (`OpenMotion`); none of it with Reduce Motion.
+            let zoom = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            self?.overlay.hide(deactivate: false, duration: zoom ? 0.2 : 0.12)
+        }
         state.onLaunchedBehind = { [weak self] in self?.overlay.openedBehind($0) }
         state.onError = { [weak self] title, detail in self?.showError(title, detail) }
         state.onSaveFailure = { [weak self] title, detail in self?.showSaveFailure(title, detail) }
@@ -288,6 +292,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                         self?.state.rescan()
                     }
                 }
+            }
+        }
+        // The dots under running apps.
+        state.refreshRunningApps()
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.state.refreshRunningApps() }
             }
         }
         // A scratch copy hands the shortcut over while another LaunchGrid runs, and takes it back after.

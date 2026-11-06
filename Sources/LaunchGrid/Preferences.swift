@@ -85,6 +85,11 @@ final class Preferences {
     var hideOnSpaceChange: Bool { didSet { d.set(hideOnSpaceChange, forKey: "hideOnSpaceChange") } }
     var iconScale: Double { didSet { d.set(iconScale, forKey: "iconScale") } }
     var showLabels: Bool { didSet { d.set(showLabels, forKey: "showLabels") } }
+    /// A dot under apps that are running, as in the Dock.
+    var showRunningIndicator: Bool { didSet { d.set(showRunningIndicator, forKey: "showRunningIndicator") } }
+    /// How often and how recently each item was opened, which search ranks by. Only LaunchGrid's
+    /// own record of what it opened; nothing observes it.
+    @ObservationIgnored var usage: Usage { didSet { d.set(usage.propertyList, forKey: "usage") } }
     var folderPlacement: FolderPlacement { didSet { d.set(folderPlacement.rawValue, forKey: "folderPlacement") } }
     var extraFolders: [String] { didSet { d.set(extraFolders, forKey: "extraFolders") } }
     /// The paths of the apps the latest scan found, so the first scan after a launch knows which
@@ -118,6 +123,7 @@ final class Preferences {
             "hideOnSpaceChange": false,
             "iconScale": 1.0,
             "showLabels": true,
+            "showRunningIndicator": true,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
         // Keyboard translation takes a 16-bit key code. A hand-edited value outside that
@@ -141,6 +147,8 @@ final class Preferences {
         hideOnSpaceChange = d.bool(forKey: "hideOnSpaceChange")
         iconScale = Self.appearanceValue(d.double(forKey: "iconScale"), in: 0.6...1.4, fallback: 1)
         showLabels = d.bool(forKey: "showLabels")
+        showRunningIndicator = d.bool(forKey: "showRunningIndicator")
+        usage = Usage(propertyList: d.dictionary(forKey: "usage"))
         folderPlacement = FolderPlacement(rawValue: d.string(forKey: "folderPlacement") ?? "") ?? .first
         extraFolders = d.stringArray(forKey: "extraFolders") ?? []
         scannedPaths = d.stringArray(forKey: "scannedPaths") ?? []

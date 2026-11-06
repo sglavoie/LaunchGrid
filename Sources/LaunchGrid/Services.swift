@@ -171,7 +171,16 @@ enum Volume: Sendable {
 
 /// Loads app icons off the main thread and keeps them rendered at grid size.
 final class IconProvider: @unchecked Sendable {
-    static let shared = IconProvider()
+    static let shared: IconProvider = {
+        #if !APP_STORE
+        // LAUNCHGRID_DEBUG_ICON_DELAY=secs: each icon takes that long to draw, so a scratch run
+        // shows icons arriving while the grid is up (their placeholders fade into them).
+        if Preferences.isScratch, let delay = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_ICON_DELAY"].flatMap(Double.init) {
+            return IconProvider(beforeCaching: { _ in Thread.sleep(forTimeInterval: delay) })
+        }
+        #endif
+        return IconProvider()
+    }()
     /// Icons are rendered once at this pixel size and scaled down by SwiftUI.
     static let pixelSize = 256
 

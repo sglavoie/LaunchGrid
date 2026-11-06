@@ -81,6 +81,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             welcome.makeKeyAndOrderFront(nil)
             return
         }
+        let showStart = CACurrentMediaTime()
+        let interval = ShowTiming.signposter.beginInterval("Show")
         let mouse = NSEvent.mouseLocation
         screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         let panel = makePanelIfNeeded()
@@ -99,6 +101,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if state.textEdit == nil { panel.makeFirstResponder(textInput) }
         launchedBehind = nil
         state.didShow()
+        // The first frame is drawn when this turn of the run loop commits; time it there.
+        CATransaction.setCompletionBlock {
+            DispatchQueue.main.async {
+                ShowTiming.lastMilliseconds = (CACurrentMediaTime() - showStart) * 1000
+                ShowTiming.signposter.endInterval("Show", interval)
+            }
+        }
         // Shown again mid-fade, whose completion now won't run: a save that already ended
         // there is reported here (one still running reports itself, now the grid is shown).
         if let progress = hideProgress, !progress.gone {
@@ -131,7 +140,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// - Parameter saving: false when the caller has just saved (quitting), so a failure
     ///   isn't reported twice.
-    func hide(deactivate: Bool = true, saving: Bool = true) {
+    /// - Parameter duration: the fade; longer when an item opens, so its zoom is seen.
+    func hide(deactivate: Bool = true, saving: Bool = true, duration: TimeInterval = 0.12) {
         guard let panel, panel.isVisible else { return }
         // Already fading out: that hide's save and completion stand, or the first save's
         // failure would go unreported. A caller bringing another window forward still keeps
@@ -163,7 +173,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         visibilityGeneration += 1
         let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.12
+            ctx.duration = duration
+            if duration > 0.12 { ctx.timingFunction = CAMediaTimingFunction(name: .easeIn) }
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
@@ -421,6 +432,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             let consumed = MainActor.assumeIsolated { self?.handleScroll(event) == nil }
             return consumed ? nil : event
+        } as Any)
+        // Whether the button is held over the grid, for the tile under the pointer to sink in
+        // (`TileMotion`). Only watched, never consumed: a gesture on each tile took clicks from them.
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, event.window === self.panel else { return }
+                let down = event.type == .leftMouseDown
+                if self.state.mouseDown != down { self.state.mouseDown = down }
+            }
+            return event
         } as Any)
     }
 
@@ -825,7 +846,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func activateFocused() {
         if !state.query.isEmpty {
             let results = state.searchResults
-            if let match = results[safe: state.focusIndex ?? 0] { state.activateResult(match) }
+            if let match = results[safe: state.focusIndex ?? 0] {
+                state.activateResult(match)
+            } else if results.isEmpty, let action = state.noResultSuggestions.first {
+                // Nothing found: the first suggestion runs with what was typed.
+                state.run(action, argument: state.query.trimmingCharacters(in: .whitespaces))
+            }
             return
         }
         guard let i = state.focusIndex else { return }

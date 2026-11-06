@@ -82,7 +82,32 @@ public enum Search {
     /// query equal to a keyword, or one starting with a keyword and a space when the action
     /// takes an argument, puts the action above any name match, carrying what follows.
     /// Folders aren't matched themselves; pass their apps.
-    public static func results(in items: [GridItem], query: String) -> [Match] {
+    ///
+    /// With `usage`, how much each item is used ranks matches of the same kind (both prefixes,
+    /// both word starts…) before their length does, so "s" finds the Safari you open daily
+    /// before a shorter Slack you never do. A better kind of match always comes first.
+    public static func results(in items: [GridItem], query: String, usage: ((GridItem) -> Double)? = nil) -> [Match] {
+        let scored = results(scoring: items, query: query)
+        guard let usage else { return scored.map(\.0) }
+        let used = scored.map { ($0.0, $0.1, usage($0.0.item)) }
+        // Too little use to say anything counts as none, so a single open long ago doesn't
+        // reorder a list typed every day.
+        func weight(_ u: Double) -> Double { u < 0.05 ? 0 : u }
+        return used.sorted { a, b in
+            let (ta, tb) = (tier(a.1), tier(b.1))
+            if ta != tb { return ta > tb }
+            let (ua, ub) = (weight(a.2), weight(b.2))
+            if ua != ub { return ua > ub }
+            return a.1 != b.1 ? a.1 > b.1 : a.0.title.localizedStandardCompare(b.0.title) == .orderedAscending
+        }
+        .map(\.0)
+    }
+
+    /// The kind of match a score is: each kind's scores fall between two multiples of 50
+    /// (`shortness` takes at most 49 off its top), so this is the same for one kind whatever the length.
+    static func tier(_ score: Int) -> Int { (score + 49) / 50 }
+
+    private static func results(scoring items: [GridItem], query: String) -> [(Match, Int)] {
         items.compactMap { item -> (Match, Int)? in
             switch item {
             case .app(let app):
@@ -98,7 +123,6 @@ public enum Search {
         .sorted { a, b in
             a.1 != b.1 ? a.1 > b.1 : a.0.title.localizedStandardCompare(b.0.title) == .orderedAscending
         }
-        .map(\.0)
     }
 
     private static func actionMatch(_ action: Action, query: String) -> (score: Int, argument: String?)? {
@@ -338,5 +362,55 @@ extension StringProtocol {
     /// "किताब", and search would find nothing at most keystrokes while typing it.
     func startsScalars<T: StringProtocol>(with prefix: T) -> Bool {
         unicodeScalars.starts(with: prefix.unicodeScalars)
+    }
+}
+
+extension Search {
+    /// The characters of `name` (by offset) that `query` matched, to show in bold: the letters
+    /// typed together when they appear together (a word start first), otherwise each one in
+    /// turn, at the start of a word or a capital where there is one ("vsc" → V, S, C of
+    /// "Visual Studio Code"). Empty when they can't be found one by one (a match through the
+    /// app's bundle name, or a script whose letters are typed in parts).
+    public static func highlights(in name: String, query: String) -> [Int] {
+        func fold(_ c: Character) -> String {
+            String(c).folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        }
+        let q = Array(query).filter { $0.isLetter || $0.isNumber }.map(fold)
+        let chars = Array(name)
+        let n = chars.map(fold)
+        guard !q.isEmpty, q.count <= n.count else { return [] }
+        let starts = Set(chars.indices.filter { i in
+            guard chars[i].isLetter || chars[i].isNumber else { return false }
+            if i == 0 || !TextLine.isWord(chars, i - 1) { return true }
+            return chars[i].isUppercase && chars[i - 1].isLowercase
+        })
+        // Together, at a word start first, then anywhere.
+        let runs = n.indices.filter { i in i + q.count <= n.count && Array(n[i..<(i + q.count)]) == q }
+        if let i = runs.first(where: starts.contains) ?? runs.first {
+            return Array(i..<(i + q.count))
+        }
+        // One by one, each at the nearest word start ahead when there is one.
+        var found: [Int] = []
+        var from = 0
+        for letter in q {
+            let ahead = n.indices.filter { $0 >= from && n[$0] == letter }
+            guard let any = ahead.first else { return [] }
+            let pick = ahead.first(where: starts.contains) ?? any
+            // A word start further on would leave letters typed after it unmatched; check the rest fits.
+            let chosen = fits(q.dropFirst(found.count + 1), in: n, after: pick) ? pick : any
+            found.append(chosen)
+            from = chosen + 1
+        }
+        return found
+    }
+
+    private static func fits(_ rest: ArraySlice<String>, in n: [String], after i: Int) -> Bool {
+        var j = i + 1
+        for letter in rest {
+            while j < n.count, n[j] != letter { j += 1 }
+            guard j < n.count else { return false }
+            j += 1
+        }
+        return true
     }
 }
