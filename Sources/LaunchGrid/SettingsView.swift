@@ -78,6 +78,11 @@ struct LibraryActions: @unchecked Sendable {
     var menuBarChanged: () -> Void
     var windowModeChanged: () -> Void
     var foldersChanged: () -> Void
+    /// The pinch or hot corner setting changed.
+    var gesturesChanged: () -> Void = {}
+    /// Whether macOS refused the pinch the access it needs, and asking it for that access.
+    var pinchUnavailable: () -> Bool = { false }
+    var requestPinchAccess: () -> Void = {}
 }
 
 struct GeneralSettings: View {
@@ -140,6 +145,25 @@ struct GeneralSettings: View {
                 }
                 Toggle("Hide when clicking an empty area", isOn: $prefs.hideOnEmptyClick)
                 Toggle("Hide when switching Spaces", isOn: $prefs.hideOnSpaceChange)
+            }
+            Section("Gestures") {
+                Toggle("Pinch to open", isOn: $prefs.pinchToOpen)
+                    .onChange(of: prefs.pinchToOpen) { actions?.gesturesChanged() }
+                Text("Pinch with two fingers over the desktop, or with your thumb and three fingers anywhere once the system’s own pinch is off in Trackpad settings. The grid follows your fingers; open them again before letting go to put it back. Spread them on the grid to close it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if prefs.pinchToOpen, actions?.pinchUnavailable() == true {
+                    Text("macOS hasn’t let LaunchGrid see trackpad pinches. Allow it under Privacy & Security › Input Monitoring; LaunchGrid only reads pinches there, never keys.")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Allow Pinches…") { actions?.requestPinchAccess() }
+                }
+                Picker("Hot corner", selection: $prefs.hotCorner) {
+                    ForEach(HotCorner.allCases) { Text($0.label).tag($0) }
+                }
+                .onChange(of: prefs.hotCorner) { actions?.gesturesChanged() }
+                if prefs.hotCorner != .none {
+                    Text("Rest the pointer in that corner to open or close the grid. A hot corner set in System Settings for the same corner acts too: pick another one for either.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             #if !APP_STORE
             Section("Actions") {

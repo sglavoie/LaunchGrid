@@ -178,6 +178,15 @@ final class IconProvider: @unchecked Sendable {
         if Preferences.isScratch, let delay = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_ICON_DELAY"].flatMap(Double.init) {
             return IconProvider(beforeCaching: { _ in Thread.sleep(forTimeInterval: delay) })
         }
+        // LAUNCHGRID_DEBUG_ICON_PLACEHOLDER=1: each icon's first draw is a blank placeholder, as
+        // macOS hands out while it renders a newly chosen icon style, to see them come in after.
+        if Preferences.isScratch, ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_ICON_PLACEHOLDER"] != nil {
+            let drawn = OSAllocatedUnfairLock(initialState: Set<String>())
+            return IconProvider(source: { path in
+                drawn.withLock { $0.insert(path).inserted } ? SendableImage(image: NSImage(size: NSSize(width: 128, height: 128)))
+                    : SendableImage(image: NSWorkspace.shared.icon(forFile: path))
+            })
+        }
         #endif
         return IconProvider()
     }()
@@ -200,10 +209,15 @@ final class IconProvider: @unchecked Sendable {
     /// each holds who's waiting for it.
     private let inFlight = OSAllocatedUnfairLock(initialState: [String: [@Sendable (NSImage) -> Void]]())
 
+    /// Where icons come from: macOS, or a test's stand-in.
+    private let source: @Sendable (String) -> SendableImage
+
     init(beforeCaching: @escaping @Sendable (String) -> Void = { _ in },
-         afterDrawing: @escaping @Sendable (String) -> Void = { _ in }) {
+         afterDrawing: @escaping @Sendable (String) -> Void = { _ in },
+         source: @escaping @Sendable (String) -> SendableImage = { SendableImage(image: NSWorkspace.shared.icon(forFile: $0)) }) {
         self.beforeCaching = beforeCaching
         self.afterDrawing = afterDrawing
+        self.source = source
         cache.countLimit = 2000
         // Each icon is a 256 px RGBA bitmap (256 KB): about 1000 icons.
         cache.totalCostLimit = 256 << 20
@@ -211,6 +225,111 @@ final class IconProvider: @unchecked Sendable {
 
     func cached(_ path: String) -> NSImage? {
         cache.object(forKey: path as NSString)
+    }
+
+    /// Each drawn icon's most vivid colour, brightened, for the glow behind it on hover; nil
+    /// for a grey one, or one not drawn yet.
+    private let tints = OSAllocatedUnfairLock(initialState: [String: Tint]())
+
+    struct Tint: Equatable, Sendable {
+        let red: Double, green: Double, blue: Double
+    }
+
+    func tint(_ path: String) -> Tint? {
+        tints.withLock { $0[path] }
+    }
+
+    /// Called (on any thread) when icons drawn as placeholders were drawn again for real, so
+    /// the views ask for them again.
+    var onRedrawn: (@Sendable () -> Void)? {
+        get { redrawState.withLock { $0.onRedrawn } }
+        set { redrawState.withLock { $0.onRedrawn = newValue } }
+    }
+
+    private struct RedrawState {
+        /// Paths waiting to be drawn again, with how many tries they've had.
+        var attempts: [String: Int] = [:]
+        var onRedrawn: (@Sendable () -> Void)?
+    }
+    private let redrawState = OSAllocatedUnfairLock(initialState: RedrawState())
+
+    /// Waits before each new try, longer each time; then the placeholder stays until the next
+    /// scan or Regenerate Icons.
+    static let redrawDelays: [Double] = [0.4, 1, 2, 4, 8, 15]
+
+    private func scheduleRedraw(_ path: String) {
+        let attempt: Int? = redrawState.withLock { state in
+            let n = state.attempts[path, default: -1] + 1
+            guard n < Self.redrawDelays.count else {
+                state.attempts[path] = nil
+                return nil
+            }
+            state.attempts[path] = n
+            return n
+        }
+        guard let attempt else { return }
+        queue.asyncAfter(deadline: .now() + Self.redrawDelays[attempt]) {
+            let image = self.draw(path)
+            guard let rep = image.representations.first as? NSBitmapImageRep, Self.looksDrawn(rep) else { return }
+            let notify = self.redrawState.withLock { state -> (@Sendable () -> Void)? in
+                state.attempts[path] = nil
+                return state.onRedrawn
+            }
+            notify?()
+        }
+    }
+
+    /// Whether a drawn icon has something in it: an app icon covers much of its square, a
+    /// placeholder only its dashed outline.
+    nonisolated static func looksDrawn(_ rep: NSBitmapImageRep) -> Bool {
+        guard let data = rep.bitmapData, rep.samplesPerPixel == 4, rep.bitsPerSample == 8 else { return true }
+        var solid = 0, total = 0
+        for y in stride(from: 0, to: rep.pixelsHigh, by: 8) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 8) {
+                total += 1
+                if data[y * rep.bytesPerRow + x * 4 + 3] > 128 { solid += 1 }
+            }
+        }
+        return total == 0 || Double(solid) / Double(total) > 0.08
+    }
+
+    /// The icon style chosen in System Settings › Appearance (and its tint), which the icons
+    /// macOS hands out follow: when it changes, icons drawn before are out of date.
+    static var systemStyle: String {
+        let d = UserDefaults.standard
+        return "\(d.string(forKey: "AppleIconAppearanceTheme") ?? "")|\(d.string(forKey: "AppleIconAppearanceTintColor") ?? "")"
+    }
+
+    /// The colour an icon's saturated pixels share, weighted toward the most vivid, then made
+    /// bright enough to glow on a dark background. nil when it's mostly grey.
+    nonisolated static func tint(of rep: NSBitmapImageRep) -> Tint? {
+        guard let data = rep.bitmapData, rep.samplesPerPixel == 4, rep.bitsPerSample == 8 else { return nil }
+        let width = rep.pixelsWide, height = rep.pixelsHigh, row = rep.bytesPerRow
+        var r = 0.0, g = 0.0, b = 0.0, weight = 0.0, opaque = 0.0
+        // Every fourth pixel each way is plenty for an average.
+        for y in stride(from: 0, to: height, by: 4) {
+            for x in stride(from: 0, to: width, by: 4) {
+                let p = data + y * row + x * 4
+                let a = Double(p[3]) / 255
+                guard a > 0.8 else { continue }
+                opaque += 1
+                // Premultiplied: undo it to read the colour.
+                let pr = Double(p[0]) / 255 / a, pg = Double(p[1]) / 255 / a, pb = Double(p[2]) / 255 / a
+                let hi = max(pr, pg, pb), lo = min(pr, pg, pb)
+                guard hi > 0.15 else { continue }
+                let sat = (hi - lo) / hi
+                let w = sat * sat * hi
+                r += pr * w; g += pg * w; b += pb * w; weight += w
+            }
+        }
+        // Too little colour across the icon to call it anything but grey.
+        guard opaque > 0, weight / opaque > 0.04 else { return nil }
+        let color = NSColor(srgbRed: r / weight, green: g / weight, blue: b / weight, alpha: 1)
+        var h: CGFloat = 0, sat: CGFloat = 0, v: CGFloat = 0, alpha: CGFloat = 0
+        color.getHue(&h, saturation: &sat, brightness: &v, alpha: &alpha)
+        let bright = NSColor(hue: h, saturation: min(sat, 0.85), brightness: max(v, 0.85), alpha: 1)
+        guard let c = bright.usingColorSpace(.sRGB) else { return nil }
+        return Tint(red: c.redComponent, green: c.greenComponent, blue: c.blueComponent)
     }
 
     func icon(_ path: String) async -> NSImage {
@@ -372,7 +491,7 @@ final class IconProvider: @unchecked Sendable {
     private func draw(_ path: String) -> NSImage {
         let generation = cacheState.withLock { $0.generations[path, default: 0] }
         let version = Self.version(path)
-        let source = NSWorkspace.shared.icon(forFile: path)
+        let source = self.source(path).image
         let px = Self.pixelSize
         let size = NSSize(width: px / 2, height: px / 2)
         guard let rep = NSBitmapImageRep(
@@ -387,13 +506,19 @@ final class IconProvider: @unchecked Sendable {
         NSGraphicsContext.restoreGraphicsState()
         let image = NSImage(size: size)
         image.addRepresentation(rep)
+        // macOS hands out a dashed placeholder while it renders an icon it hasn't yet (in a newly
+        // chosen icon style, say): shown for now, and drawn again until the real one comes.
+        if !Self.looksDrawn(rep) { scheduleRedraw(path) }
+        let tint = Self.tint(of: rep)
         beforeCaching(path)
         let cost = rep.bytesPerRow * rep.pixelsHigh
-        cacheState.withLock { state in
-            guard state.generations[path, default: 0] == generation else { return }
+        let current = cacheState.withLock { state -> Bool in
+            guard state.generations[path, default: 0] == generation else { return false }
             cache.setObject(image, forKey: path as NSString, cost: cost)
             state.versions[path] = version
+            return true
         }
+        if current { tints.withLock { $0[path] = tint } }
         afterDrawing(path)
         return image
     }

@@ -337,6 +337,12 @@ extension AppState {
             center = CGPoint(x: frame.minX + c.x, y: frame.minY + c.y)
         }
         guard let hit, let item = grid.item(hit) else { return false }
+        // ⌥-dragged, outside edit mode: off the grid, to the Dock, a Finder window or another
+        // app. The rest of this gesture is AppKit's.
+        if NSEvent.modifierFlags.contains(.option), !editing, let url = fileURL(of: item), onDragOut(item, url) {
+            drag.abandonedStart = start
+            return true
+        }
         // From an open folder only its own selected apps come along: the drop puts them back
         // in it, and items selected on the page would be pulled in (a folder dissolved).
         let pool = openFolder.map { Set($0.items.map(\.id)) }

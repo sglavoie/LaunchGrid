@@ -31,8 +31,10 @@ struct BackgroundView: View {
                 }
             case .wallpaper:
                 BlurredImage(url: wallpaperURL, radius: prefs.blurRadius, refresh: refresh)
+                    .modifier(Parallax())
             case .image:
                 BlurredImage(url: prefs.customImagePath.map { URL(fileURLWithPath: $0) }, radius: prefs.blurRadius, refresh: refresh)
+                    .modifier(Parallax())
             case .solid:
                 Color(nsColor: prefs.solidColor)
             }
@@ -42,6 +44,8 @@ struct BackgroundView: View {
             }
         }
         .opacity(prefs.background == .solid ? Self.solidOpacity(prefs.backgroundOpacity, reduceTransparency: reduceTransparency) : 1)
+        .modifier(BackgroundEntrance(zooms: prefs.background == .wallpaper || prefs.background == .image))
+        .clipped()
         .ignoresSafeArea()
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)) { _ in
             // Only while it's in view: hidden, the panel's view lives on, and each switch would

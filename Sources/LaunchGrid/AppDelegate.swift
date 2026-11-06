@@ -57,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     let prefs = Preferences()
     private(set) var state: AppState!
     private var overlay: OverlayController!
+    /// The trackpad pinch and hot corner that open the grid, as set in Settings.
+    private(set) var gestures: GestureWatcher!
     private var statusItem: NSStatusItem?
     /// The menu-bar icon's menu while VoiceOver runs, filled each time it opens.
     private lazy var voiceOverMenu: NSMenu = {
@@ -214,6 +216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                             String(localized: "LaunchGrid couldn't confirm lasting access. If this item becomes unavailable, choose it again."))
         }
         overlay = OverlayController(state: state)
+        gestures = GestureWatcher(prefs: prefs, overlay: overlay)
+        gestures.apply()
         state.onHide = { [weak self] in self?.overlay.hide() }
         state.onHideForLaunch = { [weak self] in
             // Long enough to see the opened tile zoom (`OpenMotion`); none of it with Reduce Motion.
@@ -312,11 +316,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
         }
 
+        // Icons first drawn as placeholders that have now come: the tiles ask again.
+        IconProvider.shared.onRedrawn = { [weak self] in
+            Task { @MainActor in self?.state.iconGeneration += 1 }
+        }
         IconProvider.shared.prewarm(state.grid.allApps.map(\.path))
         Task { [self] in
             await restored.value
             state.rescan { [weak self] in
                 guard let self else { return }
+                self.overlay.prewarm()
                 #if !APP_STORE
                 if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
                     // A script rebuilds and edits the layout: only against a scratch one.
@@ -759,7 +768,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             foldersChanged: { [weak self] in
                 self?.startWatching()
                 self?.state.rescan()
-            }
+            },
+            gesturesChanged: { [weak self] in self?.gestures.apply() },
+            pinchUnavailable: { [weak self] in self?.gestures.pinchUnavailable ?? false },
+            requestPinchAccess: { [weak self] in self?.gestures.requestPinchAccess() }
         )
     }
 

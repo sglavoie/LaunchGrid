@@ -4426,7 +4426,7 @@ func installed(_ name: String) -> InstalledApp {
         let state = state(with: [link, file], opener: opener)
         let titles = { (item: GridItem) in MenuEntry.item(item, state: state).map(\.title).filter { !$0.isEmpty } }
         #expect(titles(.action(link)) == ["Open", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
-        #expect(titles(.action(file)) == ["Open", "Show in Finder", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
+        #expect(titles(.action(file)) == ["Open", "Show in Finder", "Quick Look", "Edit Action…", "Rename…", "Move to Page", "Select", "Remove from Grid"])
 
         // With an app selected too, grouping as well.
         state.selection = [link.id, state.grid.allApps[0].id]

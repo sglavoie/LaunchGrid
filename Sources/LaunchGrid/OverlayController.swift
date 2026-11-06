@@ -1,12 +1,41 @@
 import AppKit
 import Carbon.HIToolbox
 import Observation
+import QuickLookUI
 import SwiftUI
 import LaunchGridCore
 
 final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// What Quick Look (⌘Y) shows: the focused app or file.
+    let preview = PreviewSource()
+
+    // Quick Look finds its controller up the key window's responder chain.
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { preview.url != nil }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = preview
+        // Over the grid, which floats above other windows (above the menu bar in Full Screen).
+        panel.level = NSWindow.Level(rawValue: level.rawValue + 1)
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+        preview.url = nil
+        // Typing goes to the search again.
+        if isVisible { makeKey() }
+    }
+}
+
+/// The one item Quick Look previews.
+final class PreviewSource: NSObject, QLPreviewPanelDataSource {
+    var url: URL?
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { url == nil ? 0 : 1 }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! { url as NSURL? }
 }
 
 /// Owns the overlay window: showing, hiding, placement, keyboard and scroll input.
@@ -47,7 +76,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         self.state = state
         super.init()
         NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.isVisible == true { self?.hide() } }
+            MainActor.assumeIsolated {
+                guard let self, self.isVisible, !self.keepThroughFocusChange() else { return }
+                self.hide()
+            }
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.placePanel() }
@@ -61,6 +93,170 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         installMonitors()
         textInput.onInsert = { [weak self] in self?.insertIntoSearch($0) }
+        state.onQuickLook = { [weak self] in self?.toggleQuickLook($0) }
+        state.onDragOut = { [weak self] in self?.dragOut($0, url: $1) ?? false }
+        state.onKeepThroughFocusChange = { [weak self] in self?.focusGraceUntil = Date().addingTimeInterval(2) }
+    }
+
+    /// Until then, losing the keyboard to another app (one brought forward as the app in front
+    /// quits from the grid) takes it back rather than hiding the grid.
+    private var focusGraceUntil = Date.distantPast
+
+    /// Within the grace period: takes the keyboard back shortly, and returns true.
+    private func keepThroughFocusChange() -> Bool {
+        guard Date() < focusGraceUntil else { return false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, let panel = self.panel, self.isVisible else { return }
+            panel.makeKeyAndOrderFront(nil)
+            if self.state.textEdit == nil { panel.makeFirstResponder(self.textInput) }
+        }
+        return true
+    }
+
+    // MARK: Pinching open and closed (`GestureWatcher`)
+
+    /// Whether the pinch under way opens the grid (else it closes it).
+    private var pinchOpening = false
+    /// How large the grid is with the fingers at the start of an opening pinch (or the end of a
+    /// closing one): it settles to its size as they close.
+    static let pinchFarScale: CGFloat = 1.12
+
+    func pinchBegan(opening: Bool) {
+        pinchOpening = opening
+        if opening {
+            show()
+            guard isVisible else { return }
+            panel?.alphaValue = 0
+        }
+        state.pinchScale = opening ? Self.pinchFarScale : 1
+    }
+
+    /// `progress`: from 0 at the start of the pinch to 1 when it has gone all the way.
+    func pinchChanged(progress: CGFloat) {
+        guard let panel, panel.isVisible, state.isShown else { return }
+        let shown = pinchOpening ? progress : 1 - progress
+        panel.alphaValue = shown
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        state.pinchScale = reduce ? 1 : 1 + (Self.pinchFarScale - 1) * (1 - shown)
+    }
+
+    /// Let go: far enough, the grid finishes opening (or closing); not, it goes back.
+    func pinchEnded(commit: Bool) {
+        guard let panel, panel.isVisible, state.isShown else { return }
+        if pinchOpening == commit {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                panel.animator().alphaValue = 1
+            }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { state.pinchScale = 1 }
+        } else {
+            let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            withAnimation(.easeIn(duration: 0.15)) { state.pinchScale = reduce ? 1 : Self.pinchFarScale }
+            hide(duration: 0.15)
+        }
+    }
+
+    // MARK: Files dragged over the grid, tiles dragged off it
+
+    /// A point in the window (AppKit's, from the bottom) in the root view's coordinates.
+    private func rootPoint(_ windowPoint: NSPoint) -> CGPoint? {
+        guard let host else { return nil }
+        let local = host.convert(windowPoint, from: nil)
+        let y = host.isFlipped ? local.y : host.bounds.height - local.y
+        let origin = state.drag.rootOrigin
+        return CGPoint(x: local.x - origin.x, y: y - origin.y)
+    }
+
+    func fileDragEntered(_ urls: [URL], at point: NSPoint) -> Bool {
+        guard isVisible, state.textEdit == nil, !state.drag.active else { return false }
+        state.beginFileDrag(urls)
+        return fileDragMoved(to: point)
+    }
+
+    func fileDragMoved(to point: NSPoint) -> Bool {
+        guard isVisible, state.fileDrag != nil, let p = rootPoint(point) else { return false }
+        return state.fileDragMoved(to: p)
+    }
+
+    func fileDragExited() {
+        if state.fileDrag != nil { state.endFileDrag() }
+    }
+
+    func dropFiles(at point: NSPoint) -> Bool {
+        guard isVisible, let p = rootPoint(point) else { return false }
+        return state.dropFiles(at: p)
+    }
+
+    /// What the tile dragged off the grid is: an app goes as a link (an alias in Finder, a
+    /// tile in the Dock), never copied or moved; a file can be copied too (into a folder, onto
+    /// a mail).
+    private var draggingOutApp = false
+
+    /// Starts dragging `item` off the grid, which fades out of the way (letting the pointer
+    /// through) so the Dock and the windows beneath can take it.
+    func dragOut(_ item: GridItem, url: URL) -> Bool {
+        guard let host, let panel, let event = NSApp.currentEvent,
+              event.type == .leftMouseDragged || event.type == .leftMouseDown else { return false }
+        let image: NSImage = {
+            if case .app(let a) = item, let icon = IconProvider.shared.cached(a.path) { return icon }
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }()
+        let size = max(48, state.pageIconSize)
+        let local = host.convert(event.locationInWindow, from: nil)
+        let dragged = NSDraggingItem(pasteboardWriter: url as NSURL)
+        dragged.setDraggingFrame(NSRect(x: local.x - size / 2, y: local.y - size / 2, width: size, height: size), contents: image)
+        draggingOutApp = item.app != nil
+        host.beginDraggingSession(with: [dragged], event: event, source: self)
+        panel.ignoresMouseEvents = true
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            panel.animator().alphaValue = 0
+        }
+        return true
+    }
+
+    /// Whether Quick Look's panel is up, over the grid.
+    var isQuickLooking: Bool {
+        QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible
+    }
+
+    /// Quick Look on `url` (⌘Y, or Quick Look in an item's menu); again on the same item, or
+    /// Space or Esc in it, closes it.
+    func toggleQuickLook(_ url: URL) {
+        guard let panel, isVisible, let ql = QLPreviewPanel.shared() else { return }
+        if isQuickLooking {
+            let same = panel.preview.url == url
+            ql.orderOut(nil)
+            panel.makeKey()
+            if same { return }
+        }
+        panel.preview.url = url
+        // Set before it takes key status from the grid, which would otherwise hide.
+        quickLookOpening = true
+        ql.makeKeyAndOrderFront(nil)
+        ql.reloadData()
+        quickLookOpening = false
+    }
+
+    private var quickLookOpening = false
+
+    /// ⌘ held down alone shows the shortcuts after a moment; anything else pressed hides them.
+    private var commandHoldTask: Task<Void, Never>?
+
+    private func commandHoldChanged(alone: Bool) {
+        commandHoldTask?.cancel()
+        commandHoldTask = nil
+        if !alone {
+            if state.commandHeld { state.commandHeld = false }
+            return
+        }
+        commandHoldTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard let self, !Task.isCancelled, self.isVisible, !self.state.drag.active, self.state.textEdit == nil,
+                  NSEvent.modifierFlags.intersection([.command, .option, .control, .shift]) == .command else { return }
+            self.state.commandHeld = true
+            self.state.noteTip(.holdCommand)
+        }
     }
 
     func toggle() {
@@ -96,6 +292,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.animator().alphaValue = 1
         }
         panel.alphaValue = 1
+        // Left letting clicks through by a prewarm still finishing.
+        panel.ignoresMouseEvents = false
         panel.makeKeyAndOrderFront(nil)
         // Shown again mid-fade, a rename card still open keeps its field's keyboard.
         if state.textEdit == nil { panel.makeFirstResponder(textInput) }
@@ -143,6 +341,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// - Parameter duration: the fade; longer when an item opens, so its zoom is seen.
     func hide(deactivate: Bool = true, saving: Bool = true, duration: TimeInterval = 0.12) {
         guard let panel, panel.isVisible else { return }
+        if isQuickLooking { QLPreviewPanel.shared().orderOut(nil) }
         // Already fading out: that hide's save and completion stand, or the first save's
         // failure would go unreported. A caller bringing another window forward still keeps
         // the fade from handing focus back.
@@ -197,6 +396,32 @@ final class OverlayController: NSObject, NSWindowDelegate {
         })
     }
 
+    /// Makes the panel and lays its views out once, out of sight, soon after launch: the first
+    /// show is then as quick as the rest, rather than building everything while you wait.
+    func prewarm() {
+        guard panel == nil, state.hasGridFile else { return }
+        screen = NSScreen.main
+        let panel = makePanelIfNeeded()
+        placePanel()
+        // Brought in once, invisible and letting clicks through, so the window server has its
+        // surfaces ready too: the first time in took as long as everything else together.
+        // Not made key: whatever app is in front keeps the keyboard.
+        panel.alphaValue = 0
+        panel.ignoresMouseEvents = true
+        panel.orderFrontRegardless()
+        CATransaction.setCompletionBlock { [weak self] in
+            DispatchQueue.main.async {
+                // Shown meanwhile (the shortcut pressed straight away), it stays.
+                guard let self, let panel = self.panel, !self.state.isShown else {
+                    self?.panel?.ignoresMouseEvents = false
+                    return
+                }
+                panel.orderOut(nil)
+                panel.ignoresMouseEvents = false
+            }
+        }
+    }
+
     /// Recreates the panel if the window mode changed.
     func modeChanged() {
         let wasVisible = isVisible
@@ -240,8 +465,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let root = GridRootView().environment(state)
         let host = NSHostingView(rootView: AnyView(root))
         host.sizingOptions = []
-        // The text input view sits beside the SwiftUI content, out of sight.
-        let container = NSView()
+        // The text input view sits beside the SwiftUI content, out of sight. Files dragged
+        // over the grid land on the container (`FileDrop.swift`).
+        let container = DropContainerView()
+        container.controller = self
         host.frame = container.bounds
         host.autoresizingMask = [.width, .height]
         container.addSubview(host)
@@ -353,6 +580,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// A rename in progress is cancelled, unless the panel was only briefly not key.
     func windowDidResignKey(_ notification: Notification) {
         guard isVisible, !alertOverGrid else { return }
+        // Quick Look's panel, over the grid, has the keys while it's up.
+        if quickLookOpening || isQuickLooking { return }
+        if keepThroughFocusChange() { return }
         guard state.textEdit != nil else {
             hide(deactivate: false)
             return
@@ -433,6 +663,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let consumed = MainActor.assumeIsolated { self?.handleScroll(event) == nil }
             return consumed ? nil : event
         } as Any)
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel, event.window === panel, self.isVisible else { return }
+                let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+                self.commandHoldChanged(alone: mods == .command)
+            }
+            return event
+        } as Any)
         // Whether the button is held over the grid, for the tile under the pointer to sink in
         // (`TileMotion`). Only watched, never consumed: a gesture on each tile took clicks from them.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
@@ -446,7 +684,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
+        // Quick Look's panel: Space or ⌘Y closes it, as in Finder (Esc it handles itself).
+        if let ql = event.window as? QLPreviewPanel, isVisible {
+            let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if event.characters == " " && mods.isEmpty || mods == .command && Self.shortcutKey(event) == "y" {
+                ql.orderOut(nil)
+                panel?.makeKey()
+                return nil
+            }
+            return event
+        }
         guard let panel, event.window === panel, isVisible else { return event }
+        // A key pressed with ⌘ held is a shortcut, not a look at them.
+        commandHoldChanged(alone: false)
         // Let the inline text editor have its keys.
         if state.textEdit != nil {
             // While an input method composes in its field, Esc cancels the composition there.
@@ -478,7 +728,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             else { hide() }
             return nil
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            if mods == .control {
+            if mods == .command {
+                // Show in Finder, as in Spotlight.
+                if let item = focusedOrFirstItem { state.showInFinder(item) }
+            } else if mods == .control {
                 showFocusedMenu()
             } else if mods == [.control, .shift] {
                 showPageMenu()
@@ -524,6 +777,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 }
             } else if event.isARepeat {
                 // Holding ⌫ only edits the search; removing is one press at a time.
+            } else if cmd && code == kVK_Delete && !state.editing && state.selection.isEmpty {
+                // ⌘⌫ quits the focused app, when it's running (as ⌘Q would, in the app itself).
+                if let id = focusedID, let app = state.grid.item(id)?.app, state.isRunning(app) {
+                    state.command(.quit, app)
+                }
             } else if !state.selection.isEmpty {
                 state.remove(state.orderedSelection)
             } else if state.editing, let id = focusedID {
@@ -572,14 +830,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "w", "h": hide()
             case "m": break
             case "q": NSApp.terminate(nil)
+            case "y":
+                if let item = focusedOrFirstItem, let url = state.fileURL(of: item) { toggleQuickLook(url) }
             case "v":
                 if let s = NSPasteboard.general.string(forType: .string) {
                     insertIntoSearch(TextLine.singleLine(s))
                 }
             case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-                state.query = ""
-                if state.openFolder != nil { state.closeFolder() }
-                state.goToPage(Int(key)! - 1)
+                if !state.query.isEmpty {
+                    // In search, the result with that number (as ⌘ held shows them).
+                    if let match = state.searchResults[safe: Int(key)! - 1] { state.activateResult(match) }
+                } else {
+                    if state.openFolder != nil { state.closeFolder() }
+                    state.goToPage(Int(key)! - 1)
+                }
             default:
                 return event
             }
@@ -613,6 +877,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if panel.firstResponder !== textInput { panel.makeFirstResponder(textInput) }
         textInput.handle(event)
         return nil
+    }
+
+    /// The item ⌘Return and ⌘Y act on: the focused one, in search the focused or first result.
+    private var focusedOrFirstItem: GridItem? {
+        if !state.query.isEmpty { return state.searchResults[safe: state.focusIndex ?? 0]?.item }
+        return focusedID.flatMap { state.grid.item($0) }
     }
 
     /// The item with keyboard focus on the page or in the open folder (not search results).
@@ -845,6 +1115,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func activateFocused() {
         if !state.query.isEmpty {
+            // An answer comes before the results: Return copies it, ↓ moves on to them.
+            if state.focusIndex == nil, state.searchAnswer != nil { return state.copyAnswer() }
             let results = state.searchResults
             if let match = results[safe: state.focusIndex ?? 0] {
                 state.activateResult(match)
@@ -1065,4 +1337,27 @@ final class SearchInputView: NSView, @preconcurrency NSTextInputClient {
     var gone = false
     /// Whether the fade's end hands focus back; a later hide during the fade can turn it off.
     var deactivate = true
+}
+
+extension OverlayController: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        guard context == .outsideApplication else { return [] }
+        return draggingOutApp ? .link : [.copy, .link]
+    }
+
+    /// Dropped somewhere: the grid's work is done, as after opening something. Dropped nowhere
+    /// (or Esc), it comes back as it was.
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        guard let panel else { return }
+        panel.ignoresMouseEvents = false
+        if operation.isEmpty {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                panel.animator().alphaValue = 1
+            }
+            if isVisible { panel.makeKey() }
+        } else {
+            hide(deactivate: false, duration: 0)
+        }
+    }
 }

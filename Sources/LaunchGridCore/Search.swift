@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum Search {
     /// Match score for `name` against `query`: prefix > word start > initials > substring >
@@ -18,23 +19,25 @@ public enum Search {
         let q = normalize(query)
         // Separators alone ("-") would match every name that has one.
         guard q.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
-        let n = normalize(name)
+        // What the name gives every query, worked out once per name rather than per keystroke.
+        let facts = NameFacts.of(name)
+        let n = facts.normalized
         if n == q { return 1000 }
         if n.startsScalars(with: q) { return 900 - shortness(n) }
         let isSeparator: (Character) -> Bool = { !$0.isLetter && !$0.isNumber }
         // An apostrophe inside a word keeps it one ("Don't"), as for initials and ⌥←.
-        let words = wordList(n)
+        let words = facts.words
         let queryWords = wordList(q).map { Substring($0) }
-        let (nameKey, queryKey) = (spacedWords(n), spacedWords(q))
+        let (nameKey, queryKey) = (facts.key, spacedWords(q))
         if !queryKey.isEmpty, nameKey.startsScalars(with: queryKey) || nameKey.startsScalars(with: queryKey.filter { $0 != " " }) {
             return 850 - shortness(n)
         }
-        if !q.contains(" "), startsWordsRunTogether(q, words: nameKey.split(separator: " ")) { return 800 - shortness(n) }
+        if !q.contains(" "), startsWordsRunTogether(q, words: facts.keyWords) { return 800 - shortness(n) }
         if words.contains(where: { $0.startsScalars(with: q) }) { return 700 - shortness(n) }
         if !queryWords.isEmpty, startsDistinctWords(queryWords, of: words) { return 700 - shortness(n) }
-        if humpWords(of: name).contains(where: { $0.startsScalars(with: q) }) { return 650 - shortness(n) }
+        if facts.humps.contains(where: { $0.startsScalars(with: q) }) { return 650 - shortness(n) }
         // With the humps and without: "qp" is QuickTime Player's initials as much as "qtp" is.
-        if acronym(of: name).startsScalars(with: q) || acronym(of: name, humps: false).startsScalars(with: q) { return 600 }
+        if facts.acronym.startsScalars(with: q) || facts.plainAcronym.startsScalars(with: q) { return 600 }
         if queryWords.count > 1, startsWordsOrInitials(queryWords, of: words) { return 600 }
         if let initials = consonantInitials(of: name, for: q),
            initials.startsScalars(with: q) || initials.split(whereSeparator: isSeparator).contains(where: { $0.startsScalars(with: q) }) {
@@ -48,6 +51,41 @@ public enum Search {
         let typed = query.precomposedStringWithCanonicalMapping.filter { !$0.isWhitespace }.count
         if typed >= minimum, q.count >= minimum, isSubsequence(q, of: n) { return 200 - shortness(n) }
         return nil
+    }
+
+    /// The forms of a name `score` compares a query with, which don't depend on the query:
+    /// kept per name, so typing a letter re-reads only the query.
+    struct NameFacts: Sendable {
+        let normalized: String
+        let words: [String]
+        let key: String
+        let keyWords: [Substring]
+        let humps: [String]
+        let acronym: String
+        let plainAcronym: String
+
+        init(_ name: String) {
+            normalized = Search.normalize(name)
+            words = Search.wordList(normalized)
+            key = Search.spacedWords(normalized)
+            keyWords = key.split(separator: " ")
+            humps = Search.humpWords(of: name)
+            acronym = Search.acronym(of: name)
+            plainAcronym = Search.acronym(of: name, humps: false)
+        }
+
+        private static let cache = OSAllocatedUnfairLock<[String: NameFacts]>(initialState: [:])
+
+        static func of(_ name: String) -> NameFacts {
+            if let hit = cache.withLock({ $0[name] }) { return hit }
+            let facts = NameFacts(name)
+            cache.withLock { cache in
+                // Names come and go with renames and installs; start over rather than grow for ever.
+                if cache.count > 20_000 { cache.removeAll() }
+                cache[name] = facts
+            }
+            return facts
+        }
     }
 
     /// What a longer name loses within a tier, kept under the 50 points between tiers so a long

@@ -23,8 +23,10 @@ struct GridRootView: View {
                 TopBar()
                     .padding(.top, 28)
                     .padding(.bottom, 12)
-                PageTitle()
-                    .frame(height: 28)
+                Group {
+                    if state.query.isEmpty { PageTitle() } else { SearchHintLine() }
+                }
+                .frame(height: 28)
                 if state.query.isEmpty {
                     Pager()
                 } else {
@@ -35,6 +37,7 @@ struct GridRootView: View {
                     .padding(.bottom, 18)
             }
             .padding(.horizontal, 48)
+            .scaleEffect(state.pinchScale)
             .accessibilityHidden(folderModal || editModal)
 
             ZStack {
@@ -75,9 +78,23 @@ struct GridRootView: View {
             // `textEdit` changes outside any animation. With Reduce Motion, a short fade.
             .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.textEdit?.id)
 
+            TipLayer()
+                .accessibilityHidden(folderModal || editModal)
+
             // Only its Undo button takes clicks; the rest goes to the grid beneath.
             ToastLayer()
                 .allowsHitTesting(state.toastUndoable)
+
+            VStack {
+                Spacer()
+                if state.commandHeld {
+                    ShortcutStrip()
+                        .padding(.bottom, 72)
+                        .transition(.opacity.combined(with: .offset(y: 8)))
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: state.commandHeld)
+            .allowsHitTesting(false)
         }
         .coordinateSpace(name: "root")
         .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: {
@@ -295,21 +312,7 @@ struct SearchField: View {
                 Text("Search")
                     .foregroundStyle(.white.opacity(high ? 0.75 : 0.45))
             } else {
-                let line = state.searchLine
-                // The caret floats over the join, so moving it doesn't push the text apart.
-                // What an input method is still composing sits at the caret, underlined.
-                // Too long to fit, the start gives way first: what was just typed stays in view.
-                HStack(spacing: 0) {
-                    Text(line.beforeCaret)
-                        .truncationMode(.head)
-                        .layoutPriority(1)
-                    Text(marked).underline()
-                        .overlay(alignment: .trailing) { Caret().offset(x: 1.5) }
-                        .layoutPriority(2)
-                    Text(line.afterCaret)
-                }
-                .foregroundStyle(.white)
-                .lineLimit(1)
+                SearchText(line: state.searchLine, marked: marked)
             }
             Spacer(minLength: 0)
         }
@@ -331,6 +334,38 @@ struct SearchField: View {
         // Where VoiceOver starts when the grid opens, as typing goes there.
         .accessibilityFocused($voiceOverFocus)
         .onChange(of: state.showCount) { voiceOverFocus = true }
+    }
+}
+
+/// What's typed in the search, with its caret.
+private struct SearchText: View {
+    @Environment(AppState.self) private var state
+    let line: TextLine
+    let marked: String
+
+    var body: some View {
+        let chip = KeywordChip.split(state, line: line)
+        // The caret floats over the join, so moving it doesn't push the text apart.
+        // What an input method is still composing sits at the caret, underlined.
+        // Too long to fit, the start gives way first: what was just typed stays in view.
+        // An action's keyword, typed with something after it, shows as a token.
+        HStack(spacing: 0) {
+            if let chip {
+                KeywordChip(action: chip.action, keyword: chip.keyword)
+                    .padding(.trailing, 5)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
+            Text(chip?.beforeCaret ?? String(line.beforeCaret))
+                .truncationMode(.head)
+                .layoutPriority(1)
+            Text(marked).underline()
+                .overlay(alignment: .trailing) { Caret().offset(x: 1.5) }
+                .layoutPriority(2)
+            Text(line.afterCaret)
+        }
+        .foregroundStyle(.white)
+        .lineLimit(1)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: chip?.keyword)
     }
 }
 
@@ -391,6 +426,9 @@ struct PillButtonStyle: ButtonStyle {
 struct PageTitle: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// A page without a title just turned to: its number shows for a moment.
+    @State private var landed: Int?
 
     var body: some View {
         let page = state.currentPage
@@ -413,14 +451,35 @@ struct PageTitle: View {
                     .foregroundStyle(.white.opacity(high ? 0.75 : 0.5))
                     .modifier(Legible())
                     .accessibilityAddTraits(.isButton)
+            } else if landed == page && state.query.isEmpty && state.grid.pages.indices.contains(page) {
+                // Said already by the page announcement (`ToastLayer`).
+                Text("Page \(page + 1) of \(state.grid.pages.count)")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(high ? 0.9 : 0.6))
+                    .modifier(Legible())
+                    .accessibilityHidden(true)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { state.beginPageTitleEdit(page) }
         .accessibilityAction { state.beginPageTitleEdit(page) }
         .id(page)
-        .transition(.opacity)
-        .animation(.easeOut(duration: 0.15), value: page)
+        // The page's title rises into place as its page comes in.
+        .transition(reduceMotion ? .opacity : .asymmetric(insertion: .opacity.combined(with: .offset(y: 8)), removal: .opacity))
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.36, dampingFraction: 0.8), value: page)
+        .animation(.easeOut(duration: 0.25), value: landed)
+        .onChange(of: state.currentPage) { _, new in
+            // Not for the pages a drag flips through at the screen's edge: it shows its own.
+            guard state.isShown, !state.drag.active, state.grid.pages.count > 1 else { return }
+            landed = new
+        }
+        .task(id: landed) {
+            guard landed != nil else { return }
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            landed = nil
+        }
+        .onChange(of: state.isShown) { _, shown in if !shown { landed = nil } }
     }
 }
 
@@ -518,14 +577,19 @@ struct PageView: View {
         // is still gliding into.
         let hidden = (state.landing?.hides ?? []).union(state.openFolderID.map { [$0] } ?? [])
         let columns = state.grid.columns, rows = state.grid.rows
+        let peek = state.peekFolderID
         ZStack(alignment: .topLeading) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 if let item = entry.item {
                     let dx = Double(index % columns) - Double(columns - 1) / 2
                     let dy = Double(index / columns) - Double(rows - 1) / 2
                     ItemCell(item: item, iconSize: icon, selected: selection.contains(item.id), focused: focus == item.id,
-                             mergeTarget: mergeTarget == item.id, editing: editing, hovers: hovers)
+                             mergeTarget: mergeTarget == item.id, editing: editing, hovers: hovers,
+                             peekBelow: index < columns,
+                             peekEdge: index % columns == 0 ? .leading : index % columns == columns - 1 ? .trailing : .center)
                         .modifier(AppearMotion(distance: hypot(dx, dy), order: index, current: current))
+                        // A folder's peek reaches over the tiles beside it.
+                        .zIndex(peek == item.id ? 1 : 0)
                         .opacity(hidden.contains(item.id) ? 0 : 1)
                         .accessibilityFocused($voiceOverFocus, equals: item.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
@@ -564,8 +628,14 @@ struct ItemCell: View {
     let editing: Bool
     /// Whether it reacts to the pointer over it: not during a drag or behind a folder.
     var hovers = true
+    /// On the top row, a folder's peek opens below it rather than above, off the page.
+    var peekBelow = false
+    /// On the first or last column, the peek lines up with that side, as the page clips past it.
+    var peekEdge: HorizontalAlignment = .center
     /// Set while a long press that entered edit mode is held: its release is not a tap.
     @State private var swallowTap = false
+    /// The wait before a folder under the pointer shows what's in it.
+    @State private var peekWait: Task<Void, Never>?
 
     var body: some View {
         ItemView(
@@ -577,8 +647,41 @@ struct ItemCell: View {
             editing: editing,
             onDelete: { state.remove([item.id]) }
         )
-        .modifier(TileMotion(enabled: hovers, cornerRadius: 14))
+        .modifier(TileMotion(enabled: hovers, cornerRadius: 14, tint: item.hoverTint))
         .modifier(OpenMotion(id: item.id))
+        .modifier(FileDragLook(item: item))
+        .overlay(alignment: peekBelow ? .bottom : .top) {
+            // A line along the tile's top (or bottom) edge, which the peek stands on (or hangs from).
+            Color.clear
+                .frame(height: 0)
+                .overlay(alignment: Alignment(horizontal: peekEdge, vertical: peekBelow ? .top : .bottom)) {
+                    if let folder = item.folder, state.peekFolderID == item.id {
+                        FolderPeek(folder: folder)
+                            .padding(peekBelow ? .top : .bottom, 4)
+                            .transition(.scale(scale: 0.8, anchor: peekBelow ? .top : .bottom).combined(with: .opacity))
+                    }
+                }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state.peekFolderID == item.id)
+        .onHover { inside in
+            guard item.folder != nil else { return }
+            peekWait?.cancel()
+            if inside && hovers && !editing {
+                peekWait = Task {
+                    try? await Task.sleep(for: .milliseconds(550))
+                    guard !Task.isCancelled, state.isShown, state.openFolderID == nil, !state.drag.active else { return }
+                    state.peekFolderID = item.id
+                }
+            } else if state.peekFolderID == item.id {
+                state.peekFolderID = nil
+            }
+        }
+        .onChange(of: hovers || editing) {
+            // A drag, a folder opening or edit mode put it away.
+            guard !hovers || editing else { return }
+            peekWait?.cancel()
+            if state.peekFolderID == item.id { state.peekFolderID = nil }
+        }
         .onTapGesture { tapped() }
         .modifier(ItemAccessibilityActions(id: item.id, selected: selected, isFolder: item.folder != nil, open: { state.activate(item) }))
         .simultaneousGesture(
@@ -651,6 +754,20 @@ struct ItemView: View {
                     .overlay(alignment: .bottom) {
                         if case .app(let app) = item, state.prefs.showRunningIndicator, state.isRunning(app) {
                             RunningDot(size: iconSize).offset(y: 4.5)
+                                // It pops in as the app starts and shrinks away as it quits.
+                                .transition(reduceMotion ? .opacity : .modifier(active: DotPop(scale: 0.1), identity: DotPop(scale: 1)))
+                        }
+                    }
+                    .animation(.spring(response: 0.3, dampingFraction: 0.6), value: runningShown)
+                    .overlay {
+                        if state.launchingApps.contains(item.id) {
+                            LaunchRing(size: iconSize)
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        // With no name to sit beside, at the icon's corner.
+                        if isNew && !(state.prefs.showLabels && labelsFit) {
+                            NewAppDot(size: max(5, min(8, iconSize * 0.1)))
                         }
                     }
                 if editing, let onDelete {
@@ -672,13 +789,17 @@ struct ItemView: View {
             }
             .modifier(Jiggle(active: editing, seed: item.id.hashValue))
             if state.prefs.showLabels && labelsFit {
-                (query.map { highlightedTitle(item.title, query: $0, contrast: contrast) } ?? Text(item.title))
-                    .font(.system(size: max(11, min(13, iconSize * 0.14))))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: iconSize * 1.5)
-                    .modifier(Legible())
+                let fontSize = max(11, min(13, iconSize * 0.14))
+                HStack(spacing: 4) {
+                    if isNew { NewAppDot(size: fontSize * 0.55) }
+                    (query.map { highlightedTitle(item.title, query: $0, contrast: contrast) } ?? Text(item.title))
+                        .font(.system(size: fontSize))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .modifier(Legible())
+                }
+                .frame(maxWidth: iconSize * 1.5)
                 if let argument {
                     Text(verbatim: argument)
                         .font(.system(size: max(10, min(12, iconSize * 0.13))))
@@ -713,6 +834,15 @@ struct ItemView: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
+    private var runningShown: Bool {
+        if case .app(let app) = item { state.prefs.showRunningIndicator && state.isRunning(app) } else { false }
+    }
+
+    /// An app auto-add put on the grid that hasn't been opened yet.
+    private var isNew: Bool {
+        if case .app(let app) = item { state.isNew(app) } else { false }
+    }
+
     private var accessibilityLabel: Text {
         if item.folder != nil { return Text("Folder \(item.title)") }
         // "Search GitHub — launchgrid": what Return will run.
@@ -731,7 +861,13 @@ struct ItemView: View {
             case .unavailable: Text("Action, unavailable: \(state.unavailableReason(a) ?? "")")
             case nil: Text("Action")
             }
-        case .app(let a): state.prefs.showRunningIndicator && state.isRunning(a) ? Text("Running") : Text(verbatim: "")
+        case .app(let a):
+            switch (state.isNew(a), state.prefs.showRunningIndicator && state.isRunning(a)) {
+            case (true, true): Text("New, running")
+            case (true, false): Text("New")
+            case (false, true): Text("Running")
+            case (false, false): Text(verbatim: "")
+            }
         }
     }
 
@@ -920,6 +1056,13 @@ struct PageDots: View {
                         // A dark edge, so the dots show on a light background too.
                         .overlay(Capsule().strokeBorder(.black.opacity(contrast == .increased ? 0.6 : 0.25), lineWidth: 0.5))
                         .shadow(color: .black.opacity(0.35), radius: 1.5)
+                        .overlay(alignment: .top) {
+                            // ⌘ held: ⌘ and this number goes to that page.
+                            if state.commandHeld && p < 9 && state.grid.pages.indices.contains(p) {
+                                KeyBadge(text: "\(p + 1)").fixedSize().offset(y: -22)
+                            }
+                        }
+                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: state.commandHeld)
                         .padding(4)
                         .contentShape(Capsule().inset(by: -4))
                         .onTapGesture { state.goToPage(p) }
@@ -978,8 +1121,14 @@ struct SearchResultsView: View {
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
                     ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument,
                              query: match.argument == nil ? state.query : nil)
-                        .modifier(TileMotion(enabled: true, cornerRadius: 14))
+                        .overlay(alignment: .topLeading) {
+                            // ⌘ held: ⌘ and this number opens it.
+                            if state.commandHeld && i < 9 { KeyBadge(text: "⌘\(i + 1)").offset(x: 4, y: 2) }
+                        }
+                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: state.commandHeld)
+                        .modifier(TileMotion(enabled: true, cornerRadius: 14, tint: match.item.hoverTint))
                         .modifier(OpenMotion(id: match.item.id))
+                        .modifier(FileDragLook(item: match.item))
                         .onTapGesture { state.activateResult(match) }
                         .accessibilityAction { state.activateResult(match) }
                         .accessibilityFocused($voiceOverFocus, equals: match.id)
@@ -1243,8 +1392,9 @@ struct FolderItemCell: View {
         let item = member.gridItem
         ItemView(item: item, iconSize: iconSize, selected: selected, focused: focused,
                  editing: editing, onDelete: { state.remove([member.id]) })
-            .modifier(TileMotion(enabled: hovers, cornerRadius: 14))
+            .modifier(TileMotion(enabled: hovers, cornerRadius: 14, tint: item.hoverTint))
             .modifier(OpenMotion(id: member.id))
+            .modifier(FileDragLook(item: item))
             .onTapGesture {
                 if swallowTap { swallowTap = false; return }
                 let mods = NSEvent.modifierFlags
@@ -1385,11 +1535,28 @@ struct MenuEntry {
                 state.launch(current)
             })
             entries.append(.button(String(localized: "Show in Finder")) {
-                guard let current = state.grid.item(a.id)?.app else { return }
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
-                // Finder comes forward like a launched app: an app opened behind mustn't cover it.
-                state.onHideForLaunch()
+                guard let current = state.grid.item(a.id) else { return }
+                state.showInFinder(current)
             })
+            entries.append(.button(String(localized: "Quick Look")) {
+                guard let current = state.grid.item(a.id), let url = state.fileURL(of: current) else { return }
+                state.onQuickLook(url)
+            })
+            if !multi && state.isRunning(a) {
+                entries.append(.divider)
+                entries.append(.button(String(localized: "Hide")) {
+                    guard let current = state.grid.item(a.id)?.app else { return }
+                    state.command(.hide, current)
+                })
+                entries.append(.button(String(localized: "Quit")) {
+                    guard let current = state.grid.item(a.id)?.app else { return }
+                    state.command(.quit, current)
+                })
+                entries.append(.button(String(localized: "Force Quit"), destructive: true) {
+                    guard let current = state.grid.item(a.id)?.app else { return }
+                    state.command(.forceQuit, current)
+                })
+            }
         } else if case .action(let a) = item {
             entries.append(.button(String(localized: "Open")) {
                 guard let current = state.grid.item(a.id)?.action else { return }
@@ -1397,9 +1564,12 @@ struct MenuEntry {
             })
             if case .openFile = a.kind {
                 entries.append(.button(String(localized: "Show in Finder")) {
-                    guard case .openFile(let path, _) = state.grid.item(a.id)?.action?.kind else { return }
-                    NSWorkspace.shared.activateFileViewerSelecting([FileAccess.url(for: path)])
-                    state.onHideForLaunch()
+                    guard let current = state.grid.item(a.id) else { return }
+                    state.showInFinder(current)
+                })
+                entries.append(.button(String(localized: "Quick Look")) {
+                    guard let current = state.grid.item(a.id), let url = state.fileURL(of: current) else { return }
+                    state.onQuickLook(url)
                 })
             }
             if let running = state.runningActions[a.id], running.canStop {

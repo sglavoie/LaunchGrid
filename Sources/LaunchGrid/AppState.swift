@@ -116,7 +116,9 @@ final class AppState {
             if query != oldValue {
                 searchPage = 0
                 // Nothing to focus when nothing matches: ⌃Return then opens the page's menu.
-                focusIndex = query.isEmpty || allSearchResults.isEmpty ? nil : 0
+                // An answer (a sum, a conversion) comes first: Return copies it.
+                focusIndex = query.isEmpty || allSearchResults.isEmpty || searchAnswer != nil ? nil : 0
+                if !query.isEmpty { noteTip(.typeToSearch) }
             }
             // However the search ended (a page jump, a reveal, hiding), the folder it started
             // in is no longer one to go back to.
@@ -159,6 +161,38 @@ final class AppState {
     /// The last item opened with the grid staying up, and a count that bumps on each open, so
     /// its tile pulses every time.
     var launchPulse: (id: UUID, count: Int) = (UUID(), 0)
+    /// The folder whose contents fan out above its tile while the pointer rests on it.
+    var peekFolderID: UUID?
+    /// A one-line hint at the bottom of the grid, one at a time, each gone for good once
+    /// what it says has been done (or it's dismissed).
+    enum Tip: String, CaseIterable {
+        case typeToSearch, holdCommand, dropFile
+    }
+
+    /// The tip to show now, if any: the first not yet done.
+    var currentTip: Tip? {
+        Tip.allCases.first { !prefs.tipsSeen.contains($0.rawValue) }
+    }
+
+    /// Notes that a tip's advice was taken (or the tip dismissed): it doesn't show again.
+    func noteTip(_ tip: Tip) {
+        if !prefs.tipsSeen.contains(tip.rawValue) { prefs.tipsSeen.insert(tip.rawValue) }
+    }
+
+    /// The grid's size while a pinch opens or closes it (`OverlayController.pinchChanged`).
+    var pinchScale: CGFloat = 1
+    /// Files dragged over the grid (`FileDrop.swift`).
+    var fileDrag: FileDrag?
+    @ObservationIgnored var fileDwell: FileDwell?
+    /// Drags a tile off the grid, wired by the overlay: returns whether it took the gesture.
+    @ObservationIgnored var onDragOut: (GridItem, URL) -> Bool = { _, _ in false }
+
+    /// ⌘ held down alone for a moment: the shortcuts show (numbers on search results and page
+    /// dots, a strip of the rest).
+    var commandHeld = false
+    /// Apps opened behind the grid (it stays up) that haven't finished launching: a ring turns
+    /// around their tiles, as the Dock bounces their icons, which the grid covers.
+    var launchingApps: Set<UUID> = []
     /// A dropped icon gliding into its place (or into the folder it joined).
     var landing: Landing?
     /// Bundle IDs and paths of the apps running, for the dot under their icons.
@@ -1022,10 +1056,31 @@ final class AppState {
         }
         grid = g
         afterChange(from: old)
+        noteNewApps(added: report.added, before: old)
         if !report.added.isEmpty || !report.restored.isEmpty {
             IconProvider.shared.prewarm(g.allApps.map(\.path))
         }
     }
+
+    /// Apps auto-add just put on the grid get the new-app dot (not ones returning, nor
+    /// ones moved or renamed); paths no longer on the grid lose theirs.
+    private func noteNewApps(added: [String], before old: Grid) {
+        var paths = prefs.newAppPaths
+        if !added.isEmpty {
+            let names = Set(added)
+            let known = Set(old.allApps.map(\.path) + old.recentlyPruned.map(\.app.path))
+            let ids = Set(old.allApps.map(\.id))
+            for app in grid.allApps where names.contains(app.name) && !known.contains(app.path) && !ids.contains(app.id) {
+                paths.insert(app.path)
+            }
+        }
+        let onGrid = Set(grid.allApps.map(\.path))
+        paths = paths.filter(onGrid.contains)
+        if paths != prefs.newAppPaths { prefs.newAppPaths = paths }
+    }
+
+    /// Whether `app` was auto-added and hasn't been opened yet.
+    func isNew(_ app: AppRef) -> Bool { prefs.newAppPaths.contains(app.path) }
 
     private func readOutsideAppsInBackground(_ paths: Set<String>) {
         guard !paths.isEmpty else { return }
@@ -1181,6 +1236,50 @@ final class AppState {
         return Search.results(in: grid.allSearchItems, query: query, usage: { usage.score($0, at: now) })
     }
 
+    @ObservationIgnored private var answerCache: (query: String, answer: Answer?)?
+
+    /// A sum, a conversion or a time elsewhere worked out from what was typed (`Answer`),
+    /// shown under the search field; Return copies it.
+    var searchAnswer: Answer? {
+        let q = query
+        if let c = answerCache, c.query == q { return c.answer }
+        let answer = q.isEmpty ? nil : Answer.answer(for: q)
+        answerCache = (q, answer)
+        return answer
+    }
+
+    /// Copies the answer, from Return or a click on it.
+    func copyAnswer() {
+        guard let answer = searchAnswer else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(answer.value, forType: .string)
+        showToast(String(localized: "Copied \(answer.value)"))
+    }
+
+    /// Where `item` is on disk, for Show in Finder and Quick Look: an app, or the file a File
+    /// action opens. None for a folder or another kind of action.
+    func fileURL(of item: GridItem) -> URL? {
+        switch grid.item(item.id) ?? item {
+        case .app(let a): URL(fileURLWithPath: a.path)
+        case .action(let a): if case .openFile(let path, _) = a.kind { FileAccess.url(for: path) } else { nil }
+        case .folder: nil
+        }
+    }
+
+    /// Shows `item` in Finder (⌘Return, or its menu), which comes forward as an opened app does.
+    func showInFinder(_ item: GridItem) {
+        guard let url = fileURL(of: item) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+        // An app opened behind mustn't cover it.
+        onHideForLaunch()
+    }
+
+    /// Keeps the grid up while macOS moves the focus to another app for a moment, wired by the overlay.
+    @ObservationIgnored var onKeepThroughFocusChange: () -> Void = {}
+
+    /// Opens or closes Quick Look on an item (⌘Y), wired by the overlay.
+    @ObservationIgnored var onQuickLook: (URL) -> Void = { _ in }
+
     /// With nothing found, the actions that take an argument, to run with what was typed:
     /// the most used first, at most three.
     var noResultSuggestions: [Action] {
@@ -1243,6 +1342,7 @@ final class AppState {
         // A SwiftUI tile or an open menu can still hold a ref from before a scan moved it.
         guard let app = grid.item(app.id)?.app else { return }
         recordUse(.app(app))
+        if isNew(app) { prefs.newAppPaths.remove(app.path) }
         // Get out of the way at once, as Launchpad does; a slow app can take seconds. Staying
         // up, the grid opens it behind itself and keeps the keyboard, to open more.
         let hides = prefs.hideAfterLaunch
@@ -1252,13 +1352,16 @@ final class AppState {
         let excludedPaths = Set(grid.removedBundleIDs.filter { $0.hasPrefix("/") })
         let otherTilePaths = Set(grid.allApps.filter { $0.id != app.id && $0.bundleID == app.bundleID }.map(\.path))
         showOpening(app.id, hides: hides)
-        if hides { onHideForLaunch() }
+        if hides { onHideForLaunch() } else { showLaunching(app.id) }
         Task {
             do {
                 let (path, running) = try await Launcher.launch(app, activates: hides,
                                                                  knownPaths: knownPaths, excludedPaths: excludedPaths,
                                                                  otherTilePaths: otherTilePaths)
-                if !hides { onLaunchedBehind(running) }
+                if !hides {
+                    onLaunchedBehind(running)
+                    Task { await self.waitForLaunch(of: app.id, running) }
+                }
                 // Off the main thread: a stalled volume mustn't hang the app.
                 let gone = path == app.path ? false
                     : await Disk.run { !FileManager.default.fileExists(atPath: app.path) }
@@ -1266,6 +1369,7 @@ final class AppState {
                     rememberPath(path, of: app.id)
                 }
             } catch {
+                endLaunching(app.id)
                 // Cancelled by the person, e.g. at Gatekeeper's prompt: they know.
                 if Launcher.isUserCancel(error) { return }
                 // Gone: one outside the scan folders (added with Browse) has no watcher to tell,
@@ -1277,6 +1381,80 @@ final class AppState {
                     onError(String(localized: "Could not open \(app.title)"), error.localizedDescription)
                 }
             }
+        }
+    }
+
+    /// Each launch ring's start, so an earlier launch's time limit doesn't end a later one's.
+    @ObservationIgnored private var launchStarts: [UUID: Date] = [:]
+    /// How long a launch ring turns at most, from the click: as long as the Dock bounces an
+    /// app. One that never says it has finished (not built on AppKit), or that waits at a
+    /// dialog of its own, isn't followed further.
+    static let launchRingLimit: Duration = .seconds(10)
+
+    private func showLaunching(_ id: UUID) {
+        let start = Date()
+        launchStarts[id] = start
+        launchingApps.insert(id)
+        Task {
+            try? await Task.sleep(for: Self.launchRingLimit)
+            endLaunching(id, startedAt: start)
+        }
+    }
+
+    private func endLaunching(_ id: UUID, startedAt start: Date? = nil) {
+        guard start == nil || launchStarts[id] == start else { return }
+        launchStarts[id] = nil
+        launchingApps.remove(id)
+    }
+
+    /// Keeps the launch ring on `id` until its app has finished launching (or the time limit).
+    private func waitForLaunch(of id: UUID, _ running: NSRunningApplication) async {
+        let start = launchStarts[id]
+        while !running.isFinishedLaunching, !running.isTerminated, launchStarts[id] == start, start != nil {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        endLaunching(id, startedAt: start)
+    }
+
+    /// The running copies `app` stands for, as `isRunning` judges them: the same copy, or any
+    /// copy of its app when only one tile has it.
+    func runningInstances(of app: AppRef) -> [NSRunningApplication] {
+        let shared = (app.bundleID.map { id in grid.allApps.filter { $0.bundleID == id }.count } ?? 0) > 1
+        return NSWorkspace.shared.runningApplications.filter { running in
+            guard running.activationPolicy == .regular, running.processIdentifier != getpid() else { return false }
+            if running.bundleURL?.path == app.path { return true }
+            return !shared && app.bundleID != nil && running.bundleIdentifier == app.bundleID
+        }
+    }
+
+    enum RunningCommand { case hide, quit, forceQuit }
+
+    /// Hides or quits the running app `app` stands for, from its menu or ⌘⌫. An app that asks
+    /// to save its documents first does so in front of the grid's place: it hides for that.
+    func command(_ command: RunningCommand, _ app: AppRef) {
+        let instances = runningInstances(of: app)
+        guard !instances.isEmpty else { return }
+        // The app quit or hidden may be the one in front: macOS then brings the next one
+        // forward, which mustn't take the grid away.
+        onKeepThroughFocusChange()
+        for running in instances {
+            switch command {
+            case .hide: running.hide()
+            case .quit: running.terminate()
+            case .forceQuit: running.forceTerminate()
+            }
+        }
+        switch command {
+        case .hide: showToast(String(localized: "Hid \(app.title)"))
+        case .quit: showToast(String(localized: "Quitting \(app.title)"))
+        case .forceQuit: showToast(String(localized: "Force quit \(app.title)"))
+        }
+        // Quitting can bring up a "save changes?" sheet, which waits behind the grid: look
+        // again shortly, and get out of the way if the app is still there and has come forward.
+        guard command == .quit else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if isShown, instances.contains(where: { !$0.isTerminated && $0.isActive }) { onHide() }
         }
     }
 
@@ -1462,7 +1640,7 @@ final class AppState {
 
     /// What opening `id` looks like: hiding, its tile zooms toward you as the others recede;
     /// staying up, it pulses.
-    private func showOpening(_ id: UUID, hides: Bool) {
+    func showOpening(_ id: UUID, hides: Bool) {
         guard isShown else { return }
         if hides {
             launchingID = id
@@ -1623,6 +1801,7 @@ final class AppState {
         // Animated by the folder layer (GridRootView), not `withAnimation`: see there.
         folderPage = 0
         focusIndex = nil
+        peekFolderID = nil
         openFolderID = id
     }
 
@@ -1985,9 +2164,24 @@ final class AppState {
     }
 
     /// Called when the overlay appears.
+    /// The icon style the icons on hand were drawn in (`IconProvider.systemStyle`).
+    @ObservationIgnored private var iconStyle = IconProvider.systemStyle
+
     func didShow() {
         isShown = true
         showCount &+= 1
+        // Another icon style chosen since: every icon is drawn again in it. macOS can go on
+        // handing out the old style's icons for a few seconds after the switch: again, after that.
+        let style = IconProvider.systemStyle
+        if style != iconStyle {
+            iconStyle = style
+            regenerateIcons()
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, self.iconStyle == style else { return }
+                self.regenerateIcons()
+            }
+        }
         prewarmNearbyIcons()
         // Clears itself once the build-in has played (the next show is an ordinary one).
         if introPending {
@@ -2023,7 +2217,13 @@ final class AppState {
 
     /// Resets transient state when the overlay closes.
     func didHide() {
+        commandHeld = false
+        pinchScale = 1
+        endFileDrag()
         launchingID = nil
+        peekFolderID = nil
+        launchingApps.removeAll()
+        launchStarts.removeAll()
         mouseDown = false
         landing = nil
         introPending = false
@@ -2098,6 +2298,9 @@ final class AppState {
             if let path = app.bundleURL?.path { set.insert(path) }
         }
         if set != runningApps { runningApps = set }
+        // A new app opened some other way (Finder, the Dock) has been seen too.
+        let opened = prefs.newAppPaths.filter(set.contains)
+        if !opened.isEmpty { prefs.newAppPaths.subtract(opened) }
     }
 
     /// Whether `app` is running: the same copy, or any copy of its app when only one tile has it.
@@ -2113,7 +2316,7 @@ final class AppState {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)
     }
 
-    private func withAnimationIfShown(_ body: () -> Void) {
+    func withAnimationIfShown(_ body: () -> Void) {
         if isShown {
             withAnimation(Self.pageAnimation, body)
         } else {

@@ -1,6 +1,7 @@
 #if !APP_STORE
 import AppKit
 import Carbon
+import QuickLookUI
 import LaunchGridCore
 
 /// Development aid: `LAUNCHGRID_DEBUG_SCRIPT="build;show;snap:grid;quit"` drives the UI and
@@ -235,6 +236,9 @@ enum DebugScript {
                 case "undo": state.undo()
                 case "redo": state.redo()
                 case "deletepage": state.deleteCurrentPage()
+                case "hideafter":
+                    // "hideafter:off": opened apps open behind the grid, which stays up.
+                    state.prefs.hideAfterLaunch = arg != "off"
                 case "launch":
                     // Opens app N of the current page, as a click does.
                     if case .app(let a)? = state.currentItems[safe: Int(arg) ?? 0] { state.launch(a) }
@@ -350,9 +354,50 @@ enum DebugScript {
                     if state.openFolder != nil { print("folderframe: \(state.drag.folderGridFrame) pager=\(state.drag.pagerFrame)") }
                     if let f = state.openFolder { print("folder: \(f.items.count) apps, first \(f.items.prefix(3).map(\.title)), last \(f.items.suffix(3).map(\.title))") }
                     fflush(stdout)
+                case "searchbench":
+                    // "searchbench:N": times ranking search results as each prefix of a few queries is
+                    // typed, over the grid's items repeated N times (default 3), as on a larger Mac.
+                    let copies = max(1, Int(arg) ?? 3)
+                    let items = Array(repeating: state.grid.allSearchItems, count: copies).flatMap { $0 }
+                    let usage = state.prefs.usage
+                    var times: [Double] = []
+                    for q in ["safari", "vsc", "micro word", "settings", "xq", "time in tokyo"] {
+                        for n in 1...q.count {
+                            let prefix = String(q.prefix(n))
+                            let t0 = CACurrentMediaTime()
+                            _ = Search.results(in: items, query: prefix, usage: { usage.score($0) })
+                            _ = Answer.answer(for: prefix)
+                            times.append((CACurrentMediaTime() - t0) * 1000)
+                        }
+                    }
+                    let sorted = times.sorted()
+                    print(String(format: "searchbench: items=%d keystrokes=%d p50=%.2fms p95=%.2fms max=%.2fms", items.count, times.count,
+                                 sorted[sorted.count / 2], sorted[Int(Double(sorted.count - 1) * 0.95)], sorted.last ?? 0))
+                    fflush(stdout)
+                case "gestures":
+                    // The pinch and hot corner state: whether only the desktop is under the pointer,
+                    // the pinch's scale, the window's alpha.
+                    print("gestures: desktop=\(GestureWatcher.desktopUnderPointer()) pinchScale=\(String(format: "%.3f", state.pinchScale)) alpha=\(String(format: "%.2f", overlay.window?.alphaValue ?? -1)) shown=\(state.isShown) visible=\(overlay.isVisible) pinch=\(state.prefs.pinchToOpen) corner=\(state.prefs.hotCorner.rawValue)")
+                    fflush(stdout)
+                case "gesturepref":
+                    // "gesturepref:pinch,bottomRight": turns the pinch on (or "nopinch") and sets the hot corner.
+                    let parts = arg.split(separator: ",").map(String.init)
+                    state.prefs.pinchToOpen = parts.first == "pinch"
+                    state.prefs.hotCorner = HotCorner(rawValue: parts.count > 1 ? parts[1] : "none") ?? .none
+                    delegate.gestures.apply()
+                case "showstats":
+                    // Every show's time to its first frame this run: the cold one, then warm p50/p95.
+                    print("showstats: \(ShowTiming.summary) all=\(ShowTiming.samples.map { Int($0) })"); fflush(stdout)
                 case "polish":
                     // The motion and feedback state (`Polish.swift`), which snaps alone can't show.
                     print("polish: showms=\(ShowTiming.lastMilliseconds.map { String(format: "%.1f", $0) } ?? "-") haptics=\(Haptics.count) bounces=\(state.bounceCount) launching=\(state.launchingID.flatMap { state.grid.item($0)?.title } ?? "-") pulse=\(state.launchPulse.count) landing=\(state.landing == nil ? "-" : "now") lastLanding='\(Landing.last)' toast='\(state.toast ?? "-")' undoable=\(state.toastUndoable) running=\(state.runningApps.count) runningShown=\(state.currentItems.filter { $0.app.map(state.isRunning) ?? false }.map(\.title)) intro=\(state.introPending) suggestions=\(state.noResultSuggestions.map(\.name)) results=\(state.searchResults.prefix(6).map(\.title))")
+                    let tints = state.currentItems.prefix(6).map { item -> String in
+                        guard case .app(let a) = item, let t = IconProvider.shared.tint(a.path) else { return "\(item.title)=-" }
+                        return "\(item.title)=" + String(format: "%.2f,%.2f,%.2f", t.red, t.green, t.blue)
+                    }
+                    print("polish3: ql=\(overlay.isQuickLooking) cmdHeld=\(state.commandHeld) answer=\(state.searchAnswer.map { "\($0.question)=\($0.value) (\($0.note ?? "-"))" } ?? "-") tip=\(state.currentTip?.rawValue ?? "-") focus=\(String(describing: state.focusIndex)) pasteboard='\(NSPasteboard.general.string(forType: .string) ?? "-")' chip=\(KeywordChip.split(state, line: state.searchLine).map { "\($0.keyword)|\($0.beforeCaret)" } ?? "-") key=\(overlay.window?.isKeyWindow == true) qlAbove=\(overlay.isQuickLooking ? String(describing: (NSApp.orderedWindows.firstIndex { $0 is QLPreviewPanel } ?? 99) < (NSApp.orderedWindows.firstIndex { $0 === overlay.window } ?? -1)) : "-") qlLevel=\(overlay.isQuickLooking ? QLPreviewPanel.shared().level.rawValue : -1) gridLevel=\(overlay.window?.level.rawValue ?? -1)")
+                    print("filedrag: \(state.fileDrag.map { d in "files=\(d.urls.map(\.lastPathComponent)) openers=\(d.openers.count) target=\(d.target.flatMap { state.grid.item($0)?.title } ?? "-")" } ?? "-") folder=\(state.openFolder?.name ?? "-") page=\(state.currentPage) shown=\(state.isShown) alpha=\(overlay.window?.alphaValue ?? -1)")
+                    print("polish2: launchingApps=\(state.launchingApps.compactMap { state.grid.item($0)?.title }) peek=\(state.peekFolderID.flatMap { state.grid.item($0)?.title } ?? "-") new=\(state.grid.allApps.filter(state.isNew).map(\.title)) tints=\(tints)")
                     fflush(stdout)
                 case "presssnap":
                     // "presssnap:name": waits (up to 10 s) for the mouse button to go down over the

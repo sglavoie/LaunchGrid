@@ -29,6 +29,21 @@ enum BackgroundStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// The screen corner the pointer opens the grid from, if any.
+enum HotCorner: String, CaseIterable, Identifiable {
+    case none, topLeft, topRight, bottomLeft, bottomRight
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .none: String(localized: "None")
+        case .topLeft: String(localized: "Top Left")
+        case .topRight: String(localized: "Top Right")
+        case .bottomLeft: String(localized: "Bottom Left")
+        case .bottomRight: String(localized: "Bottom Right")
+        }
+    }
+}
+
 enum MenuBarIconStyle: String, CaseIterable, Identifiable {
     case monochrome, colour
     var id: String { rawValue }
@@ -87,6 +102,14 @@ final class Preferences {
     var showLabels: Bool { didSet { d.set(showLabels, forKey: "showLabels") } }
     /// A dot under apps that are running, as in the Dock.
     var showRunningIndicator: Bool { didSet { d.set(showRunningIndicator, forKey: "showRunningIndicator") } }
+    /// Apps added on their own since they were installed (auto-add), by path, not opened yet:
+    /// a blue dot beside their names, as Launchpad shows, until they're first opened.
+    var newAppPaths: Set<String> { didSet { d.set(newAppPaths.sorted(), forKey: "newAppPaths") } }
+    /// A trackpad pinch opens the grid (`GestureWatcher`); spreading on the grid closes it.
+    var pinchToOpen: Bool { didSet { d.set(pinchToOpen, forKey: "pinchToOpen") } }
+    var hotCorner: HotCorner { didSet { d.set(hotCorner.rawValue, forKey: "hotCorner") } }
+    /// The tips at the bottom of the grid already taken or dismissed (`AppState.Tip`).
+    var tipsSeen: Set<String> { didSet { d.set(tipsSeen.sorted(), forKey: "tipsSeen") } }
     /// How often and how recently each item was opened, which search ranks by. Only LaunchGrid's
     /// own record of what it opened; nothing observes it.
     @ObservationIgnored var usage: Usage { didSet { d.set(usage.propertyList, forKey: "usage") } }
@@ -148,6 +171,10 @@ final class Preferences {
         iconScale = Self.appearanceValue(d.double(forKey: "iconScale"), in: 0.6...1.4, fallback: 1)
         showLabels = d.bool(forKey: "showLabels")
         showRunningIndicator = d.bool(forKey: "showRunningIndicator")
+        newAppPaths = Set(d.stringArray(forKey: "newAppPaths") ?? [])
+        tipsSeen = Set(d.stringArray(forKey: "tipsSeen") ?? [])
+        pinchToOpen = d.bool(forKey: "pinchToOpen")
+        hotCorner = HotCorner(rawValue: d.string(forKey: "hotCorner") ?? "") ?? .none
         usage = Usage(propertyList: d.dictionary(forKey: "usage"))
         folderPlacement = FolderPlacement(rawValue: d.string(forKey: "folderPlacement") ?? "") ?? .first
         extraFolders = d.stringArray(forKey: "extraFolders") ?? []
