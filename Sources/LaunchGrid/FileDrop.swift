@@ -141,7 +141,7 @@ struct FileDwell: Equatable {
 struct FileDragLook: ViewModifier {
     let item: GridItem
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         let drag = state.fileDrag

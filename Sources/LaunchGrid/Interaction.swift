@@ -170,7 +170,7 @@ extension AppState {
     /// Drag motion (lifts, gap shifts, merge highlights) and the long-press into edit mode; none
     /// with Reduce Motion, so icons change place without sliding.
     static func dragMotion(_ animation: Animation) -> Animation? {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : animation
+        Motion.reduced ? nil : animation
     }
 
     var pageLayout: GridLayout {

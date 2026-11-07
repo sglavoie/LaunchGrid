@@ -427,7 +427,7 @@ final class AppState {
             for action in grid.allActions where new.item(action.id) == nil { new.addAction(action) }
         }
         if !hasGridFile {
-            introPending = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            introPending = !Motion.reduced
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
             undoStack.removeAll()
@@ -2363,7 +2363,7 @@ final class AppState {
 
     /// Page and folder transitions; none with Reduce Motion, so nothing slides.
     static var pageAnimation: Animation? {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)
+        Motion.reduced ? nil : .spring(response: 0.32, dampingFraction: 0.86)
     }
 
     func withAnimationIfShown(_ body: () -> Void) {

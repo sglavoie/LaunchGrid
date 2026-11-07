@@ -389,6 +389,11 @@ struct AppearanceSettings: View {
                 Toggle("Show app names", isOn: $prefs.showLabels)
                 Toggle("Show a dot under running apps", isOn: $prefs.showRunningIndicator)
             }
+            Section("Motion") {
+                Toggle("Reduce motion", isOn: $prefs.reduceMotion)
+                Text("No sliding, zooming or fading: pages, folders and the grid itself change at once.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .task(id: "\(prefs.background)|\(prefs.customImagePath ?? "")|\(picks)|\(state.screenID)") {

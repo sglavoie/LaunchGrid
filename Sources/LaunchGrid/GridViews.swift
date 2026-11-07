@@ -5,7 +5,7 @@ import LaunchGridCore
 /// Root of the overlay: background, search, pager, page dots, folder and drag layers.
 struct GridRootView: View {
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @State private var size: CGSize = .zero
     /// Ties each tile on the page to its search result, so typing lifts the matches out of
     /// the grid into the results, and clearing the search puts them back.
@@ -161,7 +161,7 @@ struct GridRootView: View {
 /// It fades in place with Reduce Motion.
 struct ToastLayer: View {
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     /// "Removed Safari — ⌘Z to undo" as "Removed Safari", beside its Undo button.
     static func withoutUndoHint(_ text: String) -> String {
@@ -455,7 +455,7 @@ struct PillButtonStyle: ButtonStyle {
 struct PageTitle: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     /// A page without a title just turned to: its number shows for a moment.
     @State private var landed: Int?
 
@@ -771,7 +771,7 @@ struct ItemCell: View {
 struct ItemView: View {
     @Environment(AppState.self) private var state
     @Environment(\.gridLabelsFit) private var labelsFit
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     let item: GridItem
     let iconSize: CGFloat
@@ -1023,7 +1023,7 @@ struct FolderIcon: View {
 struct Jiggle: ViewModifier {
     let active: Bool
     let seed: Int
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @Environment(\.gridJiggles) private var jiggles
 
     func body(content: Content) -> some View {
@@ -1191,7 +1191,7 @@ struct PageDots: View {
 struct SearchResultsView: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @AccessibilityFocusState private var voiceOverFocus: UUID?
 
     var body: some View {
@@ -1366,6 +1366,31 @@ extension EnvironmentValues {
     @Entry var gridLabelsFit = true
     /// Off on pages out of view (or only peeking in at the sides): their icons keep still in edit mode.
     @Entry var gridJiggles = true
+    /// Reduce Motion, the system's or LaunchGrid's own (`motionSettings()`): views ask this
+    /// rather than `accessibilityReduceMotion`.
+    @Entry var reduceMotion = false
+}
+
+/// Applies the Reduce Motion settings to a window's views. The system's drops sliding and
+/// zooming; LaunchGrid's also strips every animation from the views' changes, fades included.
+private struct MotionSettings: ViewModifier {
+    @Environment(AppState.self) private var state
+    @Environment(\.accessibilityReduceMotion) private var system
+
+    func body(content: Content) -> some View {
+        let snappy = state.prefs.reduceMotion
+        content
+            .environment(\.reduceMotion, snappy || system)
+            .transaction { t in
+                guard snappy else { return }
+                t.animation = nil
+                t.disablesAnimations = true
+            }
+    }
+}
+
+extension View {
+    func motionSettings() -> some View { modifier(MotionSettings()) }
 }
 
 // MARK: - Folder

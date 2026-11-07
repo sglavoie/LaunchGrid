@@ -55,6 +55,19 @@ enum MenuBarIconStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// How much the interface moves, for code with no view environment to ask. The system's Reduce
+/// Motion keeps fades but drops sliding and zooming; LaunchGrid's own setting drops the fades too,
+/// so everything changes at once.
+@MainActor
+enum Motion {
+    /// LaunchGrid's Reduce Motion setting (`Preferences.reduceMotion`).
+    static var snappy = false
+    /// No sliding or zooming: either setting.
+    static var reduced: Bool { snappy || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// A fade of `duration`, or none with LaunchGrid's setting.
+    static func fade(_ duration: TimeInterval) -> TimeInterval { snappy ? 0 : duration }
+}
+
 /// User settings, persisted in UserDefaults. Grid size lives in the grid itself.
 @MainActor @Observable
 final class Preferences {
@@ -102,6 +115,9 @@ final class Preferences {
     var showLabels: Bool { didSet { d.set(showLabels, forKey: "showLabels") } }
     /// A dot under apps that are running, as in the Dock.
     var showRunningIndicator: Bool { didSet { d.set(showRunningIndicator, forKey: "showRunningIndicator") } }
+    /// No effects at all: no sliding, zooming or fading, whatever the system's Reduce Motion
+    /// says (`Motion`).
+    var reduceMotion: Bool { didSet { d.set(reduceMotion, forKey: "reduceMotion"); Motion.snappy = reduceMotion } }
     /// Apps added on their own since they were installed (auto-add), by path, not opened yet:
     /// a blue dot beside their names, as Launchpad shows, until they're first opened.
     var newAppPaths: Set<String> { didSet { d.set(newAppPaths.sorted(), forKey: "newAppPaths") } }
@@ -158,6 +174,7 @@ final class Preferences {
             "searchSettingsPanes": true,
             "showSuggestions": false,
             "showRunningIndicator": true,
+            "reduceMotion": false,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
         // Keyboard translation takes a 16-bit key code. A hand-edited value outside that
@@ -182,6 +199,8 @@ final class Preferences {
         iconScale = Self.appearanceValue(d.double(forKey: "iconScale"), in: 0.6...1.4, fallback: 1)
         showLabels = d.bool(forKey: "showLabels")
         showRunningIndicator = d.bool(forKey: "showRunningIndicator")
+        reduceMotion = d.bool(forKey: "reduceMotion")
+        Motion.snappy = d.bool(forKey: "reduceMotion")
         newAppPaths = Set(d.stringArray(forKey: "newAppPaths") ?? [])
         tipsSeen = Set(d.stringArray(forKey: "tipsSeen") ?? [])
         pinchToOpen = d.bool(forKey: "pinchToOpen")

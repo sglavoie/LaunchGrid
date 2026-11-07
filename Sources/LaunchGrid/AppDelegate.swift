@@ -226,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onHide = { [weak self] in self?.overlay.hide() }
         state.onHideForLaunch = { [weak self] in
             // Long enough to see the opened tile zoom (`OpenMotion`); none of it with Reduce Motion.
-            let zoom = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            let zoom = !Motion.reduced
             self?.overlay.hide(deactivate: false, duration: zoom ? 0.2 : 0.12)
         }
         state.onLaunchedBehind = { [weak self] in self?.overlay.openedBehind($0) }
@@ -791,6 +791,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if bringForward(key) { return }
         let close: () -> Void = { [weak self] in self?.windows[key]?.close() }
         let root = content(close)
+            .motionSettings()
             .environment(state)
             .environment(\.libraryActions, libraryActions)
         let controller = NSHostingController(rootView: root)

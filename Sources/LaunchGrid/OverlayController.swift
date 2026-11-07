@@ -143,7 +143,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let panel, panel.isVisible, state.isShown else { return }
         let shown = pinchOpening ? progress : 1 - progress
         panel.alphaValue = shown
-        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduce = Motion.reduced
         state.pinchScale = reduce ? 1 : 1 + (Self.pinchFarScale - 1) * (1 - shown)
     }
 
@@ -152,13 +152,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard let panel, panel.isVisible, state.isShown else { return }
         if pinchOpening == commit {
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.18
+                ctx.duration = Motion.fade(0.18)
                 panel.animator().alphaValue = 1
             }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { state.pinchScale = 1 }
+            withAnimation(Motion.snappy ? nil : .spring(response: 0.3, dampingFraction: 0.8)) { state.pinchScale = 1 }
         } else {
-            let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            withAnimation(.easeIn(duration: 0.15)) { state.pinchScale = reduce ? 1 : Self.pinchFarScale }
+            let reduce = Motion.reduced
+            withAnimation(Motion.snappy ? nil : .easeIn(duration: 0.15)) { state.pinchScale = reduce ? 1 : Self.pinchFarScale }
             hide(duration: 0.15)
         }
     }
@@ -216,7 +216,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         host.beginDraggingSession(with: [dragged], event: event, source: self)
         panel.ignoresMouseEvents = true
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
+            ctx.duration = Motion.fade(0.2)
             panel.animator().alphaValue = 0
         }
         return true
@@ -393,6 +393,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         visibilityGeneration += 1
         let generation = visibilityGeneration
+        let duration = Motion.fade(duration)
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = duration
             if duration > 0.12 { ctx.timingFunction = CAMediaTimingFunction(name: .easeIn) }
@@ -484,7 +485,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         p.minSize = NSSize(width: 480, height: 360)
         p.delegate = self
-        let root = GridRootView().environment(state)
+        let root = GridRootView().motionSettings().environment(state)
         let host = NSHostingView(rootView: AnyView(root))
         host.sizingOptions = []
         // The text input view sits beside the SwiftUI content, out of sight. Files dragged
@@ -1374,7 +1375,7 @@ extension OverlayController: NSDraggingSource {
         panel.ignoresMouseEvents = false
         if operation.isEmpty {
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.15
+                ctx.duration = Motion.fade(0.15)
                 panel.animator().alphaValue = 1
             }
             if isVisible { panel.makeKey() }

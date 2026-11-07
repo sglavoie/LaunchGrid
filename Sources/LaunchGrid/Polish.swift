@@ -71,7 +71,7 @@ struct TileMotion: ViewModifier {
     /// The icon's own colour, which the glow behind it takes; white when it has none.
     var tint: Color? = nil
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @State private var hovered = false
     /// Held down on this tile: set as the button goes down over it, kept until it's let go
     /// (the pointer's hover can end as the press begins).
@@ -121,7 +121,7 @@ struct AppearMotion: ViewModifier {
     /// From the tile to where the grid was called from; nil for the middle.
     var toOrigin: CGSize? = nil
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         let shown = state.isShown
@@ -151,7 +151,7 @@ struct AppearMotion: ViewModifier {
 struct OpenMotion: ViewModifier {
     let id: UUID
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         let launching = state.launchingID
@@ -298,7 +298,7 @@ struct BackgroundEntrance: ViewModifier {
     /// colour shows no difference.
     let zooms: Bool
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         // Hiding to open an item, the window's own fade takes it, with the opened tile's zoom.
@@ -322,7 +322,7 @@ struct BackgroundEntrance: ViewModifier {
 /// seems to float over it. It follows a swipe as it goes. Still with Reduce Motion.
 struct Parallax: ViewModifier {
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @State private var width: CGFloat = 0
 
     func body(content: Content) -> some View {
@@ -427,7 +427,7 @@ struct FolderPeek: View {
 /// Each icon in a folder's peek comes out a moment after the one before. Still with Reduce Motion.
 private struct PeekFan: ViewModifier {
     let order: Int
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @State private var out = false
 
     func body(content: Content) -> some View {
@@ -447,7 +447,7 @@ private struct PeekFan: ViewModifier {
 /// app already running doesn't flash it. A steady ring with Reduce Motion.
 struct LaunchRing: View {
     let size: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     @State private var visible = false
     @State private var turning = false
 

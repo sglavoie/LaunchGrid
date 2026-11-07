@@ -45,7 +45,7 @@ struct FocusHalo: View {
     let size: CGSize
     let tint: Color?
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     static let cornerRadius: CGFloat = 16
 
@@ -93,7 +93,7 @@ extension EnvironmentValues {
 struct IconShadow: ViewModifier {
     let lift: Int
     let size: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         let (opacity, scale, y): (Double, CGFloat, CGFloat) = switch reduceMotion ? 0 : lift {
@@ -245,7 +245,7 @@ struct LiveCalendarIcon: View {
 /// The time now on a clock face, the second hand turning while the grid is shown.
 struct LiveClockIcon: View {
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
     let size: CGFloat
     let style: LiveIcon.Style
 

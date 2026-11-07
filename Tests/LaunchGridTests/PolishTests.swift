@@ -6,6 +6,19 @@ import Testing
 
 /// The motion and feedback state behind `Polish.swift`: what opening, removing and searching set.
 @MainActor @Suite(.tempDir) struct PolishTests {
+    @Test func reduceMotionIsOffByDefaultAndStopsTheAnimations() {
+        let state = makeState(["A"])
+        defer { state.prefs.reduceMotion = false }
+        #expect(!state.prefs.reduceMotion)
+        state.prefs.reduceMotion = true
+        #expect(Motion.snappy && Motion.reduced)
+        #expect(AppState.pageAnimation == nil && AppState.dragMotion(.default) == nil)
+        #expect(Motion.fade(0.2) == 0)
+        // Kept in the settings.
+        let again = Preferences(defaults: UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!)
+        #expect(again.reduceMotion)
+    }
+
     @Test func opensRankWhatIsUsedFirstAndPersist() {
         let state = makeState(["Slack", "Safari"])
         state.query = "s"

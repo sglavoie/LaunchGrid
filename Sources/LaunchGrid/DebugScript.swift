@@ -933,7 +933,9 @@ enum DebugScript {
                     if n.count == 2 { state.followMovedApps([n[0]: n[1]]) }
                 case "motion":
                     // Whether Reduce Motion turns the animations off, as the views ask it.
-                    print("motion: reduce=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) drag=\(AppState.dragMotion(.default) != nil) page=\(AppState.pageAnimation != nil)")
+                    // "motion:on|off" sets LaunchGrid's own Reduce Motion setting first.
+                    if arg == "on" || arg == "off" { state.prefs.reduceMotion = arg == "on" }
+                    print("motion: reduce=\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) snappy=\(Motion.snappy) drag=\(AppState.dragMotion(.default) != nil) page=\(AppState.pageAnimation != nil)")
                     fflush(stdout)
                 case "volumes":
                     let listed = (try? FileManager.default.contentsOfDirectory(atPath: "/Volumes"))?.sorted()

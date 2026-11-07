@@ -182,7 +182,7 @@ struct FlowLayout: Layout {
 /// a message, a search, a folder or edit mode, nor while the first layout builds itself in.
 struct TipLayer: View {
     @Environment(AppState.self) private var state
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.reduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
