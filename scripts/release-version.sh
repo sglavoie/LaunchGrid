@@ -1,7 +1,8 @@
 #!/bin/sh
 # Usage: scripts/release-version.sh [--force] [patch|minor|major|X.Y.Z|resume] [release notes]
 # No bump preserves the build-only workflow. resume retries the current version. X.Y.Z sets the
-# version directly; it must be above every released or uploaded version. --force publishes
+# version directly; it must be above every released or uploaded version, and naming the current
+# unreleased VERSION resumes it. --force publishes
 # without waiting for or checking CI (the same as SKIP_CI_CHECK=1), so failing tests don't stop it.
 set -eu
 cd "$(dirname "$0")/.."
@@ -105,9 +106,12 @@ if [ "$BUMP" != resume ]; then
         fi
     done
     if [ "$NEXT" = "$VERSION" ]; then
-        echo "VERSION is already $NEXT; use: just release resume" >&2
-        exit 1
+        # Already bumped but never tagged (the checks above): the last attempt stopped part way.
+        echo "VERSION is already $NEXT and unreleased; resuming that release."
+        BUMP=resume
     fi
+fi
+if [ "$BUMP" != resume ]; then
     echo "Bumping $VERSION to $NEXT."
     # Write back into the existing file to preserve its executable mode on BSD and GNU hosts.
     VERSION_TMP="$(mktemp)"

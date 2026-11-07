@@ -162,7 +162,7 @@ grep -qx 'VERSION="1.2.2"' scripts/bundle.sh
 setup explicit-guards
 git tag v1.2.0
 git tag app-store/v1.2.1
-for BAD in 1.2.0 1.1.9 1.2.1 1.2.3 01.2.4 1.2 1.2.4-beta --bogus; do
+for BAD in 1.2.0 1.1.9 1.2.1 01.2.4 1.2 1.2.4-beta --bogus; do
     expect_failure "$BAD"
 done
 expect_failure '' 'notes without a bump'
@@ -175,6 +175,16 @@ grep -qx 'VERSION="1.3.0"' scripts/bundle.sh
 [ "$(cat "$TRACE")" = "$(printf 'build\npublish')" ]
 [ "$(cat build/notes)" = 'Forced notes' ]
 grep -q 'ships even if its tests fail' "$ROOT/output.log"
+
+setup force-current-version
+(MOCK_CI_FAIL=1 expect_failure 1.2.4)
+# Naming the already-bumped, unreleased version resumes it rather than refusing.
+(MOCK_CI_FAIL=1 scripts/release-version.sh 1.2.4 --force 'Forced notes' > "$ROOT/output.log" 2>&1)
+grep -q 'resuming that release' "$ROOT/output.log"
+[ "$(git rev-list --count HEAD)" = 2 ]
+grep -qx 'VERSION="1.2.4"' scripts/bundle.sh
+[ "$(tail -n 2 "$TRACE")" = "$(printf 'build\npublish')" ]
+[ "$(cat build/notes)" = 'Forced notes' ]
 
 setup force-after-bump
 (MOCK_CI_FAIL=1 scripts/release-version.sh patch --force > "$ROOT/output.log" 2>&1)
