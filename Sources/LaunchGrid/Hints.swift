@@ -10,10 +10,8 @@ import LaunchGridCore
 /// result they'd act on.
 struct SearchHintLine: View {
     @Environment(AppState.self) private var state
-    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let high = contrast == .increased
         Group {
             if let answer = state.searchAnswer {
                 // One card while typing changes the answer: its value rolls to the new one.
@@ -151,20 +149,26 @@ struct FlowLayout: Layout {
         return rows.map { $0.map { (index: $0.0, size: $0.1) } }
     }
 
+    private func rowWidth(_ row: [(index: Int, size: CGSize)]) -> CGFloat {
+        let widths: CGFloat = row.map(\.size.width).reduce(0, +)
+        return widths + spacing * CGFloat(max(row.count - 1, 0))
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? .infinity
         let rows = rows(subviews, width: width)
-        let widest = rows.map { row in row.map(\.size.width).reduce(0, +) + spacing * CGFloat(max(row.count - 1, 0)) }.max() ?? 0
-        let height = rows.map { $0.map(\.size.height).max() ?? 0 }.reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))
+        let widest: CGFloat = rows.map(rowWidth).max() ?? 0
+        let heights: [CGFloat] = rows.map { row in row.map(\.size.height).max() ?? 0 }
+        let gaps: CGFloat = lineSpacing * CGFloat(max(rows.count - 1, 0))
+        let height: CGFloat = heights.reduce(0, +) + gaps
         return CGSize(width: min(widest, width), height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for row in rows(subviews, width: bounds.width) {
-            let rowWidth = row.map(\.size.width).reduce(0, +) + spacing * CGFloat(max(row.count - 1, 0))
-            let height = row.map(\.size.height).max() ?? 0
-            var x = bounds.midX - rowWidth / 2
+            let height: CGFloat = row.map(\.size.height).max() ?? 0
+            var x = bounds.midX - rowWidth(row) / 2
             for entry in row {
                 subviews[entry.index].place(at: CGPoint(x: x, y: y + (height - entry.size.height) / 2), proposal: ProposedViewSize(entry.size))
                 x += entry.size.width + spacing

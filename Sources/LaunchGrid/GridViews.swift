@@ -1091,6 +1091,58 @@ struct DragGhost: View {
 
 // MARK: - Page dots
 
+/// One page's dot: lit and stretched as much as that page is in view (`near`, 0–1).
+private struct PageDot: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
+    let page: Int
+    let near: Double
+    let dim: Double
+
+    var body: some View {
+        let real = state.grid.pages.indices.contains(page)
+        let edge: Double = contrast == .increased ? 0.6 : 0.25
+        let opacity: Double = dim + (0.95 - dim) * near
+        let width: CGFloat = 8 + 14 * CGFloat(near)
+        Capsule()
+            .fill(.white.opacity(opacity))
+            .frame(width: width, height: 8)
+            // A dark edge, so the dots show on a light background too.
+            .overlay(Capsule().strokeBorder(.black.opacity(edge), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.35), radius: 1.5)
+            .overlay(alignment: .top) {
+                // ⌘ held: ⌘ and this number goes to that page.
+                if state.commandHeld && page < 9 && real {
+                    KeyBadge(text: "\(page + 1)").fixedSize().offset(y: -22)
+                }
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: state.commandHeld)
+            .padding(4)
+            .contentShape(Capsule().inset(by: -4))
+            .onTapGesture { state.goToPage(page) }
+            .help(help(real: real))
+            .accessibilityLabel(label(real: real))
+            .accessibilityAddTraits(page == state.currentPage ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { state.goToPage(page) }
+    }
+
+    private var title: String? {
+        state.grid.pages.indices.contains(page) ? state.grid.pages[page].title : nil
+    }
+
+    private func help(real: Bool) -> Text {
+        guard real else { return Text("New page") }
+        if let title { return Text(verbatim: title) }
+        return Text("Page \(page + 1)")
+    }
+
+    private func label(real: Bool) -> Text {
+        guard real else { return Text("New page") }
+        if let title { return Text("Page \(page + 1), \(title)") }
+        return Text("Page \(page + 1)")
+    }
+}
+
 struct PageDots: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
@@ -1105,29 +1157,7 @@ struct PageDots: View {
         HStack(spacing: 10) {
             if count > 1 {
                 ForEach(0..<count, id: \.self) { p in
-                    let title = state.grid.pages.indices.contains(p) ? state.grid.pages[p].title : nil
-                    let near = max(0, 1 - abs(Double(p) - at))
-                    Capsule()
-                        .fill(.white.opacity(dim + (0.95 - dim) * near))
-                        .frame(width: 8 + 14 * near, height: 8)
-                        // A dark edge, so the dots show on a light background too.
-                        .overlay(Capsule().strokeBorder(.black.opacity(contrast == .increased ? 0.6 : 0.25), lineWidth: 0.5))
-                        .shadow(color: .black.opacity(0.35), radius: 1.5)
-                        .overlay(alignment: .top) {
-                            // ⌘ held: ⌘ and this number goes to that page.
-                            if state.commandHeld && p < 9 && state.grid.pages.indices.contains(p) {
-                                KeyBadge(text: "\(p + 1)").fixedSize().offset(y: -22)
-                            }
-                        }
-                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: state.commandHeld)
-                        .padding(4)
-                        .contentShape(Capsule().inset(by: -4))
-                        .onTapGesture { state.goToPage(p) }
-                        .help(state.grid.pages.indices.contains(p) ? title.map { Text(verbatim: $0) } ?? Text("Page \(p + 1)") : Text("New page"))
-                        .accessibilityLabel(state.grid.pages.indices.contains(p)
-                                            ? title.map { Text("Page \(p + 1), \($0)") } ?? Text("Page \(p + 1)") : Text("New page"))
-                        .accessibilityAddTraits(p == state.currentPage ? [.isButton, .isSelected] : .isButton)
-                        .accessibilityAction { state.goToPage(p) }
+                    PageDot(page: p, near: max(0, 1 - abs(Double(p) - at)), dim: dim)
                 }
             } else if !state.query.isEmpty && state.searchPageCount > 1 {
                 Button {
