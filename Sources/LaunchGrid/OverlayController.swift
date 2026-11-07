@@ -12,20 +12,27 @@ final class OverlayPanel: NSPanel {
     /// What Quick Look (⌘Y) shows: the focused app or file.
     let preview = PreviewSource()
 
-    // Quick Look finds its controller up the key window's responder chain.
-    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { preview.url != nil }
+    // Quick Look finds its controller up the key window's responder chain. These overrides come
+    // from a nonisolated NSObject category, but Quick Look only calls them on the main thread.
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        MainActor.assumeIsolated { preview.url != nil }
+    }
 
     override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = preview
-        // Over the grid, which floats above other windows (above the menu bar in Full Screen).
-        panel.level = NSWindow.Level(rawValue: level.rawValue + 1)
+        MainActor.assumeIsolated {
+            panel.dataSource = preview
+            // Over the grid, which floats above other windows (above the menu bar in Full Screen).
+            panel.level = NSWindow.Level(rawValue: level.rawValue + 1)
+        }
     }
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = nil
-        preview.url = nil
-        // Typing goes to the search again.
-        if isVisible { makeKey() }
+        MainActor.assumeIsolated {
+            panel.dataSource = nil
+            preview.url = nil
+            // Typing goes to the search again.
+            if isVisible { makeKey() }
+        }
     }
 }
 

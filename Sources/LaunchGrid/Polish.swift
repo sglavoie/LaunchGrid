@@ -157,11 +157,12 @@ struct OpenMotion: ViewModifier {
         let launching = state.launchingID
         let scale: CGFloat = reduceMotion || launching == nil ? 1 : launching == id ? 1.3 : 0.92
         let pulse = state.launchPulse.id == id ? state.launchPulse.count : 0
+        let still = reduceMotion
         content
             .scaleEffect(scale)
             .animation(.easeOut(duration: 0.22), value: launching)
             .keyframeAnimator(initialValue: CGFloat(1), trigger: pulse) { view, s in
-                view.scaleEffect(reduceMotion ? 1 : s)
+                view.scaleEffect(still ? 1 : s)
             } keyframes: { _ in
                 KeyframeTrack {
                     CubicKeyframe(0.86, duration: 0.09)

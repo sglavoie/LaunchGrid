@@ -259,8 +259,9 @@ enum DebugScript {
                         for x in 0..<4 { for y in 0..<4 { rep.setColor(.systemBlue, atX: x, y: y) } }
                         image.addRepresentation(rep)
                     }
-                    func wells(in view: NSView) -> [NSColorWell] {
-                        (view as? NSColorWell).map { [$0] } ?? view.subviews.flatMap(wells)
+                    @MainActor func wells(in view: NSView) -> [NSColorWell] {
+                        if let well = view as? NSColorWell { return [well] }
+                        return view.subviews.flatMap(wells)
                     }
                     let found = NSApp.windows.compactMap(\.contentView).flatMap(wells)
                     found.first?.activate(true)

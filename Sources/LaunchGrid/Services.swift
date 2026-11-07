@@ -425,10 +425,10 @@ final class IconProvider: @unchecked Sendable {
         if let name = info?["CFBundleIconFile"] as? String, !name.isEmpty {
             let file = (name as NSString).lastPathComponent
             let icon = resources.appendingPathComponent((file as NSString).pathExtension.isEmpty ? file + ".icns" : file)
-            parts.append("icon:\(fingerprint(icon))")
+            parts.append("icon:\(fingerprint(icon).map(String.init) ?? "none")")
         }
         if let name = info?["CFBundleIconName"] as? String, !name.isEmpty {
-            parts.append("assets:\(fingerprint(resources.appendingPathComponent("Assets.car")))")
+            parts.append("assets:\(fingerprint(resources.appendingPathComponent("Assets.car")).map(String.init) ?? "none")")
         }
         return parts.joined(separator: "|")
     }
