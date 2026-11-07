@@ -7,6 +7,9 @@ struct GridRootView: View {
     @Environment(AppState.self) private var state
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var size: CGSize = .zero
+    /// Ties each tile on the page to its search result, so typing lifts the matches out of
+    /// the grid into the results, and clearing the search puts them back.
+    @Namespace private var tiles
 
     var body: some View {
         // A folder or the rename card is modal: VoiceOver stays out of what's beneath it.
@@ -21,17 +24,25 @@ struct GridRootView: View {
 
             VStack(spacing: 0) {
                 TopBar()
-                    .padding(.top, 28)
-                    .padding(.bottom, 12)
+                    .padding(.top, 22)
+                    .padding(.bottom, 10)
                 Group {
                     if state.query.isEmpty { PageTitle() } else { SearchHintLine() }
                 }
-                .frame(height: 28)
-                if state.query.isEmpty {
-                    Pager()
-                } else {
-                    SearchResultsView()
+                .frame(height: 36)
+                Group {
+                    if state.query.isEmpty {
+                        Pager()
+                            .transition(.opacity)
+                    } else {
+                        SearchResultsView()
+                            .transition(.opacity)
+                    }
                 }
+                // Starting or ending a search: the matching tiles fly between their places on
+                // the page and in the results (`tileMatch`), the rest fade.
+                .animation(reduceMotion || !state.isShown ? nil : .spring(response: 0.38, dampingFraction: 0.84), value: state.query.isEmpty)
+                .environment(\.tileNamespace, reduceMotion ? nil : tiles)
                 PageDots()
                     .frame(height: 44)
                     .padding(.bottom, 18)
@@ -105,7 +116,10 @@ struct GridRootView: View {
                 .onChanged { state.dragChanged(start: $0.startLocation, location: $0.location) }
                 .onEnded { state.dragEnded(start: $0.startLocation, location: $0.location, predicted: $0.predictedEndLocation) }
         )
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            size = $0
+            state.drag.rootSize = $0
+        }
         // The tiles themselves settle in and drift out (`AppearMotion`); the whole fades. Hiding to
         // open an item, the window's own fade does it, so the opened tile's zoom stays in view.
         .opacity(state.isShown || state.launchingID != nil ? 1 : 0)
@@ -183,7 +197,8 @@ struct ToastLayer: View {
                     }
                 }
                 .padding(.leading, 16).padding(.trailing, state.toastUndoable ? 6 : 16).padding(.vertical, state.toastUndoable ? 5 : 9)
-                .background(.regularMaterial, in: Capsule())
+                .glassSurface(Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
                 .padding(.bottom, 80)
                 .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -305,25 +320,29 @@ struct SearchField: View {
     var body: some View {
         let high = contrast == .increased
         let marked = SearchComposition.shared.marked
-        HStack(spacing: 6) {
+        let typing = !(state.query.isEmpty && marked.isEmpty)
+        HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.white.opacity(high ? 0.85 : 0.6))
-            if state.query.isEmpty && marked.isEmpty {
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.white.opacity(high ? 0.9 : typing ? 0.8 : 0.6))
+            if !typing {
                 Text("Search")
-                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.45))
+                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.5))
             } else {
                 SearchText(line: state.searchLine, marked: marked)
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 14))
-        .padding(.horizontal, 10)
+        .font(.system(size: 17))
+        .padding(.horizontal, 14)
         // Narrower only when a small window leaves no room beside the buttons (`TopBarLayout`).
-        .frame(minWidth: 120, idealWidth: 240, maxWidth: 240, minHeight: 28, maxHeight: 28)
-        // Dark under the light fill, so the white text reads over a light background too.
-        .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-        .background(.black.opacity(high ? 0.55 : 0.25), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(high ? 0.5 : 0.12)))
+        // It opens out a little once something is typed, making room for it.
+        .frame(minWidth: 140, idealWidth: typing ? 440 : 380, maxWidth: typing ? 440 : 380, minHeight: 38, maxHeight: 38)
+        // Dark under the glass, so the white text reads over a light background too.
+        .background(.black.opacity(high ? 0.5 : 0.12), in: Capsule())
+        .glassSurface(Capsule())
+        .shadow(color: .black.opacity(0.18), radius: typing ? 14 : 8, y: typing ? 5 : 3)
+        .animation(.spring(response: 0.34, dampingFraction: 0.8), value: typing)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
             SearchComposition.shared.fieldFrame = $0
         }
@@ -391,7 +410,7 @@ struct Caret: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
             let on = Int(ctx.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
-            Rectangle().fill(.white).frame(width: 1.5, height: 16).opacity(on ? 1 : 0)
+            Rectangle().fill(.white).frame(width: 2, height: 20).opacity(on ? 1 : 0)
         }
     }
 }
@@ -410,15 +429,25 @@ struct PillButtonStyle: ButtonStyle {
 
         var body: some View {
             let high = contrast == .increased
-            configuration.label
-                .font(.system(size: 13, weight: .semibold))
-                .padding(.horizontal, 14).padding(.vertical, 5)
-                .foregroundStyle(.white)
-                .background(prominent ? Color.accentColor : .white.opacity(high ? 0.32 : 0.18), in: Capsule())
-                // Dark under the light fill, so the button shows over a light background too.
-                .background(prominent ? Color.clear : .black.opacity(high ? 0.5 : 0.25), in: Capsule())
-                .overlay { if high { Capsule().strokeBorder(.white.opacity(0.6)) } }
-                .opacity(configuration.isPressed ? 0.7 : 1)
+            Group {
+                if prominent {
+                    configuration.label
+                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        .background(Color.accentColor, in: Capsule())
+                } else {
+                    configuration.label
+                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        // Dark under the glass, so the button shows over a light background too.
+                        .background(.black.opacity(high ? 0.5 : 0.12), in: Capsule())
+                        .glassSurface(Capsule())
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .overlay { if high && prominent { Capsule().strokeBorder(.white.opacity(0.6)) } }
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
         }
     }
 }
@@ -451,6 +480,8 @@ struct PageTitle: View {
                     .foregroundStyle(.white.opacity(high ? 0.75 : 0.5))
                     .modifier(Legible())
                     .accessibilityAddTraits(.isButton)
+            } else if page == 0 && state.query.isEmpty && !state.suggestions.isEmpty {
+                SuggestionsRow(items: state.suggestions)
             } else if landed == page && state.query.isEmpty && state.grid.pages.indices.contains(page) {
                 // Said already by the page announcement (`ToastLayer`).
                 Text("Page \(page + 1) of \(state.grid.pages.count)")
@@ -578,22 +609,38 @@ struct PageView: View {
         let hidden = (state.landing?.hides ?? []).union(state.openFolderID.map { [$0] } ?? [])
         let columns = state.grid.columns, rows = state.grid.rows
         let peek = state.peekFolderID
+        // Where the grid was called from (the pointer, a hot corner, the menu-bar icon), in
+        // this page's space: the tiles come out of there. Nil: from the middle.
+        let origin = current ? state.showOrigin.map { CGPoint(x: $0.x - state.drag.pagerFrame.minX, y: $0.y - state.drag.pagerFrame.minY) } : nil
+        let cellDiagonal = max(hypot(layout.cell.width, layout.cell.height), 1)
+        let focusIndex = focus.flatMap { id in entries.firstIndex { $0.id == id } }
         ZStack(alignment: .topLeading) {
+            if let focusIndex, let item = entries[focusIndex].item, !selection.contains(item.id) {
+                FocusHalo(center: layout.center(focusIndex),
+                          size: FocusHalo.size(iconSize: icon, labels: state.prefs.showLabels && layout.labelsFit(iconSize: icon), cell: layout.cell),
+                          tint: item.hoverTint)
+            }
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 if let item = entry.item {
+                    let center = layout.center(index)
                     let dx = Double(index % columns) - Double(columns - 1) / 2
                     let dy = Double(index / columns) - Double(rows - 1) / 2
+                    let toOrigin = origin.map { CGSize(width: $0.x - center.x, height: $0.y - center.y) }
                     ItemCell(item: item, iconSize: icon, selected: selection.contains(item.id), focused: focus == item.id,
                              mergeTarget: mergeTarget == item.id, editing: editing, hovers: hovers,
                              peekBelow: index < columns,
                              peekEdge: index % columns == 0 ? .leading : index % columns == columns - 1 ? .trailing : .center)
-                        .modifier(AppearMotion(distance: hypot(dx, dy), order: index, current: current))
+                        .modifier(AppearMotion(distance: toOrigin.map { hypot($0.width, $0.height) / cellDiagonal } ?? hypot(dx, dy),
+                                               order: index, current: current, toOrigin: toOrigin))
                         // A folder's peek reaches over the tiles beside it.
                         .zIndex(peek == item.id ? 1 : 0)
                         .opacity(hidden.contains(item.id) ? 0 : 1)
                         .accessibilityFocused($voiceOverFocus, equals: item.id)
                         .frame(width: layout.cell.width, height: layout.cell.height)
-                        .position(layout.center(index))
+                        // In and out of the search results: only the page shown, and not
+                        // while dragging, which moves tiles itself.
+                        .tileMatch(item.id, active: current && !state.drag.active)
+                        .position(center)
                         // Removed, a tile shrinks away as the rest close up.
                         .transition(.scale(scale: 0.3).combined(with: .opacity))
                 }
@@ -736,13 +783,17 @@ struct ItemView: View {
     var argument: String?
     /// The search typed, whose letters show in bold in a result's name.
     var query: String?
+    /// A word under the name saying what a result is ("System Settings").
+    var caption: String?
     var onDelete: (() -> Void)?
+    @Environment(\.tileLift) private var lift
 
     var body: some View {
         VStack(spacing: 6) {
             ZStack(alignment: .topLeading) {
                 icon
                     .frame(width: iconSize, height: iconSize)
+                    .modifier(IconShadow(lift: item.folder == nil ? lift : 0, size: item.folder == nil ? iconSize : 0))
                     .background {
                         if mergeTarget && item.folder == nil {
                             RoundedRectangle(cornerRadius: iconSize * 0.26)
@@ -789,7 +840,7 @@ struct ItemView: View {
             }
             .modifier(Jiggle(active: editing, seed: item.id.hashValue))
             if state.prefs.showLabels && labelsFit {
-                let fontSize = max(11, min(13, iconSize * 0.14))
+                let fontSize = GridLayout.labelFontSize(iconSize: iconSize)
                 HStack(spacing: 4) {
                     if isNew { NewAppDot(size: fontSize * 0.55) }
                     (query.map { highlightedTitle(item.title, query: $0, contrast: contrast) } ?? Text(item.title))
@@ -800,7 +851,7 @@ struct ItemView: View {
                         .modifier(Legible())
                 }
                 .frame(maxWidth: iconSize * 1.5)
-                if let argument {
+                if let argument = argument ?? caption {
                     Text(verbatim: argument)
                         .font(.system(size: max(10, min(12, iconSize * 0.13))))
                         .foregroundStyle(.white.opacity(contrast == .increased ? 0.95 : 0.75))
@@ -814,12 +865,12 @@ struct ItemView: View {
         }
         .padding(6)
         .background {
-            if selected || focused {
+            // The keyboard focus is drawn once for the grid (`FocusHalo`), so it can glide.
+            // A selected tile that has it too shows the focus's stronger ring.
+            if selected {
                 let high = contrast == .increased
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(.white.opacity(selected ? 0.22 : high ? 0.24 : 0.14))
-                    // Keyboard focus gets the stronger ring, with a dark edge so it shows on a
-                    // light wallpaper too; Increase Contrast makes it bolder still.
+                    .fill(.white.opacity(0.22))
                     .overlay(RoundedRectangle(cornerRadius: 14)
                         .strokeBorder(.white.opacity(focused ? (high ? 1 : 0.8) : 0.55), lineWidth: focused ? (high ? 3 : 2) : 1.5))
                     .overlay(RoundedRectangle(cornerRadius: 15).inset(by: -1)
@@ -847,6 +898,7 @@ struct ItemView: View {
         if item.folder != nil { return Text("Folder \(item.title)") }
         // "Search GitHub — launchgrid": what Return will run.
         if let argument { return Text(verbatim: "\(item.title) — \(argument)") }
+        if let caption { return Text(verbatim: "\(item.title), \(caption)") }
         return Text(verbatim: item.title)
     }
 
@@ -901,7 +953,12 @@ struct AppIcon: View {
     var body: some View {
         let image = IconProvider.shared.cached(path) ?? loaded
         ZStack {
-            if let image {
+            if let live = LiveIcon.kind(for: path), let style = LiveIcon.style {
+                switch live {
+                case .calendar: LiveCalendarIcon(size: size, style: style)
+                case .clock: LiveClockIcon(size: size, style: style)
+                }
+            } else if let image {
                 Image(nsImage: image).resizable().interpolation(.high)
                     .transition(.opacity)
             } else {
@@ -1112,15 +1169,25 @@ struct SearchResultsView: View {
             let layout = GridLayout(size: geo.size, rows: state.grid.rows, columns: state.grid.columns)
             let icon = layout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
             let results = state.searchResults
+            let labels = state.prefs.showLabels && layout.labelsFit(iconSize: icon)
             ZStack(alignment: .topLeading) {
-                if results.isEmpty {
+                // An answer is what was asked for: no "No Results" under it.
+                if results.isEmpty && state.searchAnswer == nil {
                     NoResultsView()
                         .frame(width: geo.size.width, height: geo.size.height)
                         .transition(.opacity)
                 }
+                if let i = state.focusIndex, let match = results[safe: i] {
+                    FocusHalo(center: layout.center(i),
+                              size: FocusHalo.size(iconSize: icon, labels: labels, cell: layout.cell,
+                                                   caption: match.argument != nil || match.item.action.flatMap { SettingsPane.pane(for: $0.id) } != nil),
+                              tint: match.item.hoverTint)
+                }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
+                    let pane = match.item.action.flatMap { SettingsPane.pane(for: $0.id) }
                     ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument,
-                             query: match.argument == nil ? state.query : nil)
+                             query: match.argument == nil ? state.query : nil,
+                             caption: pane == nil ? nil : String(localized: "System Settings"))
                         .overlay(alignment: .topLeading) {
                             // ⌘ held: ⌘ and this number opens it.
                             if state.commandHeld && i < 9 { KeyBadge(text: "⌘\(i + 1)").offset(x: 4, y: 2) }
@@ -1134,6 +1201,7 @@ struct SearchResultsView: View {
                         .accessibilityFocused($voiceOverFocus, equals: match.id)
                         .contextMenu { ItemMenu(item: match.item) }
                         .frame(width: layout.cell.width, height: layout.cell.height)
+                        .tileMatch(match.item.id, active: true)
                         .position(layout.center(i))
                         // New matches grow in where they rank, dropped ones shrink away.
                         .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
@@ -1227,7 +1295,32 @@ struct NoResultsView: View {
     }
 }
 
+/// A tile and its search result as one: starting a search, a match on the page shown flies to
+/// its place in the results; ending it, it flies back.
+private struct TileMatch: ViewModifier {
+    let id: UUID
+    let active: Bool
+    @Environment(\.tileNamespace) private var namespace
+
+    func body(content: Content) -> some View {
+        if let namespace {
+            // Inactive, it's matched under an ID nothing else has, which does nothing: dropping
+            // the effect would change the view's identity and lose its state mid-drag.
+            content.matchedGeometryEffect(id: active ? AnyHashable(id) : AnyHashable(Unmatched(id: id)), in: namespace,
+                                          properties: .frame, isSource: true)
+        } else {
+            content
+        }
+    }
+
+    private struct Unmatched: Hashable { let id: UUID }
+}
+
 extension View {
+    func tileMatch(_ id: UUID, active: Bool) -> some View {
+        modifier(TileMatch(id: id, active: active))
+    }
+
     /// Clipped at the sides only, where the pages beside it would show. Above and below, a
     /// tile's ✕ badge, its hover glow and its lift reach past the frame in a tight grid, and
     /// were cut off flat.
@@ -1237,6 +1330,8 @@ extension View {
 }
 
 extension EnvironmentValues {
+    /// Ties tiles on the page to their search results (`GridRootView`); nil with Reduce Motion.
+    @Entry var tileNamespace: Namespace.ID? = nil
     /// Whether app names fit under the icons of the grid around (`GridLayout.labelsFit`).
     @Entry var gridLabelsFit = true
     /// Off on pages out of view (or only peeking in at the sides): their icons keep still in edit mode.
@@ -1308,9 +1403,12 @@ struct FolderPanel: View {
                 }
             }
             .padding(24)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
-            .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(contrast == .increased ? 0.5 : 0.15)))
-            .contentShape(RoundedRectangle(cornerRadius: 28))
+            // Darker under the glass than the smaller surfaces: the grid behind a panel this
+            // size would otherwise show through busily around the folder's own icons.
+            .background(.black.opacity(contrast == .increased ? 0.55 : 0.32), in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .glassSurface(RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .shadow(color: .black.opacity(0.25), radius: 30, y: 12)
+            .contentShape(RoundedRectangle(cornerRadius: 32))
             .onTapGesture {}
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                 state.drag.folderPanelFrame = $0
@@ -1349,7 +1447,13 @@ struct FolderPageContent: View {
         let editing = state.editing
         let hovers = !state.drag.active && state.textEdit == nil
         let hidden = state.landing?.hides ?? []
+        let focusOffset = focus.flatMap { id in visible.first { $0.element.id == id }?.offset }
         return ZStack(alignment: .topLeading) {
+            if let focusOffset, let member = entries[focusOffset].member, !selection.contains(member.id) {
+                FocusHalo(center: layout.center(focusOffset - start),
+                          size: FocusHalo.size(iconSize: icon, labels: state.prefs.showLabels && layout.labelsFit(iconSize: icon), cell: layout.cell),
+                          tint: member.gridItem.hoverTint)
+            }
             ForEach(visible, id: \.element.id) { offset, entry in
                 if let member = entry.member {
                     FolderItemCell(member: member, iconSize: icon, selected: selection.contains(member.id), focused: focus == member.id,
@@ -1526,6 +1630,10 @@ struct MenuEntry {
     @MainActor
     static func item(_ item: GridItem, state: AppState) -> [MenuEntry] {
         builds += 1
+        // A System Settings pane found by search is in no layout: it can only be opened.
+        if case .action(let a) = item, SettingsPane.pane(for: a.id) != nil {
+            return [.button(String(localized: "Open")) { state.activateResult(Search.Match(item: item)) }]
+        }
         let targets = state.targets(for: item.id)
         let multi = targets.count > 1
         var entries: [MenuEntry] = []
@@ -1765,7 +1873,9 @@ struct ActionTile: View {
 
     var body: some View {
         Group {
-            if case .image(let path) = action.icon {
+            if let pane = SettingsPane.pane(for: action.id) {
+                SettingsPaneGlyph(pane: pane, size: size)
+            } else if case .image(let path) = action.icon {
                 ActionPicture(path: path, size: size, fallback: action.kind.defaultIcon)
             } else {
                 ActionGlyph(icon: action.icon, size: size, hue: ActionTile.hue(for: action.id))

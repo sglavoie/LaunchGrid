@@ -146,6 +146,15 @@ struct GeneralSettings: View {
                 Toggle("Hide when clicking an empty area", isOn: $prefs.hideOnEmptyClick)
                 Toggle("Hide when switching Spaces", isOn: $prefs.hideOnSpaceChange)
             }
+            Section("Search") {
+                Toggle("Find System Settings panes", isOn: $prefs.searchSettingsPanes)
+                Text("Typing “bluetooth” or “dark mode” offers that pane of System Settings, after your apps.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Suggest apps for the time of day", isOn: $prefs.showSuggestions)
+                    .onChange(of: prefs.showSuggestions) { state.refreshSuggestions() }
+                Text("Above the first page, a row of what you open most around this time. Your pages stay as they are.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Gestures") {
                 Toggle("Pinch to open", isOn: $prefs.pinchToOpen)
                     .onChange(of: prefs.pinchToOpen) { actions?.gesturesChanged() }

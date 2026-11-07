@@ -259,11 +259,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
-    func toggle() {
-        isVisible ? hide() : show()
+    /// - Parameter origin: where it was asked for, on screen, which the grid comes out of.
+    func toggle(from origin: CGPoint? = nil) {
+        isVisible ? hide() : show(from: origin)
     }
 
-    func show() {
+    /// - Parameter origin: where it was asked for, on screen (the pointer at the shortcut, a hot
+    ///   corner, the menu-bar icon): the tiles come out of there. Nil: from the middle.
+    func show(from origin: CGPoint? = nil) {
         // An alert or a file panel is waiting for an answer: over it, the grid would take no
         // clicks and hide the question. Bring that forward instead.
         if let modal = NSApp.modalWindow {
@@ -283,6 +286,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         let panel = makePanelIfNeeded()
         placePanel()
+        state.showOrigin = origin.flatMap { localPoint($0, in: panel) }
         state.focusIndex = nil
         arrowedOntoEmptyPage = false
         visibilityGeneration += 1
@@ -313,6 +317,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if progress.saved == true { state.reportLastBackupFailure() }
         }
         hideProgress = nil
+    }
+
+    /// A point on screen in the overlay's root coordinates (top left, points), or nil when it's
+    /// outside the panel.
+    private func localPoint(_ p: CGPoint, in panel: NSPanel) -> CGPoint? {
+        guard let content = panel.contentView else { return nil }
+        let inWindow = panel.convertPoint(fromScreen: p)
+        let local = content.convert(inWindow, from: nil)
+        guard content.bounds.insetBy(dx: -2, dy: -2).contains(local) else { return nil }
+        let y = content.isFlipped ? local.y : content.bounds.height - local.y
+        return CGPoint(x: local.x - state.drag.rootOrigin.x, y: y - state.drag.rootOrigin.y)
     }
 
     /// Whether ←/→ moved keyboard focus onto the empty page shown, which has nothing to focus.

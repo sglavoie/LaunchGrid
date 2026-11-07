@@ -96,6 +96,8 @@ struct TileMotion: ViewModifier {
                     }
                 }
             }
+            // The icon's shadow follows the lift (`IconShadow`).
+            .environment(\.tileLift, enabled ? (pressed ? -1 : hovered ? 1 : 0) : 0)
             .scaleEffect(lift ? (pressed ? 0.92 : hovered ? 1.05 : 1) : 1)
             .animation(.spring(response: pressed ? 0.12 : 0.3, dampingFraction: pressed ? 0.9 : 0.62), value: pressed)
             .animation(.spring(response: 0.28, dampingFraction: 0.75), value: hovered)
@@ -107,13 +109,17 @@ struct TileMotion: ViewModifier {
 
 /// The grid settling in as it shows: each tile comes in from slightly larger, the ones near the
 /// middle first, so the grid seems to settle out from it; hiding, they drift back out as it
-/// fades. The first show after a layout is made builds it in tile by tile, from small.
+/// fades. Called from somewhere (the pointer, a hot corner, the menu-bar icon), the tiles
+/// come out of there instead, the nearest first, and go back into it as the grid hides. The
+/// first show after a layout is made builds it in tile by tile, from small.
 struct AppearMotion: ViewModifier {
-    /// From the middle of the page, in cells.
+    /// From where the grid comes out of (the middle of the page, or `toOrigin`), in cells.
     let distance: Double
     /// Its place on the page, for the first show's build.
     let order: Int
     let current: Bool
+    /// From the tile to where the grid was called from; nil for the middle.
+    var toOrigin: CGSize? = nil
     @Environment(AppState.self) private var state
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -122,15 +128,21 @@ struct AppearMotion: ViewModifier {
         let intro = state.introPending
         // Hiding to open an item, `OpenMotion` moves the tiles, and the window's fade hides them.
         let still = reduceMotion || !current || (!shown && state.launchingID != nil)
+        // Out of the origin: from a little way toward it, smaller.
+        let pull = still || shown || intro ? CGSize.zero : (toOrigin.map { CGSize(width: $0.width * 0.22, height: $0.height * 0.22) } ?? .zero)
         content
-            .scaleEffect(still || shown ? 1 : intro ? 0.4 : 1.04)
+            .scaleEffect(still || shown ? 1 : intro ? 0.4 : toOrigin == nil ? 1.04 : 0.82)
+            .offset(pull)
             .opacity(still || shown ? 1 : 0)
             .animation(still ? nil : shown ? appear(intro: intro) : .easeIn(duration: 0.12), value: shown)
     }
 
     private func appear(intro: Bool) -> Animation {
-        intro ? .spring(response: 0.5, dampingFraction: 0.72).delay(0.08 + Double(order) * 0.028)
-            : .spring(response: 0.34, dampingFraction: 0.8).delay(distance * 0.02)
+        if intro { return .spring(response: 0.5, dampingFraction: 0.72).delay(0.08 + Double(order) * 0.028) }
+        // From a corner the farthest tiles are several cells away: a shorter step keeps the
+        // whole under a quarter of a second.
+        return toOrigin == nil ? .spring(response: 0.34, dampingFraction: 0.8).delay(distance * 0.02)
+            : .spring(response: 0.4, dampingFraction: 0.78).delay(min(distance * 0.016, 0.2))
     }
 }
 
@@ -291,12 +303,18 @@ struct BackgroundEntrance: ViewModifier {
         // Hiding to open an item, the window's own fade takes it, with the opened tile's zoom.
         let shown = state.isShown || state.launchingID != nil
         content
-            .scaleEffect(zooms && !reduceMotion && !state.isShown ? 1.06 : 1)
+            .scaleEffect(zooms && !reduceMotion && !state.isShown ? 1.06 : 1, anchor: anchor)
             .opacity(shown ? 1 : 0)
             .animation(state.isShown ? .easeOut(duration: Self.duration) : .easeIn(duration: 0.12), value: state.isShown)
     }
 
     static let duration: TimeInterval = 0.32
+
+    /// Where the grid was called from, as a point in the window: the picture draws back toward it.
+    private var anchor: UnitPoint {
+        guard let o = state.showOrigin, state.drag.rootSize.width > 0, state.drag.rootSize.height > 0 else { return .center }
+        return UnitPoint(x: o.x / state.drag.rootSize.width, y: o.y / state.drag.rootSize.height)
+    }
 }
 
 /// A picture background drifts a little as the pages turn, slower than the icons, so the grid
@@ -397,8 +415,7 @@ struct FolderPeek: View {
                 .lineLimit(1)
         }
         .padding(10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(contrast == .increased ? 0.5 : 0.15)))
+        .glassSurface(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
         .fixedSize()
         .allowsHitTesting(false)

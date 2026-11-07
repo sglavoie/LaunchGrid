@@ -205,7 +205,8 @@ final class GestureWatcher {
                 self.cornerTimer = nil
                 guard Self.isInCorner(self.prefs.hotCorner), NSEvent.pressedMouseButtons == 0 else { return }
                 self.cornerUsed = true
-                self.overlay.toggle()
+                // Out of the corner.
+                self.overlay.toggle(from: NSEvent.mouseLocation)
             }
         }
         RunLoop.main.add(timer, forMode: .common)

@@ -49,7 +49,7 @@ final class AppState {
     /// `gridGeneration` as of the last save (or load), so saving an unchanged grid doesn't
     /// replace the backup of the save before it with a copy of the same one.
     @ObservationIgnored private var savedGeneration = 0
-    @ObservationIgnored private var searchCache: (query: String, generation: Int, usage: Int, results: [Search.Match])?
+    @ObservationIgnored private var searchCache: (query: String, generation: Int, usage: Int, panes: Bool, results: [Search.Match])?
     /// Bumped by each open recorded in `prefs.usage`, which search ranks by.
     private var usageGeneration = 0
     private(set) var installed: [InstalledApp] = []
@@ -181,6 +181,12 @@ final class AppState {
 
     /// The grid's size while a pinch opens or closes it (`OverlayController.pinchChanged`).
     var pinchScale: CGFloat = 1
+    /// Where the grid was called from this time, in the overlay's coordinates (the pointer at
+    /// the shortcut, a hot corner, the menu-bar icon): its tiles come out of there. Nil: the middle.
+    var showOrigin: CGPoint?
+    /// What's opened most around this time of day, worked out as the grid shows, for the row
+    /// above the first page (`SuggestionsRow`); empty unless that's turned on.
+    private(set) var suggestions: [GridItem] = []
     /// Files dragged over the grid (`FileDrop.swift`).
     var fileDrag: FileDrag?
     @ObservationIgnored var fileDwell: FileDwell?
@@ -498,7 +504,7 @@ final class AppState {
         let focusedID: UUID? = focusIndex.flatMap { i in
             let ids: [UUID]
             if !query.isEmpty {
-                ids = rankedResults(in: old, query: query)
+                ids = rankedResults(in: old, query: query, panes: prefs.searchSettingsPanes)
                     .dropFirst(searchPage * old.capacity).prefix(old.capacity).map(\.id)
             } else if let id = openFolderID, let folder = old.folder(id) {
                 ids = folder.items.map(\.id)
@@ -1223,17 +1229,46 @@ final class AppState {
     /// handler read it on each keystroke.
     var allSearchResults: [Search.Match] {
         // Read both through observation so views still track them on a cache hit.
-        let q = query, g = grid, u = usageGeneration
-        if let c = searchCache, c.query == q, c.generation == gridGeneration, c.usage == u { return c.results }
-        let results = rankedResults(in: g, query: q)
-        searchCache = (q, gridGeneration, u, results)
+        let q = query, g = grid, u = usageGeneration, panes = prefs.searchSettingsPanes
+        if let c = searchCache, c.query == q, c.generation == gridGeneration, c.usage == u, c.panes == panes { return c.results }
+        let results = rankedResults(in: g, query: q, panes: panes)
+        searchCache = (q, gridGeneration, u, panes, results)
         return results
     }
 
-    /// Search's matches in `grid`, ranked with what's opened most and lately among equals.
-    private func rankedResults(in grid: Grid, query: String) -> [Search.Match] {
+    /// Search's matches in `grid`, ranked with what's opened most and lately among equals,
+    /// then the System Settings panes that match (`SettingsPane.matches`), after everything
+    /// in the grid so they never push an app aside.
+    private func rankedResults(in grid: Grid, query: String, panes: Bool) -> [Search.Match] {
         let usage = prefs.usage, now = Date()
-        return Search.results(in: grid.allSearchItems, query: query, usage: { usage.score($0, at: now) })
+        let found = Search.results(in: grid.allSearchItems, query: query, usage: { usage.score($0, at: now) })
+        guard panes else { return found }
+        let matched = SettingsPane.matches(query, in: SettingsPaneCatalog.available)
+            .map { Search.Match(item: .action($0.action)) }
+        // Among the panes, the ones opened most first; otherwise as matched.
+        let ranked = matched.enumerated().sorted { a, b in
+            let (ua, ub) = (usage.score(a.element.item, at: now), usage.score(b.element.item, at: now))
+            return ua != ub ? ua > ub : a.offset < b.offset
+        }.map(\.element)
+        return found + ranked
+    }
+
+    /// Works out `suggestions` for this show: the items opened most around this time of day,
+    /// among those still in the layout (or System Settings panes), when the row is turned on.
+    func refreshSuggestions(at date: Date = Date()) {
+        guard prefs.showSuggestions else {
+            if !suggestions.isEmpty { suggestions = [] }
+            return
+        }
+        var byKey: [String: GridItem] = [:]
+        for item in grid.allSearchItems { if let key = Usage.key(for: item), byKey[key] == nil { byKey[key] = item } }
+        for pane in SettingsPaneCatalog.available {
+            let item = GridItem.action(pane.action)
+            if let key = Usage.key(for: item) { byKey[key] = item }
+        }
+        let found = prefs.usage.suggestions(at: date, limit: 12).compactMap { byKey[$0] }.prefix(5)
+        let ids = found.map(\.id)
+        if ids != suggestions.map(\.id) { suggestions = Array(found) }
     }
 
     @ObservationIgnored private var answerCache: (query: String, answer: Answer?)?
@@ -1576,6 +1611,7 @@ final class AppState {
 
     /// A search result clicked or chosen with Return: launched or run, or in edit mode revealed.
     func activateResult(_ match: Search.Match) {
+        if case .action(let a) = match.item, let pane = SettingsPane.pane(for: a.id) { return openPane(pane) }
         if editing { return reveal(match.item) }
         switch match.item {
         case .app(let a): launch(a)
@@ -1636,6 +1672,17 @@ final class AppState {
                 reportRunFailure(of: action, error)
             }
         }
+    }
+
+    /// Opens a System Settings pane found by search, as a link action opens its link: the grid
+    /// gets out of the way first (when set to), and it counts toward what's opened most.
+    func openPane(_ pane: SettingsPane) {
+        guard let url = URL(string: pane.url) else { return }
+        recordUse(.action(pane.action))
+        let hides = prefs.hideAfterLaunch
+        showOpening(pane.uuid, hides: hides)
+        if hides { onHideForLaunch() }
+        NSWorkspace.shared.open(url)
     }
 
     /// What opening `id` looks like: hiding, its tile zooms toward you as the others recede;
@@ -1790,7 +1837,9 @@ final class AppState {
         switch item {
         case .app(let a): launch(a)
         case .folder(let f): openFolder(f.id)
-        case .action(let a): run(a, argument: nil)
+        case .action(let a):
+            if let pane = SettingsPane.pane(for: a.id) { return openPane(pane) }
+            run(a, argument: nil)
         }
     }
 
@@ -2168,6 +2217,7 @@ final class AppState {
     @ObservationIgnored private var iconStyle = IconProvider.systemStyle
 
     func didShow() {
+        refreshSuggestions()
         isShown = true
         showCount &+= 1
         // Another icon style chosen since: every icon is drawn again in it. macOS can go on

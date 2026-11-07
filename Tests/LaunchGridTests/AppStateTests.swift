@@ -1788,6 +1788,8 @@ func installed(_ name: String) -> InstalledApp {
     @Test func searchPagesMakeEveryMatchReachable() {
         let names = (1...50).map { "App \($0)" }
         let state = makeState([])
+        // "app" also finds Apple Account in System Settings, which isn't what this counts.
+        state.prefs.searchSettingsPanes = false
         state.replaceGrid(Grid(rows: 2, columns: 3, pages: [Page(items: names.map {
             .app(AppRef(bundleID: "com.test.\($0)", path: "/Applications/\($0).app", name: $0))
         })]))

@@ -53,7 +53,7 @@ struct UsageTests {
     @Test func roundTripsThroughAPropertyList() {
         var usage = Usage()
         usage.record(app("Safari"), at: Date(timeIntervalSinceReferenceDate: 5))
-        let back = Usage(propertyList: usage.propertyList as Any)
+        let back = Usage(propertyList: usage.propertyList as Any, hours: usage.hoursPropertyList as Any)
         #expect(back == usage)
         // Anything unreadable is left out.
         let odd = Usage(propertyList: ["a": [1.0], "b": "x", "c": [Double.nan, 1], "d": [2.0, 3.0]] as [String: Any])
@@ -81,5 +81,39 @@ struct UsageTests {
         #expect(Search.highlights(in: "Notes", query: "").isEmpty)
         // A word start that leaves later letters nowhere to go is passed over.
         #expect(Search.highlights(in: "Aab", query: "ab") == [1, 2])
+    }
+
+    @Test func suggestsWhatsOpenedAroundThisTimeOfDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let mail = app("Mail"), music = app("Music"), xcode = app("Xcode")
+        var usage = Usage()
+        // 2026-01-15 09:00 UTC, and the evening of the same day.
+        let morning = Date(timeIntervalSince1970: 1_768_467_600)
+        let evening = morning.addingTimeInterval(12 * 3600)
+        for _ in 0..<3 { usage.record(mail, at: morning, calendar: calendar) }
+        for _ in 0..<2 { usage.record(xcode, at: morning, calendar: calendar) }
+        for _ in 0..<4 { usage.record(music, at: evening, calendar: calendar) }
+        #expect(usage.suggestions(at: morning, calendar: calendar) == [Usage.key(for: mail)!, Usage.key(for: xcode)!])
+        #expect(usage.suggestions(at: evening, calendar: calendar) == [Usage.key(for: music)!])
+        // An hour or so either side still counts, at half.
+        #expect(usage.suggestions(at: morning.addingTimeInterval(3 * 3600), calendar: calendar).isEmpty)
+        #expect(usage.suggestions(at: morning.addingTimeInterval(3 * 3600), calendar: calendar, minimum: 1.2) == [Usage.key(for: mail)!])
+        #expect(usage.suggestions(at: morning.addingTimeInterval(3 * 3600), calendar: calendar, minimum: 0.9) == [Usage.key(for: mail)!, Usage.key(for: xcode)!])
+        // A habit long gone fades away.
+        #expect(usage.suggestions(at: morning.addingTimeInterval(Usage.halfLife * 3), calendar: calendar) == [])
+    }
+
+    @Test func hoursRoundTripBesideTheScores() {
+        let mail = app("Mail")
+        var usage = Usage()
+        usage.record(mail)
+        let back = Usage(propertyList: usage.propertyList, hours: usage.hoursPropertyList)
+        #expect(back == usage)
+        // An older build's record, scores alone, still reads.
+        #expect(Usage(propertyList: usage.propertyList).entries == usage.entries)
+        // Buckets for a key with no score, or of the wrong length, are left out.
+        let odd = Usage(propertyList: usage.propertyList, hours: ["app:other": Array(repeating: 1.0, count: 9), Usage.key(for: mail)!: [1.0, 2.0]])
+        #expect(odd.hours.isEmpty)
     }
 }

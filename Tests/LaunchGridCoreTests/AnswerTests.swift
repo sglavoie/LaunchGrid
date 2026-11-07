@@ -98,4 +98,26 @@ struct AnswerTests {
         #expect(value("tokyo") == nil)
         #expect(value("13pm utc") == nil)
     }
+
+    @Test func kindsSayHowToShowTheAnswer() throws {
+        let paris = try #require(TimeZone(identifier: "Europe/Paris"))
+        let now = Date(timeIntervalSince1970: 1_768_478_400)
+        let gb = Locale(identifier: "en_GB")
+        #expect(Answer.answer(for: "12*7", locale: us)?.kind == .arithmetic)
+        #expect(Answer.answer(for: "5 km in mi", locale: us)?.kind == .conversion(.length))
+        #expect(Answer.answer(for: "70 f to c", locale: us)?.kind == .conversion(.temperature))
+        #expect(Answer.answer(for: "2 GB in MB", locale: us)?.kind == .conversion(.data))
+        #expect(Answer.answer(for: "3 days in hours", locale: us)?.value == "72 h")
+        #expect(Answer.answer(for: "48 hours in days", locale: us)?.value == "2 d")
+        // Static and custom units of one kind are different classes underneath.
+        #expect(Answer.answer(for: "2 weeks in days", locale: us)?.value == "14 d")
+        #expect(Answer.answer(for: "2 weeks in kg", locale: us) == nil)
+        #expect(Answer.answer(for: "3 days in hours", locale: us)?.kind == .conversion(.duration))
+        // 3pm in Los Angeles is midnight in Paris, the next day.
+        #expect(Answer.answer(for: "3pm PST", now: now, timeZone: paris, locale: gb)?.kind == .time(hour: 0, minute: 0, dayShift: 1))
+        #expect(Answer.answer(for: "9:30am tokyo", now: now, timeZone: paris, locale: gb)?.kind == .time(hour: 1, minute: 30, dayShift: 0))
+        #expect(Answer.answer(for: "9am tokyo", now: now, timeZone: paris, locale: gb)?.kind == .time(hour: 1, minute: 0, dayShift: 0))
+        #expect(Answer.answer(for: "11pm paris in tokyo", now: now, timeZone: paris, locale: gb)?.kind == .time(hour: 7, minute: 0, dayShift: 1))
+        #expect(Answer.answer(for: "time in tokyo", now: now, timeZone: paris, locale: gb)?.kind == .time(hour: 21, minute: 0, dayShift: 0))
+    }
 }

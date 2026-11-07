@@ -287,6 +287,39 @@ enum DebugScript {
                     overlay.show()
                     try? await Task.sleep(for: .milliseconds(ms))
                     snapshot(name: n[1], dir: dir)
+                case "origin":
+                    // Where the grid came out of on its last show, and where the pointer is.
+                    let m = NSEvent.mouseLocation
+                    let sf = delegate.statusButtonScreenFrame.map { "\(Int($0.midX)),\(Int($0.midY))" } ?? "none"
+                    print("origin: \(state.showOrigin.map { "\(Int($0.x)),\(Int($0.y))" } ?? "nil") mouse=\(Int(m.x)),\(Int(m.y)) status=\(sf)")
+                    fflush(stdout)
+                case "suggest":
+                    // "suggest:on|off": the suggestions row, worked out again at once.
+                    state.prefs.showSuggestions = arg == "on"
+                    state.refreshSuggestions()
+                    print("suggest: \(state.suggestions.map(\.title))")
+                    fflush(stdout)
+                case "recorduse":
+                    // "recorduse:N,count": opens of item N of the page, as if opened that many times now.
+                    let n = arg.split(separator: ",").compactMap { Int($0) }
+                    if let i = n.first, let item = state.currentItems[safe: i] {
+                        for _ in 0..<(n.count > 1 ? n[1] : 1) { state.recordUse(item) }
+                    }
+                case "showfrom":
+                    // "showfrom:fx,fy[,ms,name]": shows the overlay as if called from that point of
+                    // the screen under the pointer (fractions from its top left, as a hot corner or
+                    // the pointer at the shortcut would), prints where that lands, and snaps ms later.
+                    let n = arg.split(separator: ",").map(String.init)
+                    guard n.count >= 2, let fx = Double(n[0]), let fy = Double(n[1]) else { break }
+                    let mouse = NSEvent.mouseLocation
+                    let f = (NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main)?.frame ?? .zero
+                    overlay.show(from: CGPoint(x: f.minX + fx * f.width, y: f.maxY - fy * f.height))
+                    print("showfrom: origin=\(state.showOrigin.map { "\(Int($0.x)),\(Int($0.y))" } ?? "nil") root=\(Int(state.drag.rootSize.width))x\(Int(state.drag.rootSize.height))")
+                    fflush(stdout)
+                    if n.count == 4, let ms = Int(n[2]) {
+                        try? await Task.sleep(for: .milliseconds(ms))
+                        snapshot(name: n[3], dir: dir)
+                    }
                 case "blursweep":
                     // "blursweep:10-30": one radius every 30 ms, as dragging the slider does.
                     let ends = arg.split(separator: "-").compactMap { Int($0) }

@@ -112,7 +112,16 @@ final class Preferences {
     var tipsSeen: Set<String> { didSet { d.set(tipsSeen.sorted(), forKey: "tipsSeen") } }
     /// How often and how recently each item was opened, which search ranks by. Only LaunchGrid's
     /// own record of what it opened; nothing observes it.
-    @ObservationIgnored var usage: Usage { didSet { d.set(usage.propertyList, forKey: "usage") } }
+    @ObservationIgnored var usage: Usage {
+        didSet {
+            d.set(usage.propertyList, forKey: "usage")
+            d.set(usage.hoursPropertyList, forKey: "usageHours")
+        }
+    }
+    /// System Settings panes ("Bluetooth", "Displays") found by search, after the grid's items.
+    var searchSettingsPanes: Bool { didSet { d.set(searchSettingsPanes, forKey: "searchSettingsPanes") } }
+    /// A row of the apps opened most around this time of day, above the first page.
+    var showSuggestions: Bool { didSet { d.set(showSuggestions, forKey: "showSuggestions") } }
     var folderPlacement: FolderPlacement { didSet { d.set(folderPlacement.rawValue, forKey: "folderPlacement") } }
     var extraFolders: [String] { didSet { d.set(extraFolders, forKey: "extraFolders") } }
     /// The paths of the apps the latest scan found, so the first scan after a launch knows which
@@ -146,6 +155,8 @@ final class Preferences {
             "hideOnSpaceChange": false,
             "iconScale": 1.0,
             "showLabels": true,
+            "searchSettingsPanes": true,
+            "showSuggestions": false,
             "showRunningIndicator": true,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
@@ -175,7 +186,9 @@ final class Preferences {
         tipsSeen = Set(d.stringArray(forKey: "tipsSeen") ?? [])
         pinchToOpen = d.bool(forKey: "pinchToOpen")
         hotCorner = HotCorner(rawValue: d.string(forKey: "hotCorner") ?? "") ?? .none
-        usage = Usage(propertyList: d.dictionary(forKey: "usage"))
+        usage = Usage(propertyList: d.dictionary(forKey: "usage"), hours: d.dictionary(forKey: "usageHours"))
+        searchSettingsPanes = d.bool(forKey: "searchSettingsPanes")
+        showSuggestions = d.bool(forKey: "showSuggestions")
         folderPlacement = FolderPlacement(rawValue: d.string(forKey: "folderPlacement") ?? "") ?? .first
         extraFolders = d.stringArray(forKey: "extraFolders") ?? []
         scannedPaths = d.stringArray(forKey: "scannedPaths") ?? []

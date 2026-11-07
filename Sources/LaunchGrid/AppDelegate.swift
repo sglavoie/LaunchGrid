@@ -60,6 +60,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// The trackpad pinch and hot corner that open the grid, as set in Settings.
     private(set) var gestures: GestureWatcher!
     private var statusItem: NSStatusItem?
+    /// The menu-bar icon on screen, for the debug scripts.
+    var statusButtonScreenFrame: CGRect? {
+        guard let button = statusItem?.button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
     /// The menu-bar icon's menu while VoiceOver runs, filled each time it opens.
     private lazy var voiceOverMenu: NSMenu = {
         let menu = NSMenu()
@@ -262,7 +267,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled) { [weak self] _, _ in
             Task { @MainActor in self?.applyMenuBarIcon() }
         }
-        HotkeyService.shared.onTrigger = { [weak self] in self?.overlay.toggle() }
+        // The grid comes out of where the pointer is.
+        HotkeyService.shared.onTrigger = { [weak self] in self?.overlay.toggle(from: NSEvent.mouseLocation) }
+        SettingsPaneCatalog.load()
         if !applyHotkey() {
             // After launch finishes, so the alert doesn't hold up the first scan.
             DispatchQueue.main.async { self.warnHotkeyFailed() }
@@ -612,7 +619,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             showStatusMenu()
         } else {
-            overlay.toggle()
+            // Out of the icon itself.
+            let origin = sender.window.map { w in
+                let f = w.convertToScreen(sender.convert(sender.bounds, to: nil))
+                return CGPoint(x: f.midX, y: f.midY)
+            }
+            overlay.toggle(from: origin)
         }
     }
 

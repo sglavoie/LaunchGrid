@@ -30,29 +30,35 @@ struct GridLayout {
         return r * columns + c
     }
 
+    /// The size of the name under an icon of `iconSize`: larger with larger icons, so a big
+    /// grid on a large display doesn't leave tiny names under big icons.
+    static func labelFontSize(iconSize: CGFloat) -> CGFloat { max(11, min(15, iconSize * 0.11)) }
+
     /// Below an icon, for its name: the spacing and one line of text (`ItemView`).
-    static let labelHeight: CGFloat = 22
+    static func labelHeight(iconSize: CGFloat) -> CGFloat { (labelFontSize(iconSize: iconSize) * 1.25).rounded(.up) + 6 }
 
     /// With `labels`, small enough to leave its name room in the cell, so a short cell (a
     /// small window, many rows, large icons) doesn't put names over the icons below. At least
     /// 24 points, unless even that would overflow the cell.
     func iconSize(scale: Double, labels: Bool = false) -> CGFloat {
-        let fit = min(cell.width * 0.62, cell.height * 0.58)
-        let room = labels ? cell.height - Self.labelHeight : .infinity
+        let fit = min(cell.width * 0.62, cell.height * 0.62)
         let most = min(cell.width, cell.height) * 0.9
-        return max(min(24, most), min(fit * scale, most, 160, room))
+        var size = min(fit * scale, most, 176)
+        // A smaller icon has a smaller name, so the room this leaves is enough.
+        if labels { size = min(size, cell.height - Self.labelHeight(iconSize: size)) }
+        return max(min(24, most), size)
     }
 
     /// Whether a name fits under an icon of `iconSize`; when not, names are left out.
     func labelsFit(iconSize: CGFloat) -> Bool {
-        iconSize + Self.labelHeight <= cell.height
+        iconSize + Self.labelHeight(iconSize: iconSize) <= cell.height
     }
 
     /// Where the icon of cell `index` is drawn: the icon and its name are centred together,
     /// so with a name under it the icon sits above the cell's centre.
     func iconCenter(_ index: Int, iconSize: CGFloat, labels: Bool) -> CGPoint {
         var c = center(index)
-        if labels && labelsFit(iconSize: iconSize) { c.y -= Self.labelHeight / 2 }
+        if labels && labelsFit(iconSize: iconSize) { c.y -= Self.labelHeight(iconSize: iconSize) / 2 }
         return c
     }
 }
@@ -121,6 +127,8 @@ final class DragController {
     @ObservationIgnored var menuButtonFrame: CGRect = .zero
     /// Where root coordinates start in the hosting view: below the title bar in Window mode.
     @ObservationIgnored var rootOrigin: CGPoint = .zero
+    /// The overlay's size, for where the background draws back toward (`BackgroundEntrance`).
+    @ObservationIgnored var rootSize: CGSize = .zero
 
     func isDragged(_ id: UUID) -> Bool { active && ids.contains(id) }
 

@@ -16,36 +16,9 @@ struct SearchHintLine: View {
         let high = contrast == .increased
         Group {
             if let answer = state.searchAnswer {
-                Button { state.copyAnswer() } label: {
-                    HStack(spacing: 8) {
-                        Text(verbatim: answer.question)
-                            .foregroundStyle(.white.opacity(high ? 0.9 : 0.7))
-                        Text(verbatim: "=")
-                            .foregroundStyle(.white.opacity(high ? 0.8 : 0.5))
-                        Text(verbatim: answer.value)
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .textSelection(.enabled)
-                        if let note = answer.note {
-                            Text(verbatim: note)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.white.opacity(high ? 0.85 : 0.6))
-                        }
-                        if state.focusIndex == nil {
-                            KeyHint(keys: "↩", label: Text("Copy"))
-                                .padding(.leading, 6)
-                        }
-                    }
-                    .font(.system(size: 15))
-                    .lineLimit(1)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .modifier(Legible())
-                .accessibilityLabel(Text(verbatim: "\(answer.question) = \(answer.value)\(answer.note.map { ", \($0)" } ?? "")"))
-                .accessibilityHint("Copies it")
-                .transition(.opacity.combined(with: .offset(y: 4)))
-                .id(answer.question)
+                // One card while typing changes the answer: its value rolls to the new one.
+                AnswerCard(answer: answer)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else if let match = target {
                 HStack(spacing: 16) {
                     KeyHint(keys: "↩", label: openLabel(match))
@@ -59,7 +32,7 @@ struct SearchHintLine: View {
                 .accessibilityHidden(true)
             }
         }
-        .animation(.easeOut(duration: 0.18), value: state.searchAnswer?.question)
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: state.searchAnswer != nil)
     }
 
     /// The result Return acts on: the focused one, or the first.
@@ -72,7 +45,8 @@ struct SearchHintLine: View {
         switch match.item {
         case .app: return Text("Open")
         case .folder: return Text("Open Folder")
-        case .action:
+        case .action(let a):
+            if SettingsPane.pane(for: a.id) != nil { return Text("Open") }
             if let argument = match.argument { return Text("Run with “\(argument)”") }
             return Text("Run")
         }
@@ -149,8 +123,7 @@ struct ShortcutStrip: View {
         }
         .frame(maxWidth: 760)
         .padding(.horizontal, 18).padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12)))
+        .glassSurface(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -211,7 +184,7 @@ struct TipLayer: View {
         GeometryReader { geo in
             // Left of the search field, in the top bar's empty side, where it covers nothing;
             // at the bottom, over the last row, only in a window too narrow for that.
-            let room = geo.size.width / 2 - 120 - 48 - 16
+            let room = geo.size.width / 2 - 190 - 48 - 16
             let top = room >= 280
             VStack {
                 if !top { Spacer() }
@@ -257,7 +230,7 @@ struct TipLayer: View {
         }
         .foregroundStyle(.white)
         .padding(.leading, 14).padding(.trailing, 7).padding(.vertical, 7)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .glassSurface(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var shownTip: AppState.Tip? {

@@ -11,11 +11,29 @@ public struct Answer: Equatable, Sendable {
     public var value: String
     /// A word on what the value is, if it needs one: "your time", "in Tokyo".
     public var note: String?
+    /// What kind of answer it is, for how it's shown: a clock for a time, a unit's symbol.
+    public var kind: Kind
 
-    public init(question: String, value: String, note: String? = nil) {
+    /// What an answer is about.
+    public enum Kind: Equatable, Sendable {
+        case arithmetic
+        /// A conversion between units of `category`.
+        case conversion(Category)
+        /// A time: the hour (0–23) and minute shown in `value`, and whether that falls on the
+        /// day after (1) or before (-1) the time asked about.
+        case time(hour: Int, minute: Int, dayShift: Int)
+    }
+
+    /// What a converted quantity measures.
+    public enum Category: String, Equatable, Sendable {
+        case length, mass, temperature, volume, speed, data, duration, area
+    }
+
+    public init(question: String, value: String, note: String? = nil, kind: Kind = .arithmetic) {
         self.question = question
         self.value = value
         self.note = note
+        self.kind = kind
     }
 
     /// The answer for `query`, or nil when it isn't a question of these kinds. `now`, the time
@@ -204,11 +222,26 @@ public struct Answer: Equatable, Sendable {
         guard let number = Double(numberText),
               let from = unit(named: String(left[numberEnd...])),
               let to = unit(named: right),
-              type(of: from) == type(of: to), from != to else { return nil }
+              category(of: from) == category(of: to), from != to else { return nil }
         let converted = Measurement(value: number, unit: from).converted(to: to).value
         guard converted.isFinite else { return nil }
         let shown = format(rounded(converted), locale: locale)
-        return Answer(question: "\(format(number, locale: locale)) \(symbol(from))", value: "\(shown) \(symbol(to))")
+        return Answer(question: "\(format(number, locale: locale)) \(symbol(from))", value: "\(shown) \(symbol(to))",
+                      kind: .conversion(category(of: from)))
+    }
+
+    /// What a unit measures.
+    static func category(of unit: Dimension) -> Category {
+        switch unit {
+        case is UnitLength: .length
+        case is UnitMass: .mass
+        case is UnitTemperature: .temperature
+        case is UnitVolume: .volume
+        case is UnitSpeed: .speed
+        case is UnitInformationStorage: .data
+        case is UnitDuration: .duration
+        default: .area
+        }
     }
 
     /// A conversion to a few decimal places: 3.106855961 mi is 3.11 mi to anyone asking.
@@ -231,11 +264,13 @@ public struct Answer: Equatable, Sendable {
         for prefix in ["time in ", "now in ", "what time is it in "] where lower.hasPrefix(prefix) {
             guard let zone = zone(named: String(lower.dropFirst(prefix.count))) else { return nil }
             return Answer(question: String(localized: "Time in \(zone.name)"),
-                          value: clock(now, in: zone.zone, locale: locale), note: zoneNote(zone.zone, at: now, locale: locale))
+                          value: clock(now, in: zone.zone, locale: locale), note: zoneNote(zone.zone, at: now, locale: locale),
+                          kind: timeKind(now, in: zone.zone, shift: 0))
         }
         if lower.hasSuffix(" time"), let zone = zone(named: String(lower.dropLast(5))) {
             return Answer(question: String(localized: "Time in \(zone.name)"),
-                          value: clock(now, in: zone.zone, locale: locale), note: zoneNote(zone.zone, at: now, locale: locale))
+                          value: clock(now, in: zone.zone, locale: locale), note: zoneNote(zone.zone, at: now, locale: locale),
+                          kind: timeKind(now, in: zone.zone, shift: 0))
         }
         // A time somewhere, here (or in a second place after " in ").
         var source = lower
@@ -260,7 +295,15 @@ public struct Answer: Equatable, Sendable {
         } else {
             String(localized: "your time") + dayShift(date, from: from.zone, to: local)
         }
-        return Answer(question: question, value: clock(date, in: to, locale: locale), note: note)
+        return Answer(question: question, value: clock(date, in: to, locale: locale), note: note,
+                      kind: timeKind(date, in: to, shift: dayOffset(date, from: from.zone, to: to)))
+    }
+
+    static func timeKind(_ date: Date, in zone: TimeZone, shift: Int) -> Kind {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        return .time(hour: parts.hour ?? 0, minute: parts.minute ?? 0, dayShift: shift)
     }
 
     /// "3pm", "3:30 pm", "15:00", "9am" at the start of `s`, and what's left after it.
@@ -349,12 +392,21 @@ public struct Answer: Equatable, Sendable {
 
     /// ", next day" or ", previous day" when the time falls on another date there.
     static func dayShift(_ date: Date, from: TimeZone, to: TimeZone) -> String {
+        switch dayOffset(date, from: from, to: to) {
+        case 0: ""
+        case let d where d > 0: String(localized: ", next day")
+        default: String(localized: ", previous day")
+        }
+    }
+
+    /// 1 when `date` falls on the day after in `to` than in `from`, -1 the day before, else 0.
+    static func dayOffset(_ date: Date, from: TimeZone, to: TimeZone) -> Int {
         var a = Calendar(identifier: .gregorian), b = a
         a.timeZone = from
         b.timeZone = to
         let da = a.dateComponents([.year, .month, .day], from: date), db = b.dateComponents([.year, .month, .day], from: date)
-        guard let x = a.date(from: da), let y = a.date(from: db), x != y else { return "" }
-        return y > x ? String(localized: ", next day") : String(localized: ", previous day")
+        guard let x = a.date(from: da), let y = a.date(from: db), x != y else { return 0 }
+        return y > x ? 1 : -1
     }
 }
 
