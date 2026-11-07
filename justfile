@@ -90,6 +90,10 @@ website-deploy:
 demo-video *args:
     scripts/record-demo.sh {{args}}
 
+# Remake the README's animation (docs/readme/demo.webp) from the website's video; demo-video does this too
+readme-demo *args:
+    scripts/readme-demo.sh {{args}}
+
 # Record the Mac App Store screenshots into docs/app-store/screenshots (in a terminal window with Screen Recording)
 app-store-screenshots *args:
     scripts/record-demo.sh --app-store {{args}}

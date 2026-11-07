@@ -2,6 +2,8 @@
 
 A free, full-screen app grid for macOS 14+: pages, folders and type-to-search, one keystroke away. Everything is included; there are no purchases, licence checks, network calls or announcements.
 
+[![LaunchGrid in use: moving through the grid with the arrow keys, searching, turning pages, and making a folder and undoing it](docs/readme/demo.webp)](https://launchgrid.sglavoie.com/)
+
 About 99% of LaunchGrid (code, tests, documentation and website) was written by AI, Claude by Anthropic, directed and tested by Sébastien Lavoie. The app itself contains no AI features and makes no network connections.
 
 ## Install
@@ -35,7 +37,7 @@ hidden windows. CI runs the scenarios against the downloadable bundle and upload
 on failure. The runner is compiled out of the Mac App Store build. See
 [`scripts/ui-tests/README.md`](scripts/ui-tests/README.md) for adding scenarios.
 
-The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home, support and privacy policy) is static HTML in `website/public`, served by a Cloudflare Worker: `just website` previews it. Pushing a change under `website/` to `main` publishes it (`.github/workflows/website.yml`), after `scripts/check-website.sh` confirms that every file and `#anchor` the pages refer to exists (pull requests run the same check); `just website-deploy` does the same by hand. `docs/app-store-submission.md` tracks what the Mac App Store still needs. The video and Settings screenshots on the home page come from `just demo-video` (`scripts/record-demo.sh`), which drives a scratch copy through `scripts/demo/story.txt` and `scripts/demo/settings.txt` with the apps in `scripts/demo/apps.txt`; edit those and run it again to refresh them. It needs ffmpeg, cwebp and Screen Recording permission for the terminal you run it in.
+The website at [launchgrid.sglavoie.com](https://launchgrid.sglavoie.com/) (home, support and privacy policy) is static HTML in `website/public`, served by a Cloudflare Worker: `just website` previews it. Pushing a change under `website/` to `main` publishes it (`.github/workflows/website.yml`), after `scripts/check-website.sh` confirms that every file and `#anchor` the pages refer to exists (pull requests run the same check); `just website-deploy` does the same by hand. `docs/app-store-submission.md` tracks what the Mac App Store still needs. The video and Settings screenshots on the home page come from `just demo-video` (`scripts/record-demo.sh`), which drives a scratch copy through `scripts/demo/story.txt` and `scripts/demo/settings.txt` with the apps in `scripts/demo/apps.txt`; edit those and run it again to refresh them. It also turns the video into the animation at the top of this README (`scripts/readme-demo.sh`, which can be run alone; GitHub doesn't play a video file in a README), and the website workflow fails when `docs/readme/demo.webp` wasn't made from the current video. It needs ffmpeg, cwebp, img2webp and Screen Recording permission for the terminal you run it in.
 
 Installing to `/Applications` is needed for "Open at login". `scripts/install.sh --no-open` skips the relaunch, and `INSTALL_DIR=~/Applications` installs elsewhere. It falls back to `sudo` when the folder isn't writable, and registers the installed copy as the `.launchgrid` handler. Only the copy at the install path is quit (LaunchGrid saves and quits on `SIGTERM`), so a `just scratch` run keeps going.
 

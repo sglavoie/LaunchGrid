@@ -1,13 +1,14 @@
 #!/bin/sh
 # Records the website's media from a scratch LaunchGrid with the apps in scripts/demo/apps.txt:
 #   - the video: scripts/demo/story.txt on the main display, cut from "mark:start" to "mark:end",
-#     to website/public/video/demo.mp4 and demo-poster.webp;
+#     to website/public/video/demo.mp4 and demo-poster.webp, and the README's animation of it
+#     (scripts/readme-demo.sh);
 #   - the Settings tabs: scripts/demo/settings.txt in light and dark, to
 #     website/public/images/settings-<tab>-<light|dark>.webp;
 #   - with --app-store only, the Mac App Store screenshots: scripts/demo/app-store.txt in Window
 #     mode over a system wallpaper, to docs/app-store/screenshots/*.jpg at 2880×1800.
 #
-# Needs ffmpeg and cwebp (brew install ffmpeg webp), and Screen Recording permission (System Settings › Privacy & Security › Screen &
+# Needs ffmpeg, cwebp and img2webp (brew install ffmpeg webp), and Screen Recording permission (System Settings › Privacy & Security › Screen &
 # System Audio Recording) for the terminal app you run it from. Run it in a terminal window: a tmux
 # server started in the background has no app for macOS to attribute the recording to. Keep the
 # mouse and keyboard still while it runs: a click or a switch to another app hides the grid.
@@ -178,4 +179,5 @@ if [ "$VIDEO" = 1 ]; then
     cwebp -quiet -q 82 "$WORK/poster.png" -o website/public/video/demo-poster.webp
     [ "${KEEP:-0}" = 1 ] || rm -f "$WORK/raw.mkv"
     ls -lh website/public/video/demo.mp4 website/public/video/demo-poster.webp
+    scripts/readme-demo.sh
 fi
