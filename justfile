@@ -48,9 +48,10 @@ install *args:
 uninstall:
     INSTALL_DIR="{{install_dir}}" scripts/uninstall.sh
 
-# Build only, or bump patch/minor/major, push, wait for CI, release and update Homebrew (resume retries without bumping)
-release bump="" *notes:
-    scripts/release-version.sh {{quote(bump)}} {{quote(notes)}}
+# Build only, or bump patch/minor/major or set X.Y.Z, push, wait for CI, release and update Homebrew (resume retries without bumping; --force skips CI)
+[positional-arguments]
+release *args:
+    scripts/release-version.sh "$@"
 
 # Build the sandboxed, signed build/app-store/LaunchGrid.pkg for App Store Connect (--upload sends it)
 app-store *args:

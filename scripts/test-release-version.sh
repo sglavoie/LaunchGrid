@@ -149,6 +149,42 @@ git reset -q --hard "$INITIAL"
 expect_failure minor
 [ "$(git rev-parse HEAD)" = "$INITIAL" ]
 
+setup explicit-version
+git tag v1.2.0
+git tag app-store/v1.2.1
+# Below VERSION reuses an unreleased number; only released or uploaded versions bound it.
+scripts/release-version.sh 1.2.2 Unquoted notes > "$ROOT/output.log" 2>&1
+grep -qx 'VERSION="1.2.2"' scripts/bundle.sh
+[ "$(git log -1 --format=%s)" = 'chore(release): bump version to 1.2.2' ]
+[ "$(cat build/notes)" = 'Unquoted notes' ]
+[ "$(tail -n 3 "$TRACE")" = "$(printf 'ci-watch\nbuild\npublish')" ]
+
+setup explicit-guards
+git tag v1.2.0
+git tag app-store/v1.2.1
+for BAD in 1.2.0 1.1.9 1.2.1 1.2.3 01.2.4 1.2 1.2.4-beta --bogus; do
+    expect_failure "$BAD"
+done
+expect_failure '' 'notes without a bump'
+[ "$(git rev-parse HEAD)" = "$INITIAL" ]
+[ ! -s "$TRACE" ]
+
+setup force
+(MOCK_CI_FAIL=1 scripts/release-version.sh --force 1.3.0 'Forced notes' > "$ROOT/output.log" 2>&1)
+grep -qx 'VERSION="1.3.0"' scripts/bundle.sh
+[ "$(cat "$TRACE")" = "$(printf 'build\npublish')" ]
+[ "$(cat build/notes)" = 'Forced notes' ]
+grep -q 'ships even if its tests fail' "$ROOT/output.log"
+
+setup force-after-bump
+(MOCK_CI_FAIL=1 scripts/release-version.sh patch --force > "$ROOT/output.log" 2>&1)
+[ "$(cat "$TRACE")" = "$(printf 'build\npublish')" ]
+[ "$(cat build/notes)" = '' ]
+
+setup dash-notes
+scripts/release-version.sh minor '- Fixed a thing' > "$ROOT/output.log" 2>&1
+[ "$(cat build/notes)" = '- Fixed a thing' ]
+
 setup ci-failure
 (MOCK_CI_FAIL=1 expect_failure patch)
 if grep -Eq '^(build|publish)$' "$TRACE"; then exit 1; fi
@@ -214,4 +250,4 @@ setup tap-existing
 (unset TAP_DIR; scripts/release-version.sh patch > "$ROOT/output.log" 2>&1)
 [ "$(cat build/tap-dir)" = ../homebrew-tap ]
 if grep -qx tap-clone "$TRACE"; then exit 1; fi
-echo 'Release orchestration passed: bumps, guards, CI, retries and build-only compatibility.'
+echo 'Release orchestration passed: bumps, explicit versions, --force, guards, CI, retries and build-only compatibility.'
