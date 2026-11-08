@@ -1049,6 +1049,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             return
         }
+        if !state.query.isEmpty, code == kVK_UpArrow || code == kVK_DownArrow {
+            // Results stand in centred rows of different lengths, the top hit alone on the
+            // first: ↑/↓ go to the nearest result across in the row above or below.
+            if let target = state.searchLayout.vertical(from: i, by: code == kVK_UpArrow ? -1 : 1) {
+                state.focusIndex = target
+            }
+            return
+        }
         if code == kVK_UpArrow || code == kVK_DownArrow {
             // Past the top or bottom row, stay put. ↓ from a row above a short last row
             // lands on the last item.
@@ -1124,7 +1132,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if !state.query.isEmpty {
             guard let match = state.searchResults[safe: i] else { return }
             item = match.item
-            let c = state.pageLayout.center(i), f = state.drag.pagerFrame
+            let c = state.searchLayout.center(i), f = state.drag.pagerFrame
             center = CGPoint(x: f.minX + c.x, y: f.minY + c.y)
         } else if let folder = state.openFolder {
             guard let member = folder.items[safe: i] else { return }

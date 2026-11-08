@@ -1806,7 +1806,8 @@ func installed(_ name: String) -> InstalledApp {
             .app(AppRef(bundleID: "com.test.\($0)", path: "/Applications/\($0).app", name: $0))
         })]))
         state.query = "app"
-        #expect(state.searchResults.count == 6)
+        // The first page: the top hit on a row of its own, then one row of three.
+        #expect(state.searchResults.count == 4)
         #expect(state.allSearchResults.count == 50)
         #expect(state.searchPageCount == 9)
         var seen = Set<UUID>()
@@ -1815,7 +1816,7 @@ func installed(_ name: String) -> InstalledApp {
             seen.formUnion(state.searchResults.map(\.id))
         }
         #expect(seen == Set(state.allSearchResults.map(\.id)))
-        #expect(state.searchResults.count == 2)
+        #expect(state.searchResults.count == 4)
         state.query = "app 1"
         #expect(state.searchPage == 0)
         #expect(state.searchResults.first?.title == "App 1")

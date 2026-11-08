@@ -110,6 +110,152 @@ enum FolderLayout {
     }
 }
 
+/// Where search results go. On the first page the top hit stands alone on the first row,
+/// larger and centred, with a line about it under its name; the rest follow in rows of the
+/// grid's columns, each row centred, so a few results gather under the search field rather
+/// than along its left edge. Later pages hold plain centred rows. Drawing, hit-testing (file
+/// drops) and the arrow keys all read this.
+struct SearchLayout {
+    /// The page grid the results share their cells with.
+    var grid: GridLayout
+    /// The results on this page.
+    var count: Int
+    /// Whether the first result is the top hit, on a row of its own: on the first page.
+    var hero: Bool
+    /// The least a row below the top hit may be: an ordinary icon, its name and a margin.
+    var minRowHeight: CGFloat = 0
+
+    var cell: CGSize { grid.cell }
+
+    /// The top hit's row is taller than the rest, for its larger icon and the line under its
+    /// name, out of the room the rows below have to spare.
+    var heroRowHeight: CGFloat {
+        let rows = max(grid.rows, 1)
+        guard hero else { return cell.height }
+        guard rows > 1 else { return grid.size.height }
+        let others = max(minRowHeight, (grid.size.height - cell.height * 1.3) / CGFloat(rows - 1))
+        return max(cell.height, grid.size.height - others * CGFloat(rows - 1))
+    }
+
+    /// The rows below the top hit's.
+    var rowHeight: CGFloat {
+        let rows = max(grid.rows, 1)
+        guard hero, rows > 1 else { return cell.height }
+        return (grid.size.height - heroRowHeight) / CGFloat(rows - 1)
+    }
+
+    private func rowTop(_ row: Int) -> CGFloat {
+        guard hero else { return CGFloat(row) * cell.height }
+        return row == 0 ? 0 : heroRowHeight + CGFloat(row - 1) * rowHeight
+    }
+
+    private func height(ofRow row: Int) -> CGFloat { hero && row == 0 ? heroRowHeight : rowHeight }
+
+    private func row(at y: CGFloat) -> Int {
+        guard hero else { return Int(y / cell.height) }
+        return y < heroRowHeight ? 0 : 1 + Int((y - heroRowHeight) / max(rowHeight, 1))
+    }
+    private var columns: Int { max(grid.columns, 1) }
+
+    // MARK: Pages
+
+    /// How many results the first page holds: the top hit, then full rows below it.
+    static func firstPageCapacity(_ g: Grid) -> Int { 1 + max(g.columns, 1) * max(0, g.rows - 1) }
+
+    static func capacity(page: Int, grid g: Grid) -> Int { page == 0 ? firstPageCapacity(g) : max(g.capacity, 1) }
+
+    /// The index, among all results, of a page's first.
+    static func pageStart(_ page: Int, grid g: Grid) -> Int {
+        page <= 0 ? 0 : firstPageCapacity(g) + (page - 1) * max(g.capacity, 1)
+    }
+
+    static func pageCount(results n: Int, grid g: Grid) -> Int {
+        let first = firstPageCapacity(g), rest = max(g.capacity, 1)
+        return n <= first ? 1 : 1 + (n - first + rest - 1) / rest
+    }
+
+    /// The page a result is on, from its index among all results.
+    static func page(of index: Int, grid g: Grid) -> Int {
+        let first = firstPageCapacity(g)
+        return index < first ? 0 : 1 + (index - first) / max(g.capacity, 1)
+    }
+
+    // MARK: Places
+
+    /// Result `i`'s row, and its place along that row.
+    func slot(_ i: Int) -> (row: Int, column: Int) {
+        guard hero else { return (i / columns, i % columns) }
+        if i == 0 { return (0, 0) }
+        return (1 + (i - 1) / columns, (i - 1) % columns)
+    }
+
+    /// The index of the result at `column` along `row`, if there is one.
+    func index(row: Int, column: Int) -> Int? {
+        guard row >= 0, column >= 0, column < itemsInRow(row) else { return nil }
+        let i = hero ? (row == 0 ? 0 : 1 + (row - 1) * columns + column) : row * columns + column
+        return i < count ? i : nil
+    }
+
+    func itemsInRow(_ row: Int) -> Int {
+        guard row >= 0, count > 0 else { return 0 }
+        if hero {
+            if row == 0 { return 1 }
+            return max(0, min(columns, count - 1 - (row - 1) * columns))
+        }
+        return max(0, min(columns, count - row * columns))
+    }
+
+    func center(_ i: Int) -> CGPoint {
+        let (row, column) = slot(i)
+        let n = CGFloat(max(itemsInRow(row), 1))
+        let left = (grid.size.width - n * cell.width) / 2
+        return CGPoint(x: left + (CGFloat(column) + 0.5) * cell.width, y: rowTop(row) + height(ofRow: row) / 2)
+    }
+
+    /// The result under a point in local coordinates; nil between and beside them.
+    func index(at p: CGPoint) -> Int? {
+        guard count > 0, cell.width > 0, cell.height > 0, cell.width.isFinite, cell.height.isFinite,
+              p.x.isFinite, p.y.isFinite, p.y >= 0 else { return nil }
+        let row = row(at: p.y)
+        let n = itemsInRow(row)
+        guard n > 0 else { return nil }
+        let left = (grid.size.width - CGFloat(n) * cell.width) / 2
+        let x = (p.x - left) / cell.width
+        guard x >= 0 else { return nil }
+        return index(row: row, column: Int(x))
+    }
+
+    /// ↑ or ↓ from result `i`: the result in the row above or below that is nearest across,
+    /// as rows of different lengths stand centred. Nil past the top or bottom row.
+    func vertical(from i: Int, by delta: Int) -> Int? {
+        let row = slot(i).row + delta
+        let n = itemsInRow(row)
+        guard n > 0 else { return nil }
+        let x = center(i).x
+        return (0..<n).compactMap { index(row: row, column: $0) }
+            .min { abs(center($0).x - x) < abs(center($1).x - x) }
+    }
+
+    // MARK: The top hit
+
+    /// The top hit's icon: larger than the rest, as far as its cell leaves room for its name
+    /// and the line under it.
+    func heroIconSize(iconSize: CGFloat, labels: Bool) -> CGFloat {
+        let wanted = iconSize * 1.3
+        let room = labels
+            ? heroRowHeight - 16 - GridLayout.labelHeight(iconSize: wanted) - Self.captionHeight(iconSize: wanted)
+            : heroRowHeight * 0.85
+        return max(iconSize, min(wanted, room, cell.width * 0.9))
+    }
+
+    static func minRowHeight(iconSize: CGFloat, labels: Bool) -> CGFloat {
+        iconSize + 16 + (labels ? GridLayout.labelHeight(iconSize: iconSize) : 0)
+    }
+
+    /// The line under the top hit's name.
+    static func captionHeight(iconSize: CGFloat) -> CGFloat { (max(10, min(13, iconSize * 0.12)) * 1.3).rounded(.up) + 2 }
+}
+
 /// Live state of an item drag (or a background swipe drag).
 @MainActor @Observable
 final class DragController {
@@ -253,6 +399,12 @@ extension AppState {
     }
 
     var pageIconSize: CGFloat { pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) }
+
+    /// Where the search results on the page shown are (`SearchLayout`).
+    var searchLayout: SearchLayout {
+        SearchLayout(grid: pageLayout, count: searchResults.count, hero: searchPage == 0,
+                     minRowHeight: SearchLayout.minRowHeight(iconSize: pageIconSize, labels: prefs.showLabels && pageLayout.labelsFit(iconSize: pageIconSize)))
+    }
 
     var folderIconSize: CGFloat { folderIconSize(folderLayout) }
 

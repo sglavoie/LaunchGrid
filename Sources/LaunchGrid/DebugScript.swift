@@ -321,6 +321,17 @@ enum DebugScript {
                     }
                 case "firstsreset":
                     state.prefs.firstsSeen = [AppState.firstsChecked]
+                case "tour":
+                    // "tour": starts the first-run tour; "tour:pending" as after the first layout
+                    // (it starts at the next show); "tour:next", "tour:end".
+                    switch arg {
+                    case "pending": state.tourPending = true
+                    case "next": state.advanceTour()
+                    case "end": state.endTour()
+                    default: state.startTour()
+                    }
+                case "tourstate":
+                    print("tour: step=\(state.tourStep.map { "\($0)" } ?? "-") query='\(state.query)' answer=\(state.searchAnswer?.value ?? "-") toast='\(state.toast ?? "-")' undoable=\(state.canUndo) firsts=\(state.prefs.firstsSeen.sorted())")
                 case "sounds":
                     // "sounds:on|off": the optional sounds.
                     state.prefs.playSounds = arg == "on"

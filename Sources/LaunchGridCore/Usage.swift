@@ -98,6 +98,12 @@ public struct Usage: Equatable, Sendable {
             .prefix(limit).map(\.key)
     }
 
+    /// When LaunchGrid last opened `item`, if it has.
+    public func lastOpened(_ item: GridItem) -> Date? {
+        guard let key = Self.key(for: item), let entry = entries[key] else { return nil }
+        return Date(timeIntervalSinceReferenceDate: entry.at)
+    }
+
     public func score(_ item: GridItem, at date: Date = Date()) -> Double {
         guard let key = Self.key(for: item), let entry = entries[key] else { return 0 }
         return Self.decayed(entry, to: date.timeIntervalSinceReferenceDate)

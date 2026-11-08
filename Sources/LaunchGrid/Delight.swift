@@ -328,9 +328,10 @@ struct ClockFace: View {
 
 // MARK: - Answers
 
-/// A sum, a conversion or a time elsewhere as a card under the search field: what kind of
-/// answer it is, the question, the answer large, and for a time, a small clock that's light by
-/// day and dark by night, with "Tomorrow" or "Yesterday" when it falls on another day.
+/// A sum, a conversion, a time elsewhere, a colour, a date, a timestamp, a number in another
+/// base or Base64 as a card under the search field: what kind of answer it is, the question,
+/// the answer large, and for a time, a small clock that's light by day and dark by night, with
+/// "Tomorrow" or "Yesterday" when it falls on another day; for a colour, a swatch of it.
 struct AnswerCard: View {
     @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
@@ -395,7 +396,8 @@ struct AnswerCard: View {
         .accessibilityHint("Copies it")
     }
 
-    private var isArithmetic: Bool { answer.kind == .arithmetic }
+    /// A sum or a number in another base is the same thing, written another way.
+    private var isArithmetic: Bool { answer.kind == .arithmetic || answer.kind == .numberBase }
 
     private var dayShift: Int? {
         if case .time(_, _, let shift) = answer.kind, shift != 0 { shift } else { nil }
@@ -429,6 +431,20 @@ struct AnswerCard: View {
             symbolBadge(Self.symbol(for: category), hue: Self.hue(for: category))
         case .arithmetic:
             symbolBadge("plus.forwardslash.minus", hue: 0.08)
+        case .color(let red, let green, let blue):
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(red: Double(red) / 255, green: Double(green) / 255, blue: Double(blue) / 255))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.white.opacity(0.45), lineWidth: 1))
+                .frame(width: 22, height: 22)
+                .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+        case .date:
+            symbolBadge("calendar", hue: 0.97)
+        case .timestamp:
+            symbolBadge("calendar.badge.clock", hue: 0.68)
+        case .numberBase:
+            symbolBadge("number", hue: 0.42)
+        case .base64:
+            symbolBadge("chevron.left.forwardslash.chevron.right", hue: 0.22)
         }
     }
 

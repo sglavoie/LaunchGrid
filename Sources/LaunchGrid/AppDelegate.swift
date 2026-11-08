@@ -252,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             buildMainMenu()
             applyDockPolicy()
+            AppState.toursByItself = false
             DebugUITest.run(scenario, state: state, overlay: overlay, delegate: self)
             return
         }
@@ -337,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 if let script = ProcessInfo.processInfo.environment["LAUNCHGRID_DEBUG_SCRIPT"] {
                     // A script rebuilds and edits the layout: only against a scratch one.
                     if Preferences.isScratch {
+                        AppState.toursByItself = false
                         DebugScript.run(script, state: self.state, overlay: self.overlay, delegate: self)
                         return
                     }

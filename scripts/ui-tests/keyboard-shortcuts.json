@@ -31,7 +31,7 @@
 
     {"run": "keys:s,h,o,r,t,c"},
     {"expect": {"query": "shortc", "searchResults": ["Shortcuts", "Keyboard Shortcuts", "Keyboard"]}},
-    {"run": "keys:125,124"},
+    {"run": "keys:125"},
     {"expect": {"focus": "Keyboard Shortcuts"}},
     {"run": "keys:36"},
     {"expect": {"shortcutsShown": true, "query": "shortc"}},

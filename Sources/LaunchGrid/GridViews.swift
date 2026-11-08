@@ -97,6 +97,9 @@ struct GridRootView: View {
             ToastLayer()
                 .allowsHitTesting(state.toastUndoable)
 
+            TourLayer()
+                .accessibilityHidden(folderModal || editModal)
+
             VStack {
                 Spacer()
                 if state.commandHeld {
@@ -842,6 +845,8 @@ struct ItemView: View {
     var query: String?
     /// A word under the name saying what a result is ("System Settings").
     var caption: String?
+    /// How wide the line under the name may run: the top hit's is wider than its icon.
+    var captionWidth: CGFloat?
     var onDelete: (() -> Void)?
     @Environment(\.tileLift) private var lift
 
@@ -878,7 +883,9 @@ struct ItemView: View {
                             NewAppDot(size: max(5, min(8, iconSize * 0.1)))
                         }
                     }
-                if editing, let onDelete {
+                // Only on the tile under the pointer, the focused one and the selected ones: a ✕
+                // on every tile at once was a wall of them. The jiggle says it's edit mode.
+                if editing, let onDelete, lift != 0 || selected || focused {
                     // Smaller on small icons (a dense grid in a small window), so it doesn't hide them.
                     let badge = min(20, max(10, iconSize * 0.45))
                     Button(action: onDelete) {
@@ -891,10 +898,28 @@ struct ItemView: View {
                     }
                     .buttonStyle(.plain)
                     .offset(x: -badge * 0.3, y: -badge * 0.3)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.3).combined(with: .opacity))
                     // Merged into the item below; its "Remove" action stands in for it.
                     .accessibilityHidden(true)
                 }
             }
+            .overlay(alignment: .bottomTrailing) {
+                if selected {
+                    // A tick at the icon's corner, so a selection reads at a glance.
+                    let tick = min(24, max(12, iconSize * 0.24))
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: tick, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.accentColor)
+                        .background(Circle().fill(.white).padding(tick * 0.12))
+                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                        .offset(x: tick * 0.3, y: tick * 0.3)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.3).combined(with: .opacity))
+                        .accessibilityHidden(true)
+                }
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
+            .animation(.spring(response: 0.22, dampingFraction: 0.75), value: editing && (lift != 0 || focused))
             .modifier(Jiggle(active: editing, seed: item.id.hashValue))
             if state.prefs.showLabels && labelsFit {
                 let fontSize = GridLayout.labelFontSize(iconSize: iconSize)
@@ -914,7 +939,7 @@ struct ItemView: View {
                         .foregroundStyle(.white.opacity(contrast == .increased ? 0.95 : 0.75))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: iconSize * 1.5)
+                        .frame(maxWidth: captionWidth ?? iconSize * 1.5)
                         .modifier(Legible())
                         .padding(.top, -4)
                 }
@@ -926,8 +951,12 @@ struct ItemView: View {
             // A selected tile that has it too shows the focus's stronger ring.
             if selected {
                 let high = contrast == .increased
+                // A glow in the icon's own colour, as the keyboard focus has, rather than a grey box.
+                let glow = item.hoverTint ?? .white
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(.white.opacity(0.22))
+                    .fill(high ? AnyShapeStyle(.white.opacity(0.22))
+                          : AnyShapeStyle(RadialGradient(colors: [glow.opacity(0.4), glow.opacity(0.12)], center: .center,
+                                                         startRadius: 0, endRadius: iconSize)))
                     .overlay(RoundedRectangle(cornerRadius: 14)
                         .strokeBorder(.white.opacity(focused ? (high ? 1 : 0.8) : 0.55), lineWidth: focused ? (high ? 3 : 2) : 1.5))
                     .overlay(RoundedRectangle(cornerRadius: 15).inset(by: -1)
@@ -1272,6 +1301,9 @@ struct SearchResultsView: View {
             let icon = layout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
             let results = state.searchResults
             let labels = state.prefs.showLabels && layout.labelsFit(iconSize: icon)
+            let places = SearchLayout(grid: layout, count: results.count, hero: state.searchPage == 0,
+                                      minRowHeight: SearchLayout.minRowHeight(iconSize: icon, labels: labels))
+            let heroIcon = places.heroIconSize(iconSize: icon, labels: labels)
             ZStack(alignment: .topLeading) {
                 // An answer is what was asked for: no "No Results" under it.
                 if results.isEmpty && state.searchAnswer == nil {
@@ -1280,17 +1312,24 @@ struct SearchResultsView: View {
                         .transition(.opacity)
                 }
                 if let i = state.focusIndex, let match = results[safe: i] {
-                    FocusHalo(center: layout.center(i),
-                              size: FocusHalo.size(iconSize: icon, labels: labels, cell: layout.cell,
-                                                   caption: match.argument != nil || match.item.action.map { SettingsPane.pane(for: $0.id) != nil || AppCommand.command(for: $0.id) != nil } == true),
+                    let isHero = places.hero && i == 0
+                    FocusHalo(center: places.center(i),
+                              size: FocusHalo.size(iconSize: isHero ? heroIcon : icon, labels: labels,
+                                                   cell: CGSize(width: layout.cell.width, height: isHero ? places.heroRowHeight : places.rowHeight),
+                                                   caption: isHero ? state.searchContext(match.item) != nil || match.argument != nil
+                                                       : match.argument != nil || match.item.action.map { SettingsPane.pane(for: $0.id) != nil || AppCommand.command(for: $0.id) != nil } == true),
                               tint: match.item.hoverTint)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
+                    let isHero = places.hero && i == 0
                     let pane = match.item.action.flatMap { SettingsPane.pane(for: $0.id) }
                     let command = match.item.action.flatMap { AppCommand.command(for: $0.id) }
-                    ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument,
+                    // The top hit says what it is, where it is and when it was last opened.
+                    let caption = isHero ? state.searchContext(match.item)
+                        : pane != nil ? String(localized: "System Settings") : command != nil ? "LaunchGrid" : nil
+                    ItemView(item: match.item, iconSize: isHero ? heroIcon : icon, focused: state.focusIndex == i, argument: match.argument,
                              query: match.argument == nil ? state.query : nil,
-                             caption: pane != nil ? String(localized: "System Settings") : command != nil ? "LaunchGrid" : nil)
+                             caption: caption, captionWidth: isHero ? max(layout.cell.width, heroIcon * 1.9) - 12 : nil)
                         .overlay(alignment: .topLeading) {
                             // ⌘ held: ⌘ and this number opens it.
                             if state.commandHeld && i < 9 { KeyBadge(text: "⌘\(i + 1)").offset(x: 4, y: 2) }
@@ -1303,9 +1342,10 @@ struct SearchResultsView: View {
                         .accessibilityAction { state.activateResult(match) }
                         .accessibilityFocused($voiceOverFocus, equals: match.id)
                         .contextMenu { ItemMenu(item: match.item) }
-                        .frame(width: layout.cell.width, height: layout.cell.height)
+                        .frame(width: isHero ? max(layout.cell.width, heroIcon * 1.9) : layout.cell.width,
+                               height: isHero ? places.heroRowHeight : places.rowHeight)
                         .tileMatch(match.item.id, active: true)
-                        .position(layout.center(i))
+                        .position(places.center(i))
                         // New matches grow in where they rank, dropped ones shrink away.
                         .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
                 }
@@ -1891,6 +1931,7 @@ struct MenuEntry {
             .button(String(localized: "Add Missing Apps…")) { state.onAddMissing() },
             .divider,
             .button(String(localized: "Keyboard Shortcuts"), key: .shortcuts) { state.showingShortcuts = true },
+            .button(String(localized: "Show Me Around")) { state.startTour() },
             .button(String(localized: "Settings…"), key: .settings) { state.onOpenSettings() },
         ]
         return entries

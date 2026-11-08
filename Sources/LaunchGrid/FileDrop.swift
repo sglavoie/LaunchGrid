@@ -109,8 +109,8 @@ extension AppState {
             // Over search results: the result under the pointer.
             let frame = drag.pagerFrame
             let local = CGPoint(x: p.x - frame.minX, y: p.y - frame.minY)
-            guard frame.contains(p), let cell = pageLayout.cellIndex(at: local) else { return nil }
-            return searchResults[safe: cell]?.item
+            guard frame.contains(p), let i = searchLayout.index(at: local) else { return nil }
+            return searchResults[safe: i]?.item
         }
         if let folder = openFolder {
             let frame = drag.folderGridFrame

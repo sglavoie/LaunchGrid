@@ -2,8 +2,11 @@ import Foundation
 
 /// A quick answer search can give for what was typed, shown above the results (Return copies
 /// it): arithmetic ("12*7", "=2^10", "(3+4)/2"), a unit conversion ("5 km in mi", "70 f to c",
-/// "2 GB in MB") or a time elsewhere ("3pm PST", "15:00 utc in tokyo", "time in london").
-/// Worked out here, from what was typed alone: nothing is looked up anywhere.
+/// "2 GB in MB"), a time elsewhere ("3pm PST", "15:00 utc in tokyo", "time in london"), a colour
+/// ("#ff8800", "rgb(255, 136, 0)"), a date ("days until dec 25", "in 100 days", "week number"),
+/// a Unix timestamp ("1768478400", "unix time"), a number in another base ("0x1F", "255 in hex")
+/// or Base64 ("base64 hello", "decode aGVsbG8="). Worked out here, from what was typed alone
+/// (and the clock): nothing is looked up anywhere, and no file is read.
 public struct Answer: Equatable, Sendable {
     /// The question as it will be shown: "12 × 7", "5 km".
     public var question: String
@@ -22,6 +25,16 @@ public struct Answer: Equatable, Sendable {
         /// A time: the hour (0–23) and minute shown in `value`, and whether that falls on the
         /// day after (1) or before (-1) the time asked about.
         case time(hour: Int, minute: Int, dayShift: Int)
+        /// A colour, its red, green and blue (0–255) for a swatch.
+        case color(red: Int, green: Int, blue: Int)
+        /// A date: days until or since one, a day some days away, or the week number.
+        case date
+        /// A Unix timestamp as a date, or the time now as one.
+        case timestamp
+        /// A whole number written in another base: hexadecimal, binary, octal or decimal.
+        case numberBase
+        /// Text to Base64, or Base64 back to text.
+        case base64
     }
 
     /// What a converted quantity measures.
@@ -44,6 +57,12 @@ public struct Answer: Equatable, Sendable {
         guard !q.isEmpty, q.count <= 120 else { return nil }
         if let a = arithmetic(q, locale: locale) { return a }
         if let a = conversion(q, locale: locale) { return a }
+        // Before times, which take "… in …" and "… time" as a place and give up on anything else.
+        if let a = colour(q) { return a }
+        if let a = numberBase(q) { return a }
+        if let a = base64(q) { return a }
+        if let a = timestamp(q, now: now, timeZone: timeZone, locale: locale) { return a }
+        if let a = date(q, now: now, timeZone: timeZone, locale: locale) { return a }
         if let a = time(q, now: now, timeZone: timeZone, locale: locale) { return a }
         return nil
     }
@@ -407,6 +426,396 @@ public struct Answer: Equatable, Sendable {
         let da = a.dateComponents([.year, .month, .day], from: date), db = b.dateComponents([.year, .month, .day], from: date)
         guard let x = a.date(from: da), let y = a.date(from: db), x != y else { return 0 }
         return y > x ? 1 : -1
+    }
+    // MARK: Colours
+
+    /// The ways a colour is written.
+    enum ColourForm: String {
+        case hex, rgb, hsl
+    }
+
+    /// "#ff8800", "#f80", "rgb(255, 136, 0)", "hsl(32, 100%, 50%)", each alone (answered in rgb,
+    /// or in hex for rgb and hsl) or "in|to|as hex|rgb|hsl". Hex only with its "#": "ff8800"
+    /// alone could be anything.
+    static func colour(_ q: String) -> Answer? {
+        var source = q
+        var target: ColourForm?
+        for word in [" in ", " to ", " as "] {
+            if let r = q.range(of: word, options: [.backwards, .caseInsensitive]),
+               let form = ColourForm(rawValue: q[r.upperBound...].trimmingCharacters(in: .whitespaces).lowercased()) {
+                target = form
+                source = String(q[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+        guard let (rgb, form) = parseColour(source.lowercased()) else { return nil }
+        let to = target ?? (form == .hex ? .rgb : .hex)
+        let others = [ColourForm.hex, .rgb, .hsl].filter { $0 != to }
+            .map { colourText(rgb, $0, degrees: true) }.joined(separator: " · ")
+        return Answer(question: source, value: colourText(rgb, to, degrees: false), note: others,
+                      kind: .color(red: rgb.r, green: rgb.g, blue: rgb.b))
+    }
+
+    typealias RGB = (r: Int, g: Int, b: Int)
+
+    static func parseColour(_ s: String) -> (RGB, ColourForm)? {
+        if s.hasPrefix("#") {
+            var digits = Array(s.dropFirst())
+            guard digits.count == 3 || digits.count == 6, digits.allSatisfy(\.isHexDigit) else { return nil }
+            if digits.count == 3 { digits = digits.flatMap { [$0, $0] } }
+            guard let n = Int(String(digits), radix: 16) else { return nil }
+            return ((n >> 16 & 0xFF, n >> 8 & 0xFF, n & 0xFF), .hex)
+        }
+        func arguments(_ name: String) -> [String]? {
+            guard s.hasPrefix(name + "("), s.hasSuffix(")") else { return nil }
+            let inside = s.dropFirst(name.count + 1).dropLast()
+            let parts = inside.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map(String.init)
+            return parts.count == 3 ? parts : nil
+        }
+        if let parts = arguments("rgb") {
+            let values = parts.compactMap { Int($0) }
+            guard values.count == 3, values.allSatisfy((0...255).contains) else { return nil }
+            return ((values[0], values[1], values[2]), .rgb)
+        }
+        if let parts = arguments("hsl") {
+            func number(_ text: String, dropping suffixes: [String]) -> Double? {
+                var t = text
+                for suffix in suffixes where t.hasSuffix(suffix) { t.removeLast(suffix.count); break }
+                return Double(t)
+            }
+            guard let h = number(parts[0], dropping: ["°", "deg"]), h.isFinite,
+                  let sat = number(parts[1], dropping: ["%"]), let light = number(parts[2], dropping: ["%"]),
+                  (0...100).contains(sat), (0...100).contains(light) else { return nil }
+            return (rgb(hue: h, saturation: sat / 100, lightness: light / 100), .hsl)
+        }
+        return nil
+    }
+
+    static func rgb(hue: Double, saturation s: Double, lightness l: Double) -> RGB {
+        let h = (hue.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360) / 60
+        let c = (1 - abs(2 * l - 1)) * s
+        let x = c * (1 - abs(h.truncatingRemainder(dividingBy: 2) - 1))
+        let (r, g, b): (Double, Double, Double) = switch h {
+        case ..<1: (c, x, 0)
+        case ..<2: (x, c, 0)
+        case ..<3: (0, c, x)
+        case ..<4: (0, x, c)
+        case ..<5: (x, 0, c)
+        default: (c, 0, x)
+        }
+        let m = l - c / 2
+        func byte(_ v: Double) -> Int { min(255, max(0, Int(((v + m) * 255).rounded()))) }
+        return (byte(r), byte(g), byte(b))
+    }
+
+    /// Hue in degrees, saturation and lightness in percent, each rounded.
+    static func hsl(_ c: RGB) -> (h: Int, s: Int, l: Int) {
+        let r = Double(c.r) / 255, g = Double(c.g) / 255, b = Double(c.b) / 255
+        let high = max(r, g, b), low = min(r, g, b)
+        let l = (high + low) / 2
+        guard high != low else { return (0, 0, Int((l * 100).rounded())) }
+        let d = high - low
+        let s = l > 0.5 ? d / (2 - high - low) : d / (high + low)
+        var h: Double = switch high {
+        case r: (g - b) / d + (g < b ? 6 : 0)
+        case g: (b - r) / d + 2
+        default: (r - g) / d + 4
+        }
+        h *= 60
+        return (Int(h.rounded()) % 360, Int((s * 100).rounded()), Int((l * 100).rounded()))
+    }
+
+    /// "#ff8800", "rgb(255, 136, 0)", "hsl(32, 100%, 50%)": as CSS takes them, or with a degree
+    /// sign on the hue for reading.
+    static func colourText(_ c: RGB, _ form: ColourForm, degrees: Bool) -> String {
+        switch form {
+        case .hex: return String(format: "#%02x%02x%02x", c.r, c.g, c.b)
+        case .rgb: return "rgb(\(c.r), \(c.g), \(c.b))"
+        case .hsl:
+            let (h, s, l) = hsl(c)
+            return "hsl(\(h)\(degrees ? "°" : ""), \(s)%, \(l)%)"
+        }
+    }
+
+    // MARK: Number bases
+
+    static let radixNames: [String: Int] = [
+        "hex": 16, "hexadecimal": 16, "bin": 2, "binary": 2, "oct": 8, "octal": 8, "dec": 10, "decimal": 10,
+    ]
+
+    /// "0x1F", "0b1011", "0o17" in decimal, and "255 in hex", "0x1F to binary", "17 as octal".
+    /// A plain number alone isn't asked about.
+    static func numberBase(_ q: String) -> Answer? {
+        let lower = q.lowercased()
+        var source = lower
+        var target: Int?
+        for word in [" in ", " to ", " as "] {
+            if let r = lower.range(of: word, options: .backwards),
+               let radix = radixNames[lower[r.upperBound...].trimmingCharacters(in: .whitespaces)] {
+                target = radix
+                source = lower[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+        guard let (n, radix) = integerLiteral(source), radix != 10 || target != nil else { return nil }
+        let to = target ?? 10
+        guard to != radix else { return nil }
+        let others = [10, 16, 2, 8].filter { $0 != to && $0 != radix }.map { based(n, $0) }.joined(separator: " · ")
+        return Answer(question: based(n, radix), value: based(n, to), note: others, kind: .numberBase)
+    }
+
+    /// A whole number with its base: "0x1f", "0b1011", "0o17", or plain digits.
+    static func integerLiteral(_ raw: String) -> (UInt64, Int)? {
+        let s = raw.replacingOccurrences(of: "_", with: "")
+        let prefixes = ["0x": 16, "0b": 2, "0o": 8]
+        var radix = 10
+        var digits = Substring(s)
+        if let (prefix, r) = prefixes.first(where: { s.hasPrefix($0.key) }) {
+            radix = r
+            digits = s.dropFirst(prefix.count)
+        }
+        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), let n = UInt64(digits, radix: radix) else { return nil }
+        return (n, radix)
+    }
+
+    /// `n` in base `radix`, with its prefix: "0x1F", "0b11111", "0o37", "31".
+    static func based(_ n: UInt64, _ radix: Int) -> String {
+        switch radix {
+        case 16: "0x" + String(n, radix: 16, uppercase: true)
+        case 2: "0b" + String(n, radix: 2)
+        case 8: "0o" + String(n, radix: 8)
+        default: String(n)
+        }
+    }
+
+    // MARK: Base64
+
+    /// "base64 hello" (or "base64 encode …", "to base64 …") as Base64, and "decode aGVsbG8=",
+    /// "base64 -d …" back to text, only when that's readable text.
+    static func base64(_ q: String) -> Answer? {
+        let lower = q.lowercased()
+        func rest(after prefixes: [String]) -> String? {
+            guard let p = prefixes.first(where: { lower.hasPrefix($0) }) else { return nil }
+            let text = String(q.dropFirst(p.count)).trimmingCharacters(in: .whitespaces)
+            return text.isEmpty ? nil : text
+        }
+        if let text = rest(after: ["base64 -d ", "base64 --decode ", "base64 decode ", "decode base64 ", "from base64 ", "decode "]) {
+            guard let decoded = decodeBase64(text) else { return nil }
+            return Answer(question: text, value: decoded, note: String(localized: "from Base64"), kind: .base64)
+        }
+        if let text = rest(after: ["base64 encode ", "encode base64 ", "to base64 ", "base64 "]),
+           !["-d", "--decode", "decode", "encode", "-e"].contains(text.lowercased()) {
+            return Answer(question: text, value: Data(text.utf8).base64EncodedString(), note: String(localized: "in Base64"),
+                          kind: .base64)
+        }
+        return nil
+    }
+
+    /// The text `encoded` holds, standard or URL-safe, padded or not; nil unless it's UTF-8
+    /// with nothing unprintable in it.
+    static func decodeBase64(_ encoded: String) -> String? {
+        let alphabet = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_=")
+        guard encoded.count >= 4, encoded.unicodeScalars.allSatisfy(alphabet.contains) else { return nil }
+        var text = encoded.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let unpadded = text.replacingOccurrences(of: "=", with: "")
+        // "=" only at the end.
+        guard text.hasPrefix(unpadded) else { return nil }
+        text = unpadded + String(repeating: "=", count: (4 - unpadded.count % 4) % 4)
+        guard let data = Data(base64Encoded: text), !data.isEmpty,
+              let decoded = String(data: data, encoding: .utf8),
+              !decoded.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || $0 == "\u{FFFD}" }),
+              !decoded.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return decoded
+    }
+
+    // MARK: Unix timestamps
+
+    static let unixPhrases: Set<String> = [
+        "unix time", "unix timestamp", "timestamp", "now in unix", "unix now", "epoch time",
+        "current timestamp", "time in unix",
+    ]
+
+    /// "unix time" now, and a 10-digit (seconds) or 13-digit (milliseconds) number from 2001 to
+    /// 2100 as a date: shorter numbers are counts, longer ones aren't dates people have.
+    static func timestamp(_ q: String, now: Date, timeZone: TimeZone, locale: Locale) -> Answer? {
+        let lower = q.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if unixPhrases.contains(lower) {
+            return Answer(question: String(localized: "Unix time"), value: String(Int64(now.timeIntervalSince1970.rounded(.down))),
+                          note: iso8601(now, fraction: false), kind: .timestamp)
+        }
+        guard lower.count == 10 || lower.count == 13, lower.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let n = Int64(lower) else { return nil }
+        let millis = lower.count == 13
+        let seconds = millis ? Double(n) / 1000 : Double(n)
+        // 2001-01-01 to 2100-01-01, UTC.
+        guard (978_307_200..<4_102_444_800).contains(seconds) else { return nil }
+        let date = Date(timeIntervalSince1970: seconds)
+        let f = DateFormatter()
+        f.locale = locale
+        f.timeZone = timeZone
+        f.dateStyle = .medium
+        f.timeStyle = .medium
+        return Answer(question: lower, value: f.string(from: date), note: iso8601(date, fraction: millis), kind: .timestamp)
+    }
+
+    /// "2026-01-15T12:00:00Z", in UTC.
+    static func iso8601(_ date: Date, fraction: Bool) -> String {
+        let f = ISO8601DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.formatOptions = fraction ? [.withInternetDateTime, .withFractionalSeconds] : [.withInternetDateTime]
+        return f.string(from: date)
+    }
+
+    // MARK: Dates
+
+    static let weekPhrases: Set<String> = [
+        "week number", "week no", "week no.", "week #", "week num", "what week is it", "which week is it",
+        "what week is this", "current week", "iso week", "week of the year", "what week number is it",
+    ]
+
+    static let monthNames: [String: Int] = [
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4, "may": 5,
+        "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    ]
+
+    /// "days until dec 25" (the next one, without a year), "days since jan 1", "days until
+    /// 2027-01-01"; "100 days from now", "in 3 weeks", "10 days ago"; "week number".
+    static func date(_ q: String, now: Date, timeZone: TimeZone, locale: Locale) -> Answer? {
+        let lower = q.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        calendar.locale = locale
+        if weekPhrases.contains(lower) { return weekNumber(now: now, timeZone: timeZone, locale: locale) }
+        let counts: [(String, Bool)] = [
+            ("how many days until ", true), ("how many days till ", true), ("how many days since ", false),
+            ("days until ", true), ("days till ", true), ("days to ", true), ("days since ", false),
+        ]
+        if let (prefix, ahead) = counts.first(where: { lower.hasPrefix($0.0) }) {
+            return dayCount(String(lower.dropFirst(prefix.count)), ahead: ahead, now: now, calendar: calendar, locale: locale)
+        }
+        return dayOffset(q, lower, now: now, calendar: calendar, locale: locale)
+    }
+
+    static func dayCount(_ text: String, ahead: Bool, now: Date, calendar: Calendar, locale: Locale) -> Answer? {
+        guard let (month, day, year) = dayAndMonth(text) else { return nil }
+        let today = calendar.startOfDay(for: now)
+        let thisYear = calendar.component(.year, from: today)
+        let target: Date
+        if let year {
+            guard let d = validDate(year, month, day, calendar) else { return nil }
+            target = d
+        } else {
+            // The next one ahead, or the last one behind; today counts as either. Leap days
+            // come round every four years or so.
+            let years = ahead ? Array(thisYear...thisYear + 8) : Array((thisYear - 8...thisYear).reversed())
+            guard let d = years.lazy.compactMap({ validDate($0, month, day, calendar) })
+                .first(where: { ahead ? $0 >= today : $0 <= today }) else { return nil }
+            target = d
+        }
+        guard let days = calendar.dateComponents([.day], from: ahead ? today : target, to: ahead ? target : today).day,
+              days >= 0 else { return nil }
+        let f = DateFormatter()
+        f.locale = locale
+        f.timeZone = calendar.timeZone
+        f.setLocalizedDateFormatFromTemplate(calendar.component(.year, from: target) == thisYear ? "EEEEdMMMM" : "EEEEdMMMMy")
+        return Answer(question: ahead ? String(localized: "Days until") : String(localized: "Days since"),
+                      value: String(localized: "\(days) days"), note: f.string(from: target), kind: .date)
+    }
+
+    /// Midnight on that day, or nil if there's no such day ("feb 30").
+    static func validDate(_ year: Int, _ month: Int, _ day: Int, _ calendar: Calendar) -> Date? {
+        guard let d = calendar.date(from: DateComponents(year: year, month: month, day: day)) else { return nil }
+        let parts = calendar.dateComponents([.year, .month, .day], from: d)
+        return parts.year == year && parts.month == month && parts.day == day ? d : nil
+    }
+
+    /// "dec 25", "25 december", "dec 25, 2027", "25th dec 2027", "2027-01-01", "christmas",
+    /// "new year".
+    static func dayAndMonth(_ text: String) -> (month: Int, day: Int, year: Int?)? {
+        let s = text.trimmingCharacters(in: .whitespaces)
+        switch s {
+        case "christmas", "xmas": return (12, 25, nil)
+        case "new year", "new years", "new year's", "new year’s", "new year's day", "new year’s day": return (1, 1, nil)
+        default: break
+        }
+        let iso = s.split(separator: "-", omittingEmptySubsequences: false)
+        if iso.count == 3, iso[0].count == 4, (1...2).contains(iso[1].count), (1...2).contains(iso[2].count),
+           let y = Int(iso[0]), let m = Int(iso[1]), let d = Int(iso[2]), (1...12).contains(m) {
+            return (m, d, y)
+        }
+        let words = s.replacingOccurrences(of: ",", with: " ").split(separator: " ").map(String.init)
+        guard (2...3).contains(words.count) else { return nil }
+        func day(_ w: String) -> Int? {
+            var t = w
+            for suffix in ["st", "nd", "rd", "th"] where t.hasSuffix(suffix) { t.removeLast(2); break }
+            guard t.count <= 2, let d = Int(t), (1...31).contains(d) else { return nil }
+            return d
+        }
+        var year: Int?
+        if words.count == 3 {
+            guard words[2].count == 4, let y = Int(words[2]), (1900...2200).contains(y) else { return nil }
+            year = y
+        }
+        if let m = monthNames[words[0]], let d = day(words[1]) { return (m, d, year) }
+        if let d = day(words[0]), let m = monthNames[words[1]] { return (m, d, year) }
+        return nil
+    }
+
+    static let offsetUnits: [String: Calendar.Component] = [
+        "day": .day, "days": .day, "week": .weekOfYear, "weeks": .weekOfYear, "wk": .weekOfYear, "wks": .weekOfYear,
+        "month": .month, "months": .month, "year": .year, "years": .year,
+    ]
+
+    /// "in 100 days", "100 days from now", "3 weeks from today", "10 days ago": the date then.
+    static func dayOffset(_ q: String, _ lower: String, now: Date, calendar: Calendar, locale: Locale) -> Answer? {
+        var words = lower.split(separator: " ").map(String.init)
+        var sign = 0
+        if words.first == "in" {
+            words.removeFirst()
+            sign = 1
+        } else if words.suffix(2) == ["from", "now"] || words.suffix(2) == ["from", "today"] {
+            words.removeLast(2)
+            sign = 1
+        } else if words.last == "ago" {
+            words.removeLast()
+            sign = -1
+        } else if words.last == "later" {
+            words.removeLast()
+            sign = 1
+        }
+        guard sign != 0, words.count == 2, words[0].count <= 5, words[0].allSatisfy({ $0.isASCII && $0.isNumber }),
+              let n = Int(words[0]), let unit = offsetUnits[words[1]],
+              let date = calendar.date(byAdding: unit, value: sign * n, to: now) else { return nil }
+        let full = DateFormatter()
+        full.locale = locale
+        full.timeZone = calendar.timeZone
+        full.dateStyle = .full
+        let iso = DateFormatter()
+        iso.locale = Locale(identifier: "en_US_POSIX")
+        iso.timeZone = calendar.timeZone
+        iso.dateFormat = "yyyy-MM-dd"
+        return Answer(question: q, value: full.string(from: date), note: iso.string(from: date), kind: .date)
+    }
+
+    /// The ISO 8601 week now, with the days it runs from and to.
+    static func weekNumber(now: Date, timeZone: TimeZone, locale: Locale) -> Answer? {
+        var iso = Calendar(identifier: .iso8601)
+        iso.timeZone = timeZone
+        iso.locale = locale
+        guard let week = iso.dateComponents([.weekOfYear], from: now).weekOfYear,
+              let span = iso.dateInterval(of: .weekOfYear, for: now) else { return nil }
+        let f = DateIntervalFormatter()
+        f.locale = locale
+        f.timeZone = timeZone
+        // Written as usual: the ISO calendar writes "2026 Jan 12–18".
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = timeZone
+        gregorian.locale = locale
+        f.calendar = gregorian
+        f.dateTemplate = "dMMMy"
+        let range = f.string(from: span.start, to: span.end.addingTimeInterval(-1))
+        return Answer(question: String(localized: "Week number"), value: String(week), note: range, kind: .date)
     }
 }
 

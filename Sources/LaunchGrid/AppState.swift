@@ -251,7 +251,10 @@ final class AppState {
 
     /// ⌘ held down alone for a moment: the shortcuts show (numbers on search results and page
     /// dots, a strip of the rest).
-    var commandHeld = false
+    var commandHeld = false {
+        // Let go after the shortcuts showed: the tour's last step is done.
+        didSet { if !commandHeld && oldValue { tourDid(.releasedCommand) } }
+    }
     /// The Keyboard Shortcuts panel is up over the grid (⌘/, the ⋯ menu, search, the menu-bar
     /// and Dock menus): every key the grid takes, by what it's for.
     var showingShortcuts = false {
@@ -268,6 +271,12 @@ final class AppState {
     var mouseDown = false
     /// Set when the first layout is made: the next show builds the grid in with a flourish.
     var introPending = false
+    /// The first-run tour's step being shown (`Tour.swift`); nil when there's no tour.
+    var tourStep: TourStep?
+    /// The tour is to start at the next show: the first layout was just made.
+    @ObservationIgnored var tourPending = false
+    /// Types the tour's example into the search field, a letter at a time.
+    @ObservationIgnored var tourTyping: Task<Void, Never>?
     /// The page (or the open folder's) bouncing at its first or last page: no page to turn to.
     @ObservationIgnored private var bouncing = false
     /// Bounces so far, for the debug scripts.
@@ -495,6 +504,7 @@ final class AppState {
         }
         if !hasGridFile {
             introPending = !Motion.reduced
+            tourPending = Self.toursByItself && !prefs.firstsSeen.contains(Self.tourSeen)
             prefs.firstsSeen.insert(Self.firstsChecked)
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
@@ -538,6 +548,7 @@ final class AppState {
         showChange(from: old)
         // The snapshot predates later scans; bring it up to date with the disk.
         reconcile()
+        tourDid(.undid)
     }
 
     func redo() {
@@ -573,7 +584,8 @@ final class AppState {
             let ids: [UUID]
             if !query.isEmpty {
                 ids = rankedResults(in: old, query: query, panes: prefs.searchSettingsPanes)
-                    .dropFirst(searchPage * old.capacity).prefix(old.capacity).map(\.id)
+                    .dropFirst(SearchLayout.pageStart(searchPage, grid: old))
+                    .prefix(SearchLayout.capacity(page: searchPage, grid: old)).map(\.id)
             } else if let id = openFolderID, let folder = old.folder(id) {
                 ids = folder.items.map(\.id)
             } else {
@@ -621,8 +633,8 @@ final class AppState {
         if !query.isEmpty {
             searchPage = min(searchPage, searchPageCount - 1)
             if let focusedID, let index = allSearchResults.firstIndex(where: { $0.id == focusedID }) {
-                searchPage = index / grid.capacity
-                focusIndex = index % grid.capacity
+                searchPage = SearchLayout.page(of: index, grid: grid)
+                focusIndex = index - SearchLayout.pageStart(searchPage, grid: grid)
             }
         }
         if let i = focusIndex {
@@ -1361,7 +1373,7 @@ final class AppState {
 
     @ObservationIgnored private var answerCache: (query: String, answer: Answer?)?
 
-    /// A sum, a conversion or a time elsewhere worked out from what was typed (`Answer`),
+    /// A sum, a conversion, a time elsewhere, a colour, a date and so on worked out from what was typed (`Answer`),
     /// shown under the search field; Return copies it.
     var searchAnswer: Answer? {
         let q = query
@@ -1377,6 +1389,7 @@ final class AppState {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(answer.value, forType: .string)
         showToast(String(localized: "Copied \(answer.value)"))
+        tourDid(.copiedAnswer)
     }
 
     /// Where `item` is on disk, for Show in Finder and Quick Look: an app, or the file a File
@@ -1419,13 +1432,46 @@ final class AppState {
             .map { $0 }
     }
 
-    var searchPageCount: Int {
-        max(1, (allSearchResults.count + grid.capacity - 1) / grid.capacity)
+    /// The line under the top hit's name: what it is, where it is and when LaunchGrid last
+    /// opened it ("Running · In Writing · Opened 2 hours ago"). Nil with nothing to say.
+    func searchContext(_ item: GridItem, now: Date = Date()) -> String? {
+        var parts: [String] = []
+        switch item {
+        case .app(let app):
+            if isNew(app) { parts.append(String(localized: "New")) }
+            if isRunning(app) { parts.append(String(localized: "Running")) }
+        case .folder(let f):
+            parts.append(f.actions.isEmpty ? String(localized: "\(f.items.count) apps") : String(localized: "\(f.items.count) items"))
+        case .action(let a):
+            if SettingsPane.pane(for: a.id) != nil { return String(localized: "System Settings") }
+            if AppCommand.command(for: a.id) != nil { return "LaunchGrid" }
+            parts.append(ActionEditorModel.KindChoice(a.kind).title)
+        }
+        if let loc = grid.locate(item.id), loc.folderIndex != nil, let folder = grid.item(at: ItemLocation(page: loc.page, index: loc.index))?.folder {
+            parts.append(String(localized: "In \(folder.name)"))
+        }
+        if let opened = prefs.usage.lastOpened(item) {
+            if now.timeIntervalSince(opened) < 60 {
+                parts.append(String(localized: "Opened just now"))
+            } else {
+                let formatter = RelativeDateTimeFormatter()
+                formatter.unitsStyle = .full
+                let ago = formatter.localizedString(for: min(opened, now), relativeTo: now)
+                parts.append(String(localized: "Opened \(ago)"))
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// The matches shown on the current search page.
+    var searchPageCount: Int {
+        SearchLayout.pageCount(results: allSearchResults.count, grid: grid)
+    }
+
+    /// The matches shown on the current search page: the first holds the top hit on a row of
+    /// its own (`SearchLayout`), so one row fewer besides it.
     var searchResults: [Search.Match] {
-        Array(allSearchResults.dropFirst(searchPage * grid.capacity).prefix(grid.capacity))
+        Array(allSearchResults.dropFirst(SearchLayout.pageStart(searchPage, grid: grid))
+            .prefix(SearchLayout.capacity(page: searchPage, grid: grid)))
     }
 
     func goToSearchPage(_ page: Int) {
@@ -2279,6 +2325,7 @@ final class AppState {
             sortWithWave({ [folders = prefs.folderPlacement] in $0.sortEverythingByColour(folders: folders, hue: { $0.colourHue }) }) { [self] in
                 showToast(hadTitles ? String(localized: "Sorted by colour; page titles were cleared — ⌘Z to undo")
                           : String(localized: "Sorted by colour — ⌘Z to undo"), undoable: true)
+                tourDid(.sorted)
             }
         }
     }
@@ -2375,6 +2422,7 @@ final class AppState {
         refreshSuggestions()
         isShown = true
         showCount &+= 1
+        tourDidShow()
         // Another icon style chosen since: every icon is drawn again in it. macOS can go on
         // handing out the old style's icons for a few seconds after the switch: again, after that.
         let style = IconProvider.systemStyle
@@ -2433,6 +2481,8 @@ final class AppState {
         mouseDown = false
         landing = nil
         introPending = false
+        tourTyping?.cancel()
+        tourTyping = nil
         query = ""
         openFolderID = nil
         editing = false

@@ -171,7 +171,7 @@ struct FlowLayout: Layout {
 /// dismiss, as a placeholder covers nothing.
 enum SearchPrompt: Hashable {
     case tip(AppState.Tip)
-    case sum, conversion, time, settingsPane
+    case sum, conversion, time, date, colour, settingsPane
     /// An app found by its initials: "vsc" for Visual Studio Code.
     case initials(letters: String, name: String)
     /// An action's keyword: typing it runs the action.
@@ -183,7 +183,7 @@ extension AppState {
     var searchPrompts: [SearchPrompt] {
         // Typing is what the field itself asks for: that tip isn't one more prompt.
         var tips = Tip.allCases.filter { $0 != .typeToSearch && !prefs.tipsSeen.contains($0.rawValue) }.map(SearchPrompt.tip)
-        var examples: [SearchPrompt] = [.sum, .conversion, .time]
+        var examples: [SearchPrompt] = [.sum, .conversion, .time, .date, .colour]
         if let (letters, name) = initialsExample { examples.insert(.initials(letters: letters, name: name), at: 1) }
         if let action = grid.allActions.first(where: { !$0.keywords.isEmpty }), let word = action.keywords.first {
             examples.insert(.keyword(word: word, name: action.name), at: 2)
@@ -260,6 +260,8 @@ struct SearchPlaceholder: View {
         case .sum: Text("Try “12*7” or “200 + 10%”")
         case .conversion: Text("Try “5 km in mi”")
         case .time: Text("Try “3pm in Tokyo”")
+        case .date: Text("Try “days until dec 25” or “100 days from now”")
+        case .colour: Text("Try “#ff8800” or “255 in hex”")
         case .settingsPane: Text("Try “bluetooth” or “dark mode”")
         case .initials(let letters, let name): Text("Try “\(letters)” for \(name)")
         case .keyword(let word, let name): Text("Type “\(word)” to run \(name)")
