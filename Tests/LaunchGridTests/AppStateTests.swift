@@ -453,6 +453,18 @@ func installed(_ name: String) -> InstalledApp {
         #expect(state.grid.allApps.map(\.name) == ["A", "B", "C"], "built once, then reconciled as usual")
     }
 
+    @Test func theFirstLayoutFitsTheDisplayAndARebuildKeepsTheSize() {
+        let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
+        // A wide display's page area.
+        state.drag.pagerSize = CGSize(width: 3344, height: 1270)
+        state.buildWhenScanned(style: .alphabetical)
+        state.catalogScanned(["B", "A"].map(installed))
+        #expect((state.grid.rows, state.grid.columns) == (6, 12))
+        state.resize(rows: 4, columns: 5)
+        state.build(style: .byCategory)
+        #expect((state.grid.rows, state.grid.columns) == (4, 5), "a rebuild keeps the size chosen")
+    }
+
     @Test func aWaitingBuildGivesWayToALayoutChosenMeanwhile() {
         let state = AppState(prefs: testPreferences(), store: GridStore(url: TempDir.url.appendingPathComponent("grid.json")))
         state.buildWhenScanned(style: .alphabetical)
@@ -3842,6 +3854,32 @@ func installed(_ name: String) -> InstalledApp {
         #expect(BackgroundView.solidOpacity(0, reduceTransparency: false) == 1)
         #expect(abs(BackgroundView.solidOpacity(0.5, reduceTransparency: false) - 0.6) < 1e-9)
         #expect(BackgroundView.solidOpacity(0.9, reduceTransparency: false) >= 0.15)
+    }
+
+    @Test func theGlassTakesTheBackgroundsMostVividColour() throws {
+        // A mostly dark blue picture with a grey band: blue, brightened to show on the glass.
+        let side = 32
+        let space = CGColorSpaceCreateDeviceRGB()
+        let ctx = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(srgbRed: 0.05, green: 0.15, blue: 0.45, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: side, height: side / 3))
+        let image = try #require(ctx.makeImage())
+        let tint = try #require(BackgroundTint.of(image))
+        #expect(tint.blue > 0.8 && tint.blue > tint.red + 0.4 && tint.blue > tint.green + 0.3)
+
+        let grey = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        grey.setFillColor(CGColor(gray: 0.4, alpha: 1))
+        grey.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let greyImage = try #require(grey.makeImage())
+        #expect(BackgroundTint.of(greyImage) == nil, "a grey picture leaves the glass as it is")
+
+        #expect(BackgroundTint.of(NSColor(srgbRed: 0.12, green: 0.13, blue: 0.19, alpha: 1)) == nil, "the default solid colour is nearly grey")
+        let orange = try #require(BackgroundTint.of(NSColor.systemOrange))
+        #expect(orange.red > orange.blue + 0.5)
     }
 }
 

@@ -1,4 +1,5 @@
 import AppKit
+import os
 import CoreImage
 import SwiftUI
 import LaunchGridCore
@@ -47,6 +48,10 @@ struct BackgroundView: View {
         .modifier(BackgroundEntrance(zooms: prefs.background == .wallpaper || prefs.background == .image))
         .clipped()
         .ignoresSafeArea()
+        // The colour the glass takes on, read again with the picture.
+        .task(id: "\(refresh)|\(prefs.background)|\(prefs.customImagePath ?? "")|\(prefs.solidColorHex)|\(state.screenID)|\(prefs.tintFromBackground)") {
+            await readTint()
+        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)) { _ in
             // Only while it's in view: hidden, the panel's view lives on, and each switch would
             // read (and maybe blur) a picture no one sees. The next show looks it up anyway.
@@ -58,6 +63,30 @@ struct BackgroundView: View {
     /// Transparency, which asks for no see-through backgrounds.
     static func solidOpacity(_ transparency: Double, reduceTransparency: Bool) -> Double {
         reduceTransparency ? 1 : max(0.15, 1 - transparency * 0.8)
+    }
+
+    /// The background's colour for the glass: the solid colour, the picture's, or for the
+    /// others the wallpaper's (the blur and Liquid Glass show the desktop, mostly wallpaper).
+    private func readTint() async {
+        let prefs = state.prefs
+        guard prefs.tintFromBackground else { state.backgroundTint = nil; return }
+        let url: URL?
+        switch prefs.background {
+        case .solid:
+            url = nil
+        case .image:
+            url = prefs.customImagePath.map { URL(fileURLWithPath: $0) }
+        case .wallpaper, .material, .glass:
+            url = wallpaperURL
+        }
+        var tint: IconProvider.Tint?
+        if prefs.background == .solid {
+            tint = BackgroundTint.of(prefs.solidColor)
+        } else if let url {
+            tint = await Disk.run(on: ImageBlurCache.queue) { BackgroundTint.of(url) }
+        }
+        guard !Task.isCancelled else { return }
+        if state.backgroundTint != tint { state.backgroundTint = tint }
     }
 
     /// How many times the wallpaper was looked up, for the debug scripts.
@@ -323,4 +352,62 @@ extension NSScreen {
     static let stableKeyPrefix = "display-"
 
     static func isStableFrameKey(_ key: String) -> Bool { key.hasPrefix(stableKeyPrefix) }
+}
+
+/// The colour a background gives the glass over the grid: its most vivid colour, as an icon's
+/// glow takes, read from a small copy of the picture. nil for a grey one.
+enum BackgroundTint {
+    /// Pictures read before, by identity (path, file and contents), as each show asks again.
+    private static let cache = OSAllocatedUnfairLock(initialState: [String: IconProvider.Tint?]())
+
+    static func of(_ url: URL) -> IconProvider.Tint? {
+        let identity = ImageBlurCache.identity(of: url)
+        if let hit = cache.withLock({ $0[identity] }) { return hit }
+        let tint = read(url)
+        cache.withLock { cache in
+            if cache.count > 16 { cache.removeAll() }
+            cache[identity] = .some(tint)
+        }
+        return tint
+    }
+
+    private static func read(_ url: URL) -> IconProvider.Tint? {
+        // A dynamic or aerial wallpaper (`.madesktop`) is a small list naming a still picture
+        // of it, which shows its colours as well.
+        if url.pathExtension.lowercased() == "madesktop" {
+            guard let data = try? Data(contentsOf: url),
+                  let list = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let thumbnail = list["thumbnailPath"] as? String, !thumbnail.lowercased().hasSuffix(".madesktop") else { return nil }
+            return read(URL(fileURLWithPath: thumbnail))
+        }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 96,
+              ] as CFDictionary) else { return nil }
+        return of(image)
+    }
+
+    /// Drawn into a small premultiplied RGBA bitmap, the form `IconProvider.tint(of:)` reads.
+    static func of(_ image: CGImage) -> IconProvider.Tint? {
+        let side = 64
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: side * 4, bitsPerPixel: 32),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        context.cgContext.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+        context.flushGraphics()
+        return IconProvider.tint(of: rep)
+    }
+
+    static func of(_ color: NSColor) -> IconProvider.Tint? {
+        guard let c = color.usingColorSpace(.sRGB) else { return nil }
+        var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
+        c.getHue(&h, saturation: &s, brightness: &v, alpha: &a)
+        // The same bar as a picture's colour must clear (`IconProvider.tint(of:)`): a dark
+        // or greyish colour leaves the glass as it is.
+        guard s * s * v > 0.04 else { return nil }
+        guard let bright = NSColor(hue: h, saturation: min(s, 0.85), brightness: max(v, 0.85), alpha: 1).usingColorSpace(.sRGB) else { return nil }
+        return IconProvider.Tint(red: bright.redComponent, green: bright.greenComponent, blue: bright.blueComponent)
+    }
 }

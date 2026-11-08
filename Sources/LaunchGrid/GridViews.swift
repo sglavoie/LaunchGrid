@@ -15,6 +15,7 @@ struct GridRootView: View {
         // A folder or the rename card is modal: VoiceOver stays out of what's beneath it.
         let folderModal = state.openFolder != nil
         let editModal = state.textEdit != nil || state.showingShortcuts
+        let tint = state.prefs.tintFromBackground ? state.backgroundTint.map { Color(.sRGB, red: $0.red, green: $0.green, blue: $0.blue) } : nil
         ZStack {
             BackgroundView()
                 .contentShape(Rectangle())
@@ -140,6 +141,7 @@ struct GridRootView: View {
         .opacity(state.isShown || state.launchingID != nil ? 1 : 0)
         .animation(.easeOut(duration: 0.15), value: state.isShown)
         .environment(\.colorScheme, .dark)
+        .environment(\.backgroundTint, tint)
     }
 
     /// The open folder grows out of its tile and shrinks back into it: from the tile's place and
@@ -1828,6 +1830,7 @@ struct MenuEntry {
         entries += [
             .button(String(localized: "Sort This Page")) { if let pageID { state.sortPage(pageID) } },
             .button(String(localized: "Sort Everything")) { state.sortEverything() },
+            .button(String(localized: "Sort Everything by Colour")) { state.sortEverythingByColour() },
             .divider,
             .button(String(localized: "Add Missing Apps…")) { state.onAddMissing() },
             .divider,

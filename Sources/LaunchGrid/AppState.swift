@@ -228,6 +228,9 @@ final class AppState {
     private(set) var showCount = 0
     /// The display the overlay is on, whose wallpaper the background shows.
     var screenID: CGDirectDisplayID = 0
+    /// The background's own colour, which the glass over the grid takes on
+    /// (`Preferences.tintFromBackground`); nil for a grey one, or until it has been read.
+    var backgroundTint: IconProvider.Tint?
     /// Why the global shortcut could not be registered, shown in Settings.
     var hotkeyProblem: String?
     /// The Settings window's tab, by its label.
@@ -908,7 +911,7 @@ final class AppState {
         if !hasScanned { hasScanned = true }
         if let style = buildAfterScan {
             buildAfterScan = nil
-            if !hasGridFile { build(style: style) } else { reconcile() }
+            if !hasGridFile { build(style: style, fitToDisplay: true) } else { reconcile() }
         } else if hasGridFile {
             reconcile()
         }
@@ -1166,19 +1169,22 @@ final class AppState {
     }
 
     /// Lays out every installed app the user hasn't excluded, and those on the grid from
-    /// outside the scan folders (added with Browse), keeping the exclusions.
-    func build(style: BuildStyle) {
+    /// outside the scan folders (added with Browse), keeping the exclusions. `fitToDisplay`
+    /// (the first layout, from the welcome window) sizes the grid for the display instead of
+    /// keeping its size.
+    func build(style: BuildStyle, fitToDisplay: Bool = false) {
         var seen = Set<String>()
         let apps = (installed + outsideGridApps).filter { !grid.isExcluded($0) && seen.insert($0.path).inserted }
+        let size: (rows: Int, columns: Int) = fitToDisplay ? suggestedGridSize : (grid.rows, grid.columns)
         var new = GridBuilder.build(from: apps, style: style,
-                                    rows: grid.rows, columns: grid.columns)
+                                    rows: size.rows, columns: size.columns)
         new.removedBundleIDs = grid.removedBundleIDs
         replaceGrid(new, keepingActions: true)
     }
 
     /// Builds now, or once the first scan has found the installed apps.
     func buildWhenScanned(style: BuildStyle) {
-        if hasScanned { build(style: style) } else { buildAfterScan = style }
+        if hasScanned { build(style: style, fitToDisplay: !hasGridFile) } else { buildAfterScan = style }
     }
 
     // MARK: Choosing apps
@@ -2150,6 +2156,26 @@ final class AppState {
         // say how to get them back either way.
         showToast(hadTitles ? String(localized: "Sorted; page titles were cleared — ⌘Z to undo")
                   : String(localized: "Sorted everything — ⌘Z to undo"), undoable: true)
+    }
+
+    /// Sorts every item by its icon's colour, as a spectrum across the pages: red to purple,
+    /// then the grey icons by name. Icons not drawn yet are drawn first, as their colour is
+    /// read from the drawing.
+    func sortEverythingByColour() {
+        Task { @MainActor in
+            await drawIconsForColour(grid.pages.flatMap(\.items))
+            bringPageForward()
+            let hadTitles = grid.pages.contains { $0.title != nil }
+            apply { $0.sortEverythingByColour(folders: prefs.folderPlacement, hue: { $0.colourHue }) }
+            goToPage(0)
+            showToast(hadTitles ? String(localized: "Sorted by colour; page titles were cleared — ⌘Z to undo")
+                      : String(localized: "Sorted by colour — ⌘Z to undo"), undoable: true)
+        }
+    }
+
+    private func drawIconsForColour(_ items: [GridItem]) async {
+        let paths = items.flatMap { $0.members.compactMap { if case .app(let a) = $0 { a.path } else { nil } } }.filter { IconProvider.shared.cached($0) == nil }
+        await IconProvider.shared.renderAll(paths)
     }
 
     /// What Sort Everything does, for the questions asked before it where the grid is out of view.

@@ -822,6 +822,45 @@ extension Grid {
         for p in pages.indices { pages[p].title = nil }
     }
 
+    /// Where a hue (0..<1) falls in the spectrum a colour sort runs through: from red, with the
+    /// reds just below 1 brought round to the start beside those just above 0.
+    static func spectrumPosition(_ hue: Double) -> Double {
+        let h = hue - hue.rounded(.down)
+        return (h + 0.04).truncatingRemainder(dividingBy: 1)
+    }
+
+    /// `items` in the order of the spectrum: red, orange, yellow, green, blue, purple, then the
+    /// grey ones (`hue` gives nil for them) by name. Equal hues keep name order. `folders`
+    /// places folders as a sort by name does; mixed in, a folder goes by its own hue.
+    static func colourSorted(_ items: [GridItem], folders: FolderPlacement, hue: (GridItem) -> Double?) -> [GridItem] {
+        let byTitle: (GridItem, GridItem) -> Bool = {
+            $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+        func spectrum(_ list: [GridItem]) -> [GridItem] {
+            let keyed = list.map { ($0, hue($0).map(spectrumPosition)) }
+            let coloured = keyed.compactMap { item, key in key.map { (item, $0) } }
+                .sorted { $0.1 != $1.1 ? $0.1 < $1.1 : byTitle($0.0, $1.0) }
+                .map(\.0)
+            let grey = keyed.filter { $0.1 == nil }.map(\.0).sorted(by: byTitle)
+            return coloured + grey
+        }
+        switch folders {
+        case .mixed:
+            return spectrum(items)
+        case .first, .last:
+            let f = spectrum(items.filter { $0.folder != nil })
+            let a = spectrum(items.filter { $0.folder == nil })
+            return folders == .first ? f + a : a + f
+        }
+    }
+
+    /// Sorts every top-level item by colour and re-flows them across pages, like
+    /// `sortEverything`: folders stay intact and page titles go.
+    public mutating func sortEverythingByColour(folders: FolderPlacement = .first, hue: (GridItem) -> Double?) {
+        flow(Grid.colourSorted(pages.flatMap(\.items), folders: folders, hue: hue))
+        for p in pages.indices { pages[p].title = nil }
+    }
+
     /// Lays `items` out over full pages; page `n` keeps the old page `n`'s ID and title.
     private mutating func flow(_ items: [GridItem]) {
         let old = pages

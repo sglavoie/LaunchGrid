@@ -608,6 +608,19 @@ enum DebugScript {
                                        state: state, window: window, overlay: overlay, snapDir: dir)
                 case "titles": print("titles:", state.grid.pages.map { "\($0.title ?? "-") #\($0.items.count) \($0.items.first?.title ?? "")" }); fflush(stdout)
                 case "sortall": state.sortEverything()
+                case "sortcolour": state.sortEverythingByColour()
+                case "tint":
+                    let t = state.backgroundTint
+                    print("tint: \(t.map { String(format: "%.2f,%.2f,%.2f", $0.red, $0.green, $0.blue) } ?? "none") on=\(state.prefs.tintFromBackground)")
+                    fflush(stdout)
+                case "tintpref": state.prefs.tintFromBackground = arg != "off"
+                case "fit":
+                    let fit = state.suggestedGridSize
+                    print("fit: \(fit.rows)x\(fit.columns) grid=\(state.grid.rows)x\(state.grid.columns) pager=\(Int(state.drag.pagerSize.width))x\(Int(state.drag.pagerSize.height))")
+                    fflush(stdout)
+                case "hues":
+                    print("hues: \(state.grid.pages.map { $0.items.map { "\($0.title)=\($0.colourHue.map { String(format: "%.2f", $0) } ?? "-")" } })")
+                    fflush(stdout)
                 case "windows":
                     print("windows: \(NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "(untitled)" : $0.title) \(Int($0.frame.width))x\(Int($0.frame.height))" })")
                     fflush(stdout)

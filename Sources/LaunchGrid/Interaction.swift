@@ -49,6 +49,24 @@ struct GridLayout {
         return max(min(24, most), size)
     }
 
+    /// The rows × columns that suit a page area of `size`: five rows, as Launchpad has, on
+    /// ordinary displays (more on tall ones, fewer in a small window), and as many columns as
+    /// keep each cell about 1.3 times as wide as it is tall. So a wide display gets more
+    /// columns rather than wide gaps between the icons, and its icons stay large.
+    static func suggestedSize(forPageArea size: CGSize) -> (rows: Int, columns: Int) {
+        guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return (5, 7) }
+        let rows = switch size.height {
+        case ..<420: 3
+        case ..<560: 4
+        case ..<1150: 5
+        case ..<1500: 6
+        default: 7
+        }
+        let cellHeight = size.height / CGFloat(rows)
+        let columns = Int((size.width / (cellHeight * 1.3)).rounded())
+        return (rows, min(max(columns, 4), 12))
+    }
+
     /// Whether a name fits under an icon of `iconSize`; when not, names are left out.
     func labelsFit(iconSize: CGFloat) -> Bool {
         iconSize + Self.labelHeight(iconSize: iconSize) <= cell.height
@@ -175,6 +193,20 @@ extension AppState {
 
     var pageLayout: GridLayout {
         GridLayout(size: drag.pagerFrame.size, rows: grid.rows, columns: grid.columns)
+    }
+
+    /// The grid size that suits the display the grid is on (`GridLayout.suggestedSize`): from
+    /// the pages' measured area, or before the grid has shown, the screen less the bar above
+    /// the pages, the dots below them and the margins beside them.
+    var suggestedGridSize: (rows: Int, columns: Int) {
+        var area = drag.pagerSize
+        if area.width <= 0 || area.height <= 0, let screen = BackgroundPicture.screen(screenID) {
+            let frame = prefs.windowMode == .fullScreen ? screen.frame : screen.visibleFrame
+            // As measured on a full-screen grid: the bar, title line, dots and their padding
+            // take about 290 points of the height (with the menu bar), the margins 96 of the width.
+            area = CGSize(width: frame.width - 96, height: frame.height - 290)
+        }
+        return GridLayout.suggestedSize(forPageArea: area)
     }
 
     var pageIconSize: CGFloat { pageLayout.iconSize(scale: prefs.iconScale, labels: prefs.showLabels) }

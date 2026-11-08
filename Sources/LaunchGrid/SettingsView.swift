@@ -389,6 +389,11 @@ struct AppearanceSettings: View {
                     }
                 }
             }
+            Section {
+                Toggle("Tint the glass with the background's colour", isOn: $prefs.tintFromBackground)
+                Text("The search field, buttons, folders and messages take on a hint of the wallpaper's colour, or the picture's.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Icons") {
                 ValueSlider(title: "Icon size", value: $prefs.iconScale, range: 0.6...1.4, valueText: percent(prefs.iconScale))
                 Toggle("Show app names", isOn: $prefs.showLabels)
@@ -494,6 +499,16 @@ struct LayoutSettings: View {
                 // 1...50: a step from outside the usual range would snap it into that range.
                 Stepper("Rows: \(rows)", value: $rows, in: min(2, grid.rows)...max(12, grid.rows))
                 Stepper("Columns: \(columns)", value: $columns, in: min(3, grid.columns)...max(16, grid.columns))
+                // A size made for this display: more columns on a wide one, fewer gaps.
+                let fit = state.suggestedGridSize
+                if (fit.rows, fit.columns) != (rows, columns) {
+                    HStack {
+                        Text("\(fit.rows) × \(fit.columns) fits this display best.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Use \(fit.rows) × \(fit.columns)") { rows = fit.rows; columns = fit.columns }
+                    }
+                }
                 if rows != grid.rows || columns != grid.columns {
                     let message = after != grid.pages.count ? Text("Items re-flow to fill each page in order: \(grid.pages.count) → \(after) pages.")
                         : moves ? Text("Items re-flow to fill each page in order, so some move to another page.")

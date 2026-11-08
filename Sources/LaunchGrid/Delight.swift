@@ -15,16 +15,23 @@ import LaunchGridCore
 struct GlassSurface<S: InsettableShape>: ViewModifier {
     let shape: S
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.backgroundTint) private var tint
 
     func body(content: Content) -> some View {
         let high = contrast == .increased
+        // A hint of the background's colour, but none with Increase Contrast, which asks for
+        // plain surfaces.
+        let hint = high ? nil : tint
         Group {
             if #available(macOS 26.0, *) {
-                content.glassEffect(.regular, in: shape)
+                content.glassEffect(hint.map { .regular.tint($0.opacity(0.3)) } ?? .regular, in: shape)
             } else {
-                content.background(.ultraThinMaterial, in: shape)
+                content
+                    .background { if let hint { shape.fill(hint.opacity(0.18)) } }
+                    .background(.ultraThinMaterial, in: shape)
             }
         }
+        .animation(.easeInOut(duration: 0.4), value: tint)
         .overlay(shape.strokeBorder(.white.opacity(high ? 0.55 : 0.12), lineWidth: high ? 1 : 0.5))
     }
 }
@@ -84,6 +91,8 @@ extension EnvironmentValues {
     /// How a tile is held: lifted under the pointer (1), pressed in (-1) or at rest (0), for
     /// its icon's shadow (`TileMotion` sets it, `ItemView` draws it).
     @Entry var tileLift: Int = 0
+    /// The background's colour for the glass to take on (`GlassSurface`), when the setting is on.
+    @Entry var backgroundTint: Color? = nil
 }
 
 /// The soft shadow under an icon, which spreads and drops as the tile lifts under the

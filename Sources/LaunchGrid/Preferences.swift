@@ -118,6 +118,9 @@ final class Preferences {
     /// No effects at all: no sliding, zooming or fading, whatever the system's Reduce Motion
     /// says (`Motion`).
     var reduceMotion: Bool { didSet { d.set(reduceMotion, forKey: "reduceMotion"); Motion.snappy = reduceMotion } }
+    /// The glass floating over the grid (search field, buttons, folders, messages) takes on the
+    /// background's own colour: the wallpaper's, the picture's or the solid colour's.
+    var tintFromBackground: Bool { didSet { d.set(tintFromBackground, forKey: "tintFromBackground") } }
     /// Apps added on their own since they were installed (auto-add), by path, not opened yet:
     /// a blue dot beside their names, as Launchpad shows, until they're first opened.
     var newAppPaths: Set<String> { didSet { d.set(newAppPaths.sorted(), forKey: "newAppPaths") } }
@@ -175,6 +178,7 @@ final class Preferences {
             "showSuggestions": false,
             "showRunningIndicator": true,
             "reduceMotion": false,
+            "tintFromBackground": true,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
         // Keyboard translation takes a 16-bit key code. A hand-edited value outside that
@@ -201,6 +205,7 @@ final class Preferences {
         showRunningIndicator = d.bool(forKey: "showRunningIndicator")
         reduceMotion = d.bool(forKey: "reduceMotion")
         Motion.snappy = d.bool(forKey: "reduceMotion")
+        tintFromBackground = d.bool(forKey: "tintFromBackground")
         newAppPaths = Set(d.stringArray(forKey: "newAppPaths") ?? [])
         tipsSeen = Set(d.stringArray(forKey: "tipsSeen") ?? [])
         pinchToOpen = d.bool(forKey: "pinchToOpen")

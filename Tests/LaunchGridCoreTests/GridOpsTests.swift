@@ -298,6 +298,33 @@ func titles(_ page: Page) -> [String] { page.items.map(\.title) }
         #expect(g.pages.map(\.id) == Array(ids.prefix(2)))
     }
 
+    @Test func sortEverythingByColourRunsThroughTheSpectrumThenGrey() {
+        // Hues by name: a red just below 1 starts the run, beside a red just above 0.
+        let hues: [String: Double] = ["Blue": 0.6, "Red": 0.99, "Orange": 0.08, "Scarlet": 0.01, "Green": 0.33, "Purple": 0.8]
+        var g = grid([["Zinc", "Blue", "Red"], ["Orange", "Ash", "Green"], ["Purple", "Scarlet"]])
+        g.pages[0].title = "Work"
+        let ids = g.pages.map(\.id)
+        g.sortEverythingByColour { hues[$0.title] }
+        #expect(g.pages.map(titles) == [["Red", "Scarlet", "Orange"], ["Green", "Blue", "Purple"], ["Ash", "Zinc"]])
+        #expect(g.pages.map(\.title) == [nil, nil, nil])
+        #expect(g.pages.map(\.id) == ids)
+    }
+
+    @Test func sortByColourPlacesFoldersLikeSortByName() {
+        let hues: [String: Double] = ["A": 0.6, "B": 0.1, "F": 0.3, "G": 0.05]
+        let make = { () -> Grid in
+            Grid(rows: 1, columns: 6, pages: [Page(items: [
+                .folder(Folder(name: "F", items: [.app(app("A"))])), .app(app("B")), .app(app("X")),
+                .folder(Folder(name: "G", items: [.app(app("Y"))])),
+            ])])
+        }
+        for (placement, expected) in [(FolderPlacement.first, ["G", "F", "B", "X"]), (.last, ["B", "X", "G", "F"]), (.mixed, ["G", "B", "F", "X"])] {
+            var g = make()
+            g.sortEverythingByColour(folders: placement) { hues[$0.title] }
+            #expect(titles(g.pages[0]) == expected, "\(placement)")
+        }
+    }
+
     @Test func renameAndResetName() {
         var g = grid([["A"]])
         let id = g.pages[0].items[0].id

@@ -384,6 +384,37 @@ extension GridItem {
     }
 }
 
+extension GridItem {
+    /// The hue (0..<1) a colour sort places it by: an app icon's own colour, an action
+    /// glyph's hue, a folder by its first app with a colour; nil for a grey one, a picture,
+    /// or an icon not drawn yet.
+    @MainActor var colourHue: Double? {
+        switch self {
+        case .app(let a): Self.hue(ofIconAt: a.path)
+        case .action(let a): Self.hue(of: a)
+        case .folder(let f):
+            f.items.lazy.compactMap { member -> Double? in
+                switch member {
+                case .app(let a): Self.hue(ofIconAt: a.path)
+                case .action(let a): Self.hue(of: a)
+                }
+            }.first
+        }
+    }
+
+    @MainActor private static func hue(ofIconAt path: String) -> Double? {
+        guard let t = IconProvider.shared.tint(path) else { return nil }
+        var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
+        NSColor(srgbRed: t.red, green: t.green, blue: t.blue, alpha: 1).getHue(&h, saturation: &s, brightness: &v, alpha: &a)
+        return Double(h)
+    }
+
+    @MainActor private static func hue(of action: Action) -> Double? {
+        if case .image = action.icon { return nil }
+        return ActionTile.hue(for: action.id)
+    }
+}
+
 // MARK: - Folder peek
 
 /// What's in a folder, fanned out over its tile while the pointer rests on it: its first apps,

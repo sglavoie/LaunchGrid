@@ -6,6 +6,10 @@ import Testing
 
 /// The motion and feedback state behind `Polish.swift`: what opening, removing and searching set.
 @MainActor @Suite(.tempDir) struct PolishTests {
+    @Test func tintingTheGlassIsOnByDefault() {
+        #expect(makeState(["A"]).prefs.tintFromBackground)
+    }
+
     @Test func reduceMotionIsOffByDefaultAndStopsTheAnimations() {
         let state = makeState(["A"])
         defer { state.prefs.reduceMotion = false }
@@ -117,3 +121,29 @@ import Testing
         #expect(!state.introPending)
     }
 }
+
+@Suite struct GridFitTests {
+    @Test func suggestedSizesSuitCommonDisplays() {
+        // Page areas: the screen less the bar above the pages, the dots below and the margins.
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 1344, height: 732)) == (5, 7), "13-inch MacBook Air, as Launchpad")
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 1416, height: 814)) == (5, 7), "14-inch MacBook Pro")
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 1824, height: 912)) == (5, 8), "1080p")
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 2464, height: 1272)) == (6, 9), "Studio Display")
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 3344, height: 1270)) == (6, 12), "ultrawide")
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 984, height: 1752)) == (7, 4), "portrait")
+        #expect(GridLayout.suggestedSize(forPageArea: CGSize(width: 700, height: 400)) == (3, 4), "small window")
+        #expect(GridLayout.suggestedSize(forPageArea: .zero) == (5, 7), "not measured yet")
+    }
+
+    @Test func aSuggestedSizeKeepsCellsNearlyAsTallAsWide() {
+        for width in stride(from: 600.0, through: 4000, by: 137) {
+            for height in stride(from: 300.0, through: 2000, by: 91) {
+                let (rows, columns) = GridLayout.suggestedSize(forPageArea: CGSize(width: width, height: height))
+                let aspect = (width / Double(columns)) / (height / Double(rows))
+                #expect((4...12).contains(columns) && (3...7).contains(rows))
+                if columns > 4 && columns < 12 { #expect(aspect > 1.0 && aspect < 1.7, "\(width)×\(height): \(rows)×\(columns)") }
+            }
+        }
+    }
+}
+

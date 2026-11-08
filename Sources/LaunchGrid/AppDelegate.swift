@@ -661,6 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: String(localized: "Add Missing Apps…"), action: #selector(showAddMissing), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Choose Apps…"), action: #selector(showChooseApps), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Sort Everything…"), action: #selector(sortEverything), keyEquivalent: "").target = self
+        menu.addItem(withTitle: String(localized: "Sort Everything by Colour…"), action: #selector(sortEverythingByColour), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "New Action…"), action: #selector(newAction), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: String(localized: "Save Grid File…"), action: #selector(saveGridFileFromMenu), keyEquivalent: "").target = self
@@ -762,8 +763,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     var libraryActions: LibraryActions {
         LibraryActions(
             rebuild: { [weak self] style in
-                self?.state.build(style: style)
-                self?.closeFirstRunIfDone()
+                // The first layout (the welcome window) fits the display; a rebuild keeps the size.
+                guard let self else { return }
+                self.state.build(style: style, fitToDisplay: !self.state.hasGridFile)
+                self.closeFirstRunIfDone()
             },
             importAppGrid: { [weak self] done in self?.importAppGrid(done: done) },
             importLaunchpad: { [weak self] done in self?.importLaunchpad(done: done) },
@@ -981,6 +984,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         alert.addButton(withTitle: String(localized: "Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         state.sortEverything()
+    }
+
+    @objc func sortEverythingByColour() {
+        overlay.hide(deactivate: false)
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Sort everything by colour?")
+        alert.informativeText = String(localized: "Apps and folders run through the colours of their icons, red to purple, with grey icons last, and fill each page before the next. Folders keep their apps; page titles are cleared. ⌘Z in the grid undoes it.")
+        alert.addButton(withTitle: String(localized: "Sort by Colour"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        state.sortEverythingByColour()
     }
 
     @objc func confirmRebuild() {
