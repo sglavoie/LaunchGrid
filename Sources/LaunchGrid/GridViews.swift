@@ -14,7 +14,7 @@ struct GridRootView: View {
     var body: some View {
         // A folder or the rename card is modal: VoiceOver stays out of what's beneath it.
         let folderModal = state.openFolder != nil
-        let editModal = state.textEdit != nil
+        let editModal = state.textEdit != nil || state.showingShortcuts
         ZStack {
             BackgroundView()
                 .contentShape(Rectangle())
@@ -106,6 +106,21 @@ struct GridRootView: View {
             }
             .animation(.easeOut(duration: 0.18), value: state.commandHeld)
             .allowsHitTesting(false)
+
+            ZStack {
+                if state.showingShortcuts {
+                    Color.black.opacity(0.5)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { state.showingShortcuts = false }
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                    ShortcutsPanel()
+                        .accessibilityAddTraits(.isModal)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.94).combined(with: .opacity))
+                }
+            }
+            .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.showingShortcuts)
         }
         .coordinateSpace(name: "root")
         .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: {
@@ -264,17 +279,18 @@ struct TopBar: View {
                     Button("Done") { state.editing = false }
                         .buttonStyle(PillButtonStyle(prominent: true))
                 }
-                Menu {
-                    BackgroundMenu()
+                // The AppKit menu ⇧⌃Return shows: a SwiftUI menu's key equivalents would answer
+                // keys the grid's key handler passes on, such as ⌘Z while renaming.
+                Button {
+                    state.onShowPageMenu()
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.white.opacity(0.85))
                         .modifier(Legible())
+                        .contentShape(Rectangle())
                 }
-                .menuStyle(.button)
                 .buttonStyle(.plain)
-                .menuIndicator(.hidden)
                 .fixedSize()
                 .help("More")
                 .accessibilityLabel("More")
@@ -1210,14 +1226,15 @@ struct SearchResultsView: View {
                 if let i = state.focusIndex, let match = results[safe: i] {
                     FocusHalo(center: layout.center(i),
                               size: FocusHalo.size(iconSize: icon, labels: labels, cell: layout.cell,
-                                                   caption: match.argument != nil || match.item.action.flatMap { SettingsPane.pane(for: $0.id) } != nil),
+                                                   caption: match.argument != nil || match.item.action.map { SettingsPane.pane(for: $0.id) != nil || AppCommand.command(for: $0.id) != nil } == true),
                               tint: match.item.hoverTint)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
                     let pane = match.item.action.flatMap { SettingsPane.pane(for: $0.id) }
+                    let command = match.item.action.flatMap { AppCommand.command(for: $0.id) }
                     ItemView(item: match.item, iconSize: icon, focused: state.focusIndex == i, argument: match.argument,
                              query: match.argument == nil ? state.query : nil,
-                             caption: pane == nil ? nil : String(localized: "System Settings"))
+                             caption: pane != nil ? String(localized: "System Settings") : command != nil ? "LaunchGrid" : nil)
                         .overlay(alignment: .topLeading) {
                             // ⌘ held: ⌘ and this number opens it.
                             if state.commandHeld && i < 9 { KeyBadge(text: "⌘\(i + 1)").offset(x: 4, y: 2) }
@@ -1666,15 +1683,17 @@ struct MenuEntry {
     var kind: Kind
     var enabled = true
     var destructive = false
+    /// The key that does the same from the grid, shown beside the title (`MenuKey`).
+    var key: MenuKey?
 
     /// How many item menus were built, for the debug scripts.
     nonisolated(unsafe) static var builds = 0
 
     static var divider: MenuEntry { MenuEntry(kind: .divider) }
 
-    static func button(_ title: String, enabled: Bool = true, destructive: Bool = false,
+    static func button(_ title: String, enabled: Bool = true, destructive: Bool = false, key: MenuKey? = nil,
                        _ action: @escaping @MainActor () -> Void) -> MenuEntry {
-        MenuEntry(title: title, kind: .action(action), enabled: enabled, destructive: destructive)
+        MenuEntry(title: title, kind: .action(action), enabled: enabled, destructive: destructive, key: key)
     }
 
     static func submenu(_ title: String, _ entries: [MenuEntry]) -> MenuEntry {
@@ -1685,8 +1704,9 @@ struct MenuEntry {
     @MainActor
     static func item(_ item: GridItem, state: AppState) -> [MenuEntry] {
         builds += 1
-        // A System Settings pane found by search is in no layout: it can only be opened.
-        if case .action(let a) = item, SettingsPane.pane(for: a.id) != nil {
+        // A System Settings pane or a LaunchGrid command found by search is in no layout: it
+        // can only be opened.
+        if case .action(let a) = item, SettingsPane.pane(for: a.id) != nil || AppCommand.command(for: a.id) != nil {
             return [.button(String(localized: "Open")) { state.activateResult(Search.Match(item: item)) }]
         }
         let targets = state.targets(for: item.id)
@@ -1697,11 +1717,11 @@ struct MenuEntry {
                 guard let current = state.grid.item(a.id)?.app else { return }
                 state.launch(current)
             })
-            entries.append(.button(String(localized: "Show in Finder")) {
+            entries.append(.button(String(localized: "Show in Finder"), key: .showInFinder) {
                 guard let current = state.grid.item(a.id) else { return }
                 state.showInFinder(current)
             })
-            entries.append(.button(String(localized: "Quick Look")) {
+            entries.append(.button(String(localized: "Quick Look"), key: .quickLook) {
                 guard let current = state.grid.item(a.id), let url = state.fileURL(of: current) else { return }
                 state.onQuickLook(url)
             })
@@ -1711,7 +1731,9 @@ struct MenuEntry {
                     guard let current = state.grid.item(a.id)?.app else { return }
                     state.command(.hide, current)
                 })
-                entries.append(.button(String(localized: "Quit")) {
+                // ⌘⌫ quits the focused app outside edit mode and with nothing selected.
+                let quitKey: MenuKey? = !state.editing && state.selection.isEmpty ? .quitApp : nil
+                entries.append(.button(String(localized: "Quit"), key: quitKey) {
                     guard let current = state.grid.item(a.id)?.app else { return }
                     state.command(.quit, current)
                 })
@@ -1726,11 +1748,11 @@ struct MenuEntry {
                 state.run(current, argument: nil)
             })
             if case .openFile = a.kind {
-                entries.append(.button(String(localized: "Show in Finder")) {
+                entries.append(.button(String(localized: "Show in Finder"), key: .showInFinder) {
                     guard let current = state.grid.item(a.id) else { return }
                     state.showInFinder(current)
                 })
-                entries.append(.button(String(localized: "Quick Look")) {
+                entries.append(.button(String(localized: "Quick Look"), key: .quickLook) {
                     guard let current = state.grid.item(a.id), let url = state.fileURL(of: current) else { return }
                     state.onQuickLook(url)
                 })
@@ -1745,7 +1767,7 @@ struct MenuEntry {
                 })
             }
             if !multi {
-                entries.append(.button(String(localized: "Edit Action…")) { state.editAction(a.id) })
+                entries.append(.button(String(localized: "Edit Action…"), key: .editAction) { state.editAction(a.id) })
             }
         } else if case .folder(let f) = item {
             entries.append(.button(String(localized: "Open Folder")) { state.openFolder(f.id) })
@@ -1768,17 +1790,21 @@ struct MenuEntry {
         }
         // Actions don't go in folders yet.
         if multi && state.canGroup(targets) {
-            entries.append(.button(String(localized: "Group \(targets.count) Items")) { state.groupSelection(anchor: item.id) })
+            entries.append(.button(String(localized: "Group \(targets.count) Items"), key: state.selection.contains(item.id) ? .group : nil) {
+                state.groupSelection(anchor: item.id)
+            })
         }
         // Not from search results: the selection would stay behind, out of sight, once the
         // search is cleared (as ⌘A leaves search results alone).
         if state.query.isEmpty {
             let selected = state.selection.contains(item.id)
-            entries.append(.button(selected ? String(localized: "Deselect") : String(localized: "Select")) { state.toggleSelection(item.id) })
+            entries.append(.button(selected ? String(localized: "Deselect") : String(localized: "Select"), key: .select) { state.toggleSelection(item.id) })
         }
         entries.append(.divider)
+        // ⌫ removes the selection, or in edit mode the focused item.
+        let removeKey: MenuKey? = multi || state.editing ? .remove : nil
         entries.append(.button(multi ? String(localized: "Remove \(targets.count) Items") : String(localized: "Remove from Grid"),
-                               destructive: true) { state.remove(targets) })
+                               destructive: true, key: removeKey) { state.remove(targets) })
         return entries
     }
 
@@ -1787,12 +1813,12 @@ struct MenuEntry {
     static func page(state: AppState) -> [MenuEntry] {
         let pageID = state.grid.pages[safe: state.currentPage]?.id
         var entries: [MenuEntry] = [
-            .button(state.editing ? String(localized: "Done Editing") : String(localized: "Edit Layout")) { state.editing.toggle() },
+            .button(state.editing ? String(localized: "Done Editing") : String(localized: "Edit Layout"), key: .edit) { state.editing.toggle() },
             .divider,
-            .button(String(localized: "Undo"), enabled: state.canUndo) { state.undo() },
-            .button(String(localized: "Redo"), enabled: state.canRedo) { state.redo() },
+            .button(String(localized: "Undo"), enabled: state.canUndo, key: .undo) { state.undo() },
+            .button(String(localized: "Redo"), enabled: state.canRedo, key: .redo) { state.redo() },
             .divider,
-            .button(String(localized: "New Page")) { state.newPage() },
+            .button(String(localized: "New Page"), key: .newPage) { state.newPage() },
             .button(String(localized: "Edit Page Title…")) { if let pageID { state.beginPageTitleEdit(pageID) } },
             .button(String(localized: "New Action…")) { state.newAction(onPage: pageID) },
         ]
@@ -1804,7 +1830,9 @@ struct MenuEntry {
             .button(String(localized: "Sort Everything")) { state.sortEverything() },
             .divider,
             .button(String(localized: "Add Missing Apps…")) { state.onAddMissing() },
-            .button(String(localized: "Settings…")) { state.onOpenSettings() },
+            .divider,
+            .button(String(localized: "Keyboard Shortcuts"), key: .shortcuts) { state.showingShortcuts = true },
+            .button(String(localized: "Settings…"), key: .settings) { state.onOpenSettings() },
         ]
         return entries
     }
@@ -1825,6 +1853,10 @@ struct MenuEntry {
             case .action(let action):
                 let item = ActionMenuItem(title: entry.title, action: action)
                 item.isEnabled = entry.enabled
+                if let key = entry.key {
+                    item.keyEquivalent = key.key
+                    item.keyEquivalentModifierMask = key.modifiers
+                }
                 if entry.destructive {
                     // In red, as the right-click menu shows a destructive button.
                     item.attributedTitle = NSAttributedString(string: entry.title, attributes: [
@@ -1869,6 +1901,7 @@ struct MenuEntries: View {
             case .action(let action):
                 Button(entry.title, role: entry.destructive ? .destructive : nil) { action() }
                     .disabled(!entry.enabled)
+                    .keyboardShortcut(entry.key?.swiftUI)
             }
         }
     }

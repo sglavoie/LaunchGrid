@@ -677,6 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.setSubmenu(importMenu, for: importItem)
         menu.addItem(withTitle: String(localized: "Rebuild from Scratch…"), action: #selector(confirmRebuild), keyEquivalent: "").target = self
         menu.addItem(.separator())
+        menu.addItem(withTitle: String(localized: "Keyboard Shortcuts"), action: #selector(showShortcuts), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "LaunchGrid Support"), action: #selector(openSupport), keyEquivalent: "").target = self
         menu.addItem(withTitle: String(localized: "Privacy Policy"), action: #selector(openPrivacyPolicy), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -783,7 +784,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             },
             gesturesChanged: { [weak self] in self?.gestures.apply() },
             pinchUnavailable: { [weak self] in self?.gestures.pinchUnavailable ?? false },
-            requestPinchAccess: { [weak self] in self?.gestures.requestPinchAccess() }
+            requestPinchAccess: { [weak self] in self?.gestures.requestPinchAccess() },
+            showShortcuts: { [weak self] in self?.showShortcuts() }
         )
     }
 
@@ -859,6 +861,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func showOverlay() { overlay.show() }
+
+    /// The grid, with its Keyboard Shortcuts panel up (the menu-bar and Dock menus, Settings).
+    @objc func showShortcuts() {
+        guard state.hasGridFile else { return showFirstRun() }
+        overlay.show()
+        state.showingShortcuts = true
+    }
 
     // The App Store asks for both pages to be reachable from inside the app.
     static let website = URL(string: "https://launchgrid.sglavoie.com/")!

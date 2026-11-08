@@ -44,7 +44,7 @@ struct SearchHintLine: View {
         case .app: return Text("Open")
         case .folder: return Text("Open Folder")
         case .action(let a):
-            if SettingsPane.pane(for: a.id) != nil { return Text("Open") }
+            if SettingsPane.pane(for: a.id) != nil || AppCommand.command(for: a.id) != nil { return Text("Open") }
             if let argument = match.argument { return Text("Run with “\(argument)”") }
             return Text("Run")
         }
@@ -65,6 +65,8 @@ struct KeyHint: View {
                 .padding(.horizontal, 5).padding(.vertical, 1.5)
                 .background(.white.opacity(high ? 0.3 : 0.16), in: RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(high ? 0.5 : 0.18), lineWidth: 0.5))
+                // Whole, as "Space" or "⌥ ←→↑↓": the label gives way first.
+                .fixedSize()
             label
                 .font(.system(size: 12))
         }
@@ -90,36 +92,19 @@ struct KeyBadge: View {
     }
 }
 
-/// While ⌘ is held: the shortcuts there are for what's on screen, in a strip at the bottom.
+/// While ⌘ is held: the shortcuts there are for what's on screen (`KeyShortcut.strip`), in a
+/// strip at the bottom, ending with the one that shows them all.
 struct ShortcutStrip: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
-        let searching = !state.query.isEmpty
-        let entries: [(String, Text)] = searching ? [
-            ("⌘1–9", Text("Open result")),
-            ("⌘↩", Text("Show in Finder")),
-            ("⌘Y", Text("Quick Look")),
-            ("⌘F", Text("Clear search")),
-            ("⌃↩", Text("Item menu")),
-        ] : [
-            ("⌘1–9", Text("Go to page")),
-            ("⌘E", Text("Edit layout")),
-            ("⌘↩", Text("Show in Finder")),
-            ("⌘Y", Text("Quick Look")),
-            ("⌘⌫", Text("Quit app")),
-            ("⌘N", Text("New page")),
-            ("⌘G", Text("Group")),
-            ("⌘Z", Text("Undo")),
-            ("⌃↩", Text("Item menu")),
-            ("⌘,", Text("Settings")),
-        ]
-        FlowLayout(spacing: 16, lineSpacing: 8) {
-            ForEach(entries.indices, id: \.self) { i in
-                KeyHint(keys: entries[i].0, label: entries[i].1)
+        let entries = KeyShortcut.strip(KeyShortcut.Context.current(state))
+        // As wide as what's in it, up to 760 points: two keys mid-drag make a short strip.
+        FlowLayout(spacing: 16, lineSpacing: 8, maxWidth: 760) {
+            ForEach(entries) { entry in
+                KeyHint(keys: entry.keys, label: Text(entry.stripLabel))
             }
         }
-        .frame(maxWidth: 760)
         .padding(.horizontal, 18).padding(.vertical, 10)
         .glassSurface(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
@@ -133,6 +118,8 @@ struct ShortcutStrip: View {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
     var lineSpacing: CGFloat = 8
+    /// The widest it gets, whatever it's offered.
+    var maxWidth: CGFloat = .infinity
 
     private func rows(_ subviews: Subviews, width: CGFloat) -> [[(index: Int, size: CGSize)]] {
         var rows: [[(Int, CGSize)]] = [[]]
@@ -155,7 +142,7 @@ struct FlowLayout: Layout {
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? .infinity
+        let width = min(proposal.width ?? .infinity, maxWidth)
         let rows = rows(subviews, width: width)
         let widest: CGFloat = rows.map(rowWidth).max() ?? 0
         let heights: [CGFloat] = rows.map { row in row.map(\.size.height).max() ?? 0 }
@@ -166,7 +153,7 @@ struct FlowLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
-        for row in rows(subviews, width: bounds.width) {
+        for row in rows(subviews, width: min(bounds.width, maxWidth)) {
             let height: CGFloat = row.map(\.size.height).max() ?? 0
             var x = bounds.midX - rowWidth(row) / 2
             for entry in row {
@@ -239,7 +226,7 @@ struct TipLayer: View {
 
     private var shownTip: AppState.Tip? {
         guard state.isShown, state.hasGridFile, !state.introPending, state.toast == nil, state.query.isEmpty,
-              state.openFolderID == nil, !state.editing, !state.drag.active, !state.commandHeld, state.fileDrag == nil,
+              state.openFolderID == nil, !state.editing, !state.drag.active, !state.commandHeld, !state.showingShortcuts, state.fileDrag == nil,
               state.textEdit == nil else { return nil }
         return state.currentTip
     }
@@ -250,6 +237,8 @@ struct TipLayer: View {
             Text("Just type to search. Sums and conversions work too: try “12*7” or “5 km in mi”.")
         case .holdCommand:
             Text("Hold ⌘ to see the shortcuts.")
+        case .allShortcuts:
+            Text("Press ⌘/ to see every keyboard shortcut.")
         case .dropFile:
             Text("Dragging a file? Press \(KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers)) and drop it on an app to open it there.")
         }

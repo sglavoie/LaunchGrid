@@ -18,6 +18,10 @@ enum DebugScript {
     static var drawnPages: ClosedRange<Int>?
     /// The menu "menuhold" built, for "menurun".
     private static var heldMenu: [MenuEntry] = []
+    /// The keys the held menu's entries show, by title ("Edit Layout": "⌘E"), for scenarios.
+    static var heldMenuKeys: [String: String] {
+        Dictionary(heldMenu.compactMap { e in e.key.map { (e.title, $0.description) } }, uniquingKeysWith: { a, _ in a })
+    }
     /// What "runagain:yes|no" answers in place of asking whether to run another copy.
     static var runAgainAnswer: Bool?
     /// What "discardeditor:yes|no" answers in place of asking to discard an editor's changes.
@@ -870,6 +874,9 @@ enum DebugScript {
                 case "smenuhold":
                     // The first search result's right-click menu, a search-only action's too, for "menurun".
                     if let first = state.allSearchResults.first { heldMenu = MenuEntry.item(first.item, state: state) }
+                case "cmdheld":
+                    // As holding ⌘ alone for a moment does: the shortcut strip and number badges.
+                    state.commandHeld = arg != "off"
                 case "menutitles":
                     print("menutitles: \(heldMenu.map(\.title).filter { !$0.isEmpty })"); fflush(stdout)
                 case "pagemenuhold":

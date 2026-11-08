@@ -101,6 +101,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         installMonitors()
         textInput.onInsert = { [weak self] in self?.insertIntoSearch($0) }
         state.onQuickLook = { [weak self] in self?.toggleQuickLook($0) }
+        state.onShowPageMenu = { [weak self] in self?.showPageMenu() }
         state.onDragOut = { [weak self] in self?.dragOut($0, url: $1) ?? false }
         state.onKeepThroughFocusChange = { [weak self] in self?.focusGraceUntil = Date().addingTimeInterval(2) }
     }
@@ -175,7 +176,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func fileDragEntered(_ urls: [URL], at point: NSPoint) -> Bool {
-        guard isVisible, state.textEdit == nil, !state.drag.active else { return false }
+        guard isVisible, state.textEdit == nil, !state.showingShortcuts, !state.drag.active else { return false }
         state.beginFileDrag(urls)
         return fileDragMoved(to: point)
     }
@@ -259,7 +260,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         commandHoldTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(450))
-            guard let self, !Task.isCancelled, self.isVisible, !self.state.drag.active, self.state.textEdit == nil,
+            guard let self, !Task.isCancelled, self.isVisible, self.state.textEdit == nil, !self.state.showingShortcuts,
                   NSEvent.modifierFlags.intersection([.command, .option, .control, .shift]) == .command else { return }
             self.state.commandHeld = true
             self.state.noteTip(.holdCommand)
@@ -730,6 +731,22 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let code = Int(event.keyCode)
         let cmd = mods.contains(.command)
+        // The Keyboard Shortcuts panel has the keys while it's up: Esc, Return or ⌘/ again close
+        // it; ⌘W, ⌘Q and ⌘, still do what they say. Nothing else reaches the grid beneath it.
+        if state.showingShortcuts {
+            let key = cmd ? Self.shortcutKey(event) : ""
+            if code == kVK_Escape || code == kVK_Return || code == kVK_ANSI_KeypadEnter || key == "/" {
+                state.showingShortcuts = false
+            } else if key == "w" || key == "h" {
+                hide()
+            } else if key == "q" {
+                NSApp.terminate(nil)
+            } else if key == "," {
+                state.showingShortcuts = false
+                state.onOpenSettings()
+            }
+            return nil
+        }
         // Mid-drag, only Esc (cancel) and ⌘1…9 (carry the items to a page) do anything, even
         // while an input method composes: committing would start a search under the drag.
         if state.drag.active && code != kVK_Escape {
@@ -848,6 +865,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             case "g": state.groupSelection()
             case "n": state.newPage() // which clears the search and closes the folder first
             case ",": state.onOpenSettings()
+            // ⌘/ (or ⌘?, as the Help menu takes it): every shortcut, by section.
+            case "/", "?": state.showingShortcuts = true
             // ⌘H would hide the app around the grid, leaving its search, folder and edit mode
             // as they were; hide the grid itself. The panel can't be minimised: ⌘M would beep.
             case "w", "h": hide()
@@ -1161,8 +1180,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // A swipe that ends where it's no longer followed (a search typed, a rename or a drag
         // begun meanwhile) would leave the page part-way: it goes back.
         let ending = event.phase.contains(.ended) || event.phase.contains(.cancelled)
-        // The rename card edits the page it opened on: don't turn pages behind it.
-        guard let panel, event.window === panel, isVisible, !state.drag.active, state.textEdit == nil else {
+        // The rename card edits the page it opened on: don't turn pages behind it, nor behind
+        // the Keyboard Shortcuts panel, whose own list scrolls.
+        guard let panel, event.window === panel, isVisible, !state.drag.active, state.textEdit == nil, !state.showingShortcuts else {
             // The rest of a gesture that was blocked doesn't turn pages once the block lifts.
             if !event.phase.isEmpty { swipeAbandoned = !ending }
             if ending, event.window === panel { settleSwipe() }

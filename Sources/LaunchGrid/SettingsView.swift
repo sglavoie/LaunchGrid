@@ -83,6 +83,8 @@ struct LibraryActions: @unchecked Sendable {
     /// Whether macOS refused the pinch the access it needs, and asking it for that access.
     var pinchUnavailable: () -> Bool = { false }
     var requestPinchAccess: () -> Void = {}
+    /// Shows the grid with its Keyboard Shortcuts panel up.
+    var showShortcuts: () -> Void = {}
 }
 
 struct GeneralSettings: View {
@@ -100,6 +102,9 @@ struct GeneralSettings: View {
                 HotkeyRecorder()
                 Toggle("Enable global shortcut", isOn: $prefs.hotkeyEnabled)
                     .onChange(of: prefs.hotkeyEnabled) { actions?.hotkeyChanged(nil) }
+                LabeledContent("Keys in the grid") {
+                    Button("Show Keyboard Shortcuts") { actions?.showShortcuts() }
+                }
             }
             Section("Startup & Visibility") {
                 // The toggle shows what the system reports, so a failed change springs back.

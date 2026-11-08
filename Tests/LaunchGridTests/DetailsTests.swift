@@ -29,12 +29,15 @@ import os
         state.query = "a"
         #expect(state.currentTip == .holdCommand)
         state.noteTip(.holdCommand)
+        #expect(state.currentTip == .allShortcuts)
+        // Opening the Keyboard Shortcuts panel is what it says.
+        state.showingShortcuts = true
         #expect(state.currentTip == .dropFile)
         state.noteTip(.dropFile)
         #expect(state.currentTip == nil)
         // Kept in the settings.
         let again = Preferences(defaults: UserDefaults(suiteName: TempDir.suiteName(for: TempDir.url))!)
-        #expect(again.tipsSeen == ["typeToSearch", "holdCommand", "dropFile"])
+        #expect(again.tipsSeen == ["typeToSearch", "holdCommand", "allShortcuts", "dropFile"])
     }
 
     @Test func anAnswerComesBeforeTheResults() {

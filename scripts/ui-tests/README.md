@@ -67,7 +67,8 @@ Commands use the existing `DebugScript.swift` syntax, one per step:
 | `page:1`, `folder`, `focus:0`, `edit`, `select:0,1`, `fselect:0` | Set up a specific interaction context |
 | `search:beta`, `type:beta` | Set search directly or insert text at its caret |
 | `group`, `undo`, `redo`, `deletepage`, `movetopage:1` | Invoke app-state actions directly |
-| `menuhold`, `smenuhold`, `pagemenuhold`, `menurun:Sort This Page`, `menutitles` | Capture an item, first search result or page menu, then run a captured callback or print its entries |
+| `menuhold`, `smenuhold`, `focusmenuhold`, `pagemenuhold`, `menurun:Sort This Page`, `menutitles` | Capture an item, first search result, focused item or page menu, then run a captured callback or print its entries |
+| `cmdheld`, `cmdheld:off` | Show or hide the ⌘ shortcut strip and number badges, as holding ⌘ alone does |
 | `fakeinstall:Echo`, `autoadd:on` | Simulate a catalog update using the reconciler |
 | `pagetitle:First`, `titleedit` | Set a page title or open its editor |
 | `addaction:{"name": "X", "kind": {...}}`, `runaction:X,argument` | Add an action from its layout JSON (no `;` inside), or run one by name |
@@ -97,6 +98,9 @@ poll every 50 ms, require two consecutive matching samples, and fail after three
 | `editing`, `shown`, `dragging` | Booleans |
 | `textEdit` | `"item:Alpha"`, `"page:First"` or `""` |
 | `keyWindow`, `pagerReady`, `folderReady` | Window focus and measured layout readiness |
+| `shortcutsShown` | Whether the Keyboard Shortcuts panel is up |
+| `strip` | The IDs (`KeyShortcut.id`) of what the ⌘ strip shows, in order; `[]` when it's hidden |
+| `menuKeys` | Object mapping each held menu entry's title to the key it shows (`"⌘E"`), for those that show one |
 
 The driver retains its event/dwell timing to exercise gestures. Use readiness/state
 assertions between actions instead of adding arbitrary sleeps to scenarios. The shell runner

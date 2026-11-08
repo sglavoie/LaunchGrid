@@ -166,7 +166,7 @@ final class AppState {
     /// A one-line hint at the bottom of the grid, one at a time, each gone for good once
     /// what it says has been done (or it's dismissed).
     enum Tip: String, CaseIterable {
-        case typeToSearch, holdCommand, dropFile
+        case typeToSearch, holdCommand, allShortcuts, dropFile
     }
 
     /// The tip to show now, if any: the first not yet done.
@@ -196,6 +196,11 @@ final class AppState {
     /// ⌘ held down alone for a moment: the shortcuts show (numbers on search results and page
     /// dots, a strip of the rest).
     var commandHeld = false
+    /// The Keyboard Shortcuts panel is up over the grid (⌘/, the ⋯ menu, search, the menu-bar
+    /// and Dock menus): every key the grid takes, by what it's for.
+    var showingShortcuts = false {
+        didSet { if showingShortcuts { commandHeld = false; noteTip(.allShortcuts) } }
+    }
     /// Apps opened behind the grid (it stays up) that haven't finished launching: a ring turns
     /// around their tiles, as the Dock bounces their icons, which the grid covers.
     var launchingApps: Set<UUID> = []
@@ -243,6 +248,8 @@ final class AppState {
     @ObservationIgnored var onSaveFailure: ((_ title: String, _ detail: String) -> Void)?
     @ObservationIgnored var onOpenSettings: () -> Void = {}
     @ObservationIgnored var onAddMissing: () -> Void = {}
+    /// Opens the ⋯ menu under its button (`OverlayController.showPageMenu`).
+    @ObservationIgnored var onShowPageMenu: () -> Void = {}
     /// An extra scan folder was followed to where it moved, outside a rescan: watch and scan it there.
     @ObservationIgnored var onScanFoldersMoved: () -> Void = {}
     /// Opens the action editor on an action, or on a new one (nil) for the page with that ID.
@@ -1242,6 +1249,7 @@ final class AppState {
     private func rankedResults(in grid: Grid, query: String, panes: Bool) -> [Search.Match] {
         let usage = prefs.usage, now = Date()
         let found = Search.results(in: grid.allSearchItems, query: query, usage: { usage.score($0, at: now) })
+            + AppCommand.matches(query).map { Search.Match(item: .action($0.action)) }
         guard panes else { return found }
         let matched = SettingsPane.matches(query, in: SettingsPaneCatalog.available)
             .map { Search.Match(item: .action($0.action)) }
@@ -1612,6 +1620,7 @@ final class AppState {
     /// A search result clicked or chosen with Return: launched or run, or in edit mode revealed.
     func activateResult(_ match: Search.Match) {
         if case .action(let a) = match.item, let pane = SettingsPane.pane(for: a.id) { return openPane(pane) }
+        if case .action(let a) = match.item, let command = AppCommand.command(for: a.id) { return perform(command) }
         if editing { return reveal(match.item) }
         switch match.item {
         case .app(let a): launch(a)
@@ -1671,6 +1680,14 @@ final class AppState {
                 if Launcher.isUserCancel(error) { return }
                 reportRunFailure(of: action, error)
             }
+        }
+    }
+
+    /// Does what a LaunchGrid command found by search says. The search stays, for Esc to
+    /// come back to once the panel closes.
+    func perform(_ command: AppCommand) {
+        switch command {
+        case .keyboardShortcuts: showingShortcuts = true
         }
     }
 
@@ -1839,6 +1856,7 @@ final class AppState {
         case .folder(let f): openFolder(f.id)
         case .action(let a):
             if let pane = SettingsPane.pane(for: a.id) { return openPane(pane) }
+            if let command = AppCommand.command(for: a.id) { return perform(command) }
             run(a, argument: nil)
         }
     }
@@ -2268,6 +2286,7 @@ final class AppState {
     /// Resets transient state when the overlay closes.
     func didHide() {
         commandHeld = false
+        showingShortcuts = false
         pinchScale = 1
         endFileDrag()
         launchingID = nil

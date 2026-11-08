@@ -102,6 +102,7 @@ enum DebugUITest {
         "movetopage", "titleedit", "autoadd", "windowsize", "addaction", "runaction",
         "neweditor", "editaction", "editorfill", "editorsave", "editorcancel",
         "stopaction", "runagain", "open", "review", "replacelayout",
+        "smenuhold", "focusmenuhold", "cmdheld",
     ]
 
     /// How a run ended, as the snapshot's `lastRuns` says it: "exit:0", "signal:15",
@@ -168,6 +169,11 @@ enum DebugUITest {
             "lastOutput": .object(Dictionary(state.grid.allActions.compactMap { a in
                 state.lastRun[a.id].map { (a.name, Value.string($0.output)) }
             }, uniquingKeysWith: { a, _ in a })),
+            // The Keyboard Shortcuts panel; the IDs of what the ⌘ strip shows, [] when it's
+            // hidden; and the keys the held menu's entries show, by title.
+            "shortcutsShown": .bool(state.showingShortcuts),
+            "strip": .strings(state.commandHeld ? KeyShortcut.strip(KeyShortcut.Context.current(state)).map(\.id) : []),
+            "menuKeys": .object(DebugScript.heldMenuKeys.mapValues { Value.string($0) }),
             "keyWindow": .bool(overlay.window?.isKeyWindow == true),
             "pagerReady": .bool(state.drag.pagerFrame.width > 0 && state.drag.pagerFrame.height > 0),
             "folderReady": .bool(state.openFolder != nil && state.drag.folderGridFrame.width > 0 && state.drag.folderGridFrame.height > 0),

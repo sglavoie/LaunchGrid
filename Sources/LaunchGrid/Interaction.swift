@@ -298,8 +298,9 @@ extension AppState {
         drop()
     }
 
-    /// Whether dragging empty space turns pages: not over a search, an open folder or a rename.
-    private var canPan: Bool { query.isEmpty && openFolder == nil && textEdit == nil }
+    /// Whether dragging empty space turns pages: not over a search, an open folder, a rename or
+    /// the Keyboard Shortcuts panel.
+    private var canPan: Bool { query.isEmpty && openFolder == nil && textEdit == nil && !showingShortcuts }
 
     /// Whether the pan under way can go on: nothing it can't pan over opened, and the page it
     /// moves is still the one it started on.
@@ -315,7 +316,7 @@ extension AppState {
     // MARK: Drag lifecycle
 
     private func beginItemDrag(at start: CGPoint) -> Bool {
-        guard query.isEmpty, textEdit == nil else { return false }
+        guard query.isEmpty, textEdit == nil, !showingShortcuts else { return false }
         var hit: UUID?
         var source = DragController.Source.page
         // Only start on the icon itself; elsewhere a drag swipes pages (or does nothing in a folder).
