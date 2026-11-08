@@ -51,6 +51,7 @@ struct FocusHalo: View {
     let center: CGPoint
     let size: CGSize
     let tint: Color?
+    @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.reduceMotion) private var reduceMotion
 
@@ -68,6 +69,8 @@ struct FocusHalo: View {
             .overlay(shape.inset(by: -1).strokeBorder(.black.opacity(high ? 0.7 : 0.3), lineWidth: 1))
             .shadow(color: glow.opacity(high ? 0 : 0.45), radius: 10)
             .frame(width: size.width, height: size.height)
+            // The focused tile flying to its window takes its focus along: no empty ring behind.
+            .opacity(state.launchFlight == nil ? 1 : 0)
             .position(center)
             .animation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82), value: center)
             .animation(.easeOut(duration: 0.2), value: tint)
@@ -78,10 +81,15 @@ struct FocusHalo: View {
 
     /// Around a tile of `iconSize` in a cell of `cell`: the icon, its name under it when shown,
     /// and a margin, never wider than the cell.
-    /// `caption`: a second line under the name (a search result's argument or kind).
-    static func size(iconSize: CGFloat, labels: Bool, cell: CGSize, caption: Bool = false) -> CGSize {
-        let height = iconSize + 14 + (labels ? GridLayout.labelHeight(iconSize: iconSize) + (caption ? 12 : 0) : 0)
-        return CGSize(width: min(cell.width - 4, max(iconSize * 1.38, iconSize + 20)), height: min(cell.height, height))
+    /// `caption`: a second line under the name (a search result's argument or kind), which
+    /// the focus is tall enough for and, as far as the cell allows, wide enough for.
+    static func size(iconSize: CGFloat, labels: Bool, cell: CGSize, caption: String? = nil) -> CGSize {
+        let caption = labels ? caption : nil
+        let height = iconSize + 14 + (labels ? GridLayout.labelHeight(iconSize: iconSize) : 0)
+            + (caption != nil ? SearchLayout.captionHeight(iconSize: iconSize) : 0)
+        var width = max(iconSize * 1.38, iconSize + 20)
+        if let caption { width = max(width, ItemView.captionWidth(caption, iconSize: iconSize) + 24) }
+        return CGSize(width: min(cell.width - 4, width), height: min(cell.height, height))
     }
 }
 

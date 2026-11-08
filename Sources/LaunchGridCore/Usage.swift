@@ -81,15 +81,32 @@ public struct Usage: Equatable, Sendable {
     /// often enough lately to be a habit (`minimum`), at most `limit` of them.
     public func suggestions(at date: Date = Date(), calendar: Calendar = .current, limit: Int = 5,
                             minimum: Double = 1.5) -> [String] {
+        timeOfDayScores(at: date, calendar: calendar).filter { $0.score >= minimum }.prefix(limit).map(\.key)
+    }
+
+    /// The one item opened around this time of day so much more than anything else that the
+    /// grid can have it ready to open: the best of `suggestions`, opened at this time at least
+    /// `minimum` times lately and `lead` times as much as the next. Nil when nothing stands out.
+    public func prediction(at date: Date = Date(), calendar: Calendar = .current,
+                           minimum: Double = 3, lead: Double = 1.5) -> String? {
+        let scores = timeOfDayScores(at: date, calendar: calendar).prefix(2)
+        guard let best = scores.first, best.score >= minimum else { return nil }
+        if scores.count > 1, best.score < scores[scores.startIndex + 1].score * lead { return nil }
+        return best.key
+    }
+
+    /// Every item's score around this time of day, best first: the stretch `date` falls in,
+    /// and half as much the ones either side.
+    private func timeOfDayScores(at date: Date, calendar: Calendar) -> [(key: String, score: Double)] {
         let now = date.timeIntervalSinceReferenceDate
         let b = Self.bucket(date, calendar: calendar), n = Self.bucketCount
-        let scored = hours.compactMap { key, value -> (String, Double)? in
+        let scored = hours.compactMap { key, value -> (key: String, score: Double)? in
             let d = Self.decayed(value, to: now)
             guard d.count == n else { return nil }
             let s = d[b] + 0.5 * (d[(b + n - 1) % n] + d[(b + 1) % n])
-            return s >= minimum ? (key, s) : nil
+            return s > 0 ? (key, s) : nil
         }
-        return scored.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }.prefix(limit).map(\.0)
+        return scored.sorted { $0.score != $1.score ? $0.score > $1.score : $0.key < $1.key }
     }
 
     /// The keys of what was opened last, latest first, at most `limit` of them.

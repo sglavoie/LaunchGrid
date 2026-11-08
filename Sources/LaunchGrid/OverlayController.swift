@@ -103,6 +103,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         state.onQuickLook = { [weak self] in self?.toggleQuickLook($0) }
         state.onShowPageMenu = { [weak self] in self?.showPageMenu() }
         state.onDragOut = { [weak self] in self?.dragOut($0, url: $1) ?? false }
+        state.rootRect = { [weak self] in self?.rootRect($0) }
         state.onKeepThroughFocusChange = { [weak self] in self?.focusGraceUntil = Date().addingTimeInterval(2) }
     }
 
@@ -338,6 +339,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard content.bounds.insetBy(dx: -2, dy: -2).contains(local) else { return nil }
         let y = content.isFlipped ? local.y : content.bounds.height - local.y
         return CGPoint(x: local.x - state.drag.rootOrigin.x, y: y - state.drag.rootOrigin.y)
+    }
+
+    /// A rect in global display points with a top-left origin (Core Graphics') in root
+    /// coordinates, for an icon flying to a window (`LaunchFlight`).
+    private func rootRect(_ r: CGRect) -> CGRect? {
+        guard let panel, panel.isVisible, let content = panel.contentView else { return nil }
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        let inWindow = panel.convertPoint(fromScreen: NSPoint(x: r.minX, y: top - r.minY))
+        let local = content.convert(inWindow, from: nil)
+        let y = content.isFlipped ? local.y : content.bounds.height - local.y
+        return CGRect(x: local.x - state.drag.rootOrigin.x, y: y - state.drag.rootOrigin.y, width: r.width, height: r.height)
     }
 
     /// Whether ←/→ moved keyboard focus onto the empty page shown, which has nothing to focus.

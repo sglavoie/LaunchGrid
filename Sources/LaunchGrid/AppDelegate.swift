@@ -226,8 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.onHide = { [weak self] in self?.overlay.hide() }
         state.onHideForLaunch = { [weak self] in
             // Long enough to see the opened tile zoom (`OpenMotion`); none of it with Reduce Motion.
+            // Longer still for an icon flying to its window (`LaunchFlight`).
             let zoom = !Motion.reduced
-            self?.overlay.hide(deactivate: false, duration: zoom ? 0.2 : 0.12)
+            let flies = self?.state.launchFlight != nil
+            self?.overlay.hide(deactivate: false, duration: !zoom ? 0.12 : flies ? LaunchFlight.duration : 0.2)
         }
         state.onLaunchedBehind = { [weak self] in self?.overlay.openedBehind($0) }
         state.onError = { [weak self] title, detail in self?.showError(title, detail) }

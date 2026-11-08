@@ -161,13 +161,15 @@ final class AppState {
     var toastUndoable = false
     /// The item being opened as the grid hides: it zooms toward you while the rest recede.
     var launchingID: UUID?
+    /// The opened app's icon on its way to its window (`LaunchFlight`), when it has one in view.
+    var launchFlight: LaunchFlight?
     /// The last item opened with the grid staying up, and a count that bumps on each open, so
     /// its tile pulses every time.
     var launchPulse: (id: UUID, count: Int) = (UUID(), 0)
     /// The folder whose contents fan out above its tile while the pointer rests on it.
     var peekFolderID: UUID?
-    /// A hint the empty search field goes round with its other suggestions (`SearchPrompt`), each
-    /// gone for good once what it says has been done.
+    /// Something the grid can do that's been tried: kept, so the first answer's flourish
+    /// doesn't greet someone who has used search before (`First`).
     enum Tip: String, CaseIterable {
         case typeToSearch, holdCommand, allShortcuts, dropFile
     }
@@ -243,6 +245,10 @@ final class AppState {
     /// What was opened last, latest first, for the room left on the last page (`RecentShelf`);
     /// empty unless suggestions are turned on.
     private(set) var recents: [GridItem] = []
+    /// The one item opened around this time of day far more than anything else
+    /// (`Usage.prediction`): shown on the page, the grid comes up with the keyboard focus on
+    /// it, so the shortcut and Return open it. Nil unless suggestions are turned on.
+    private(set) var predictedID: UUID?
     /// Files dragged over the grid (`FileDrop.swift`).
     var fileDrag: FileDrag?
     @ObservationIgnored var fileDwell: FileDwell?
@@ -309,6 +315,9 @@ final class AppState {
     @ObservationIgnored var onHide: () -> Void = {}
     /// Hides without handing focus back, so the app being launched (or Finder) can take it.
     @ObservationIgnored var onHideForLaunch: () -> Void = {}
+    /// A rect in global display points (top-left origin, as Core Graphics has them) in root
+    /// coordinates, wired by the overlay; nil while it isn't up.
+    @ObservationIgnored var rootRect: (CGRect) -> CGRect? = { _ in nil }
     /// An app opened behind the grid, which stayed up: it comes forward when the grid hides.
     @ObservationIgnored var onLaunchedBehind: (NSRunningApplication) -> Void = { _ in }
     @ObservationIgnored var onError: (_ title: String, _ detail: String) -> Void = { _, _ in }
@@ -1353,6 +1362,7 @@ final class AppState {
         guard prefs.showSuggestions else {
             if !suggestions.isEmpty { suggestions = [] }
             if !recents.isEmpty { recents = [] }
+            predictedID = nil
             return
         }
         var byKey: [String: GridItem] = [:]
@@ -1369,6 +1379,17 @@ final class AppState {
         let latest = prefs.usage.recent(limit: 24).compactMap { byKey[$0] }
             .filter { $0.action.map { !paneIDs.contains($0.id) } ?? true }
         if latest.map(\.id) != recents.map(\.id) { recents = latest }
+        // A grid item only: a System Settings pane has no tile to focus.
+        let predicted = prefs.usage.prediction(at: date).flatMap { byKey[$0] }
+        predictedID = predicted.flatMap { paneIDs.contains($0.id) ? nil : $0.id }
+    }
+
+    /// As the grid shows: the keyboard focus on the predicted item (`predictedID`) when it's a
+    /// tile on the page shown, so Return opens it. Not over a search, a folder or the tour.
+    func focusPrediction() {
+        guard query.isEmpty, openFolderID == nil, !editing, tourStep == nil, focusIndex == nil,
+              let id = predictedID, let i = currentItems.firstIndex(where: { $0.id == id }) else { return }
+        focusIndex = i
     }
 
     @ObservationIgnored private var answerCache: (query: String, answer: Answer?)?
@@ -1520,6 +1541,7 @@ final class AppState {
         let knownPaths = Set(installed.map(\.path) + grid.allApps.map(\.path))
         let excludedPaths = Set(grid.removedBundleIDs.filter { $0.hasPrefix("/") })
         let otherTilePaths = Set(grid.allApps.filter { $0.id != app.id && $0.bundleID == app.bundleID }.map(\.path))
+        if hides { prepareFlight(for: app) }
         showOpening(app.id, hides: hides)
         if hides { onHideForLaunch() } else { showLaunching(app.id) }
         Task {
@@ -2423,6 +2445,7 @@ final class AppState {
         isShown = true
         showCount &+= 1
         tourDidShow()
+        focusPrediction()
         // Another icon style chosen since: every icon is drawn again in it. macOS can go on
         // handing out the old style's icons for a few seconds after the switch: again, after that.
         let style = IconProvider.systemStyle
@@ -2475,6 +2498,7 @@ final class AppState {
         pinchScale = 1
         endFileDrag()
         launchingID = nil
+        launchFlight = nil
         peekFolderID = nil
         launchingApps.removeAll()
         launchStarts.removeAll()

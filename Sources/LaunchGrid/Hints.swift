@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 import LaunchGridCore
 
-// What the grid tells you it can do: the answer and key hints under the search field, the
-// shortcuts ⌘ shows when held, and what the empty search field suggests trying (the tips among it).
+// What the grid tells you it can do: the answer under the search field, and the key hints and
+// shortcuts that holding ⌘ shows.
 
 /// Under the search field, in the page title's place: a sum or conversion worked out from what
-/// was typed (Return or a click copies it), else what Return and its companions do with the
-/// result they'd act on.
+/// was typed (Return or a click copies it), else, while ⌘ is held, what Return and its
+/// companions do with the result they'd act on. Unasked, the results speak for themselves.
 struct SearchHintLine: View {
     @Environment(AppState.self) private var state
 
@@ -17,7 +17,7 @@ struct SearchHintLine: View {
                 // One card while typing changes the answer: its value rolls to the new one.
                 AnswerCard(answer: answer)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
-            } else if let match = target {
+            } else if state.commandHeld, let match = target {
                 HStack(spacing: 16) {
                     KeyHint(keys: "↩", label: openLabel(match))
                     if state.fileURL(of: match.item) != nil, !state.editing {
@@ -31,6 +31,7 @@ struct SearchHintLine: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.82), value: state.searchAnswer != nil)
+        .animation(.easeOut(duration: 0.18), value: state.commandHeld)
     }
 
     /// The result Return acts on: the focused one, or the first.
@@ -165,112 +166,15 @@ struct FlowLayout: Layout {
     }
 }
 
-/// What the empty search field suggests after "Search": something to try, a different one each
-/// time the grid shows and every few seconds while it sits there. The tips not yet taken come
-/// round with the rest (`AppState.Tip`), until what they say has been done; there's nothing to
-/// dismiss, as a placeholder covers nothing.
-enum SearchPrompt: Hashable {
-    case tip(AppState.Tip)
-    case sum, conversion, time, date, colour, settingsPane
-    /// An app found by its initials: "vsc" for Visual Studio Code.
-    case initials(letters: String, name: String)
-    /// An action's keyword: typing it runs the action.
-    case keyword(word: String, name: String)
-}
-
-extension AppState {
-    /// What the empty search field can suggest, in the order it goes round them.
-    var searchPrompts: [SearchPrompt] {
-        // Typing is what the field itself asks for: that tip isn't one more prompt.
-        var tips = Tip.allCases.filter { $0 != .typeToSearch && !prefs.tipsSeen.contains($0.rawValue) }.map(SearchPrompt.tip)
-        var examples: [SearchPrompt] = [.sum, .conversion, .time, .date, .colour]
-        if let (letters, name) = initialsExample { examples.insert(.initials(letters: letters, name: name), at: 1) }
-        if let action = grid.allActions.first(where: { !$0.keywords.isEmpty }), let word = action.keywords.first {
-            examples.insert(.keyword(word: word, name: action.name), at: 2)
-        }
-        if prefs.searchSettingsPanes { examples.append(.settingsPane) }
-        // A tip after every example, while there are tips left.
-        var out: [SearchPrompt] = []
-        for example in examples {
-            out.append(example)
-            if !tips.isEmpty { out.append(tips.removeFirst()) }
-        }
-        return out + tips
-    }
-
-    /// An app on the grid whose name's initials find it, the same one for a while: one of up to
-    /// eight, picked by the day of the year.
-    private var initialsExample: (String, String)? {
-        let names = grid.allApps.map(\.name).filter { name in
-            let words = name.split(whereSeparator: { $0 == " " || $0 == "-" })
-            return (2...4).contains(words.count) && words.allSatisfy { $0.first?.isLetter == true }
-        }
-        // Three letters or more where there are such names: two can read as a prefix.
-        let long = names.filter { $0.split(whereSeparator: { $0 == " " || $0 == "-" }).count >= 3 }
-        let picks = Array(Set(long.isEmpty ? names : long)).sorted().prefix(8)
-        guard !picks.isEmpty else { return nil }
-        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
-        let name = picks[day % picks.count]
-        let letters = name.split(whereSeparator: { $0 == " " || $0 == "-" }).compactMap(\.first).map { String($0).lowercased() }.joined()
-        return (letters, name)
-    }
-}
-
-/// The empty search field's text: "Search" and, fainter, something to try (`SearchPrompt`).
+/// The empty search field's text: "Search", and nothing more. What to try is the tour's to
+/// show, once, rather than the field's every time the grid shows.
 struct SearchPlaceholder: View {
-    @Environment(AppState.self) private var state
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.reduceMotion) private var reduceMotion
-    /// Advances while the grid sits idle with nothing typed.
-    @State private var tick = 0
 
     var body: some View {
-        let high = contrast == .increased
-        let prompts = state.searchPrompts
-        let prompt = prompts.isEmpty ? nil : prompts[(state.showCount + tick) % prompts.count]
-        HStack(spacing: 10) {
-            Text("Search")
-                .foregroundStyle(.white.opacity(high ? 0.75 : 0.55))
-                .fixedSize()
-            ZStack(alignment: .leading) {
-                if let prompt {
-                    text(prompt)
-                        .foregroundStyle(.white.opacity(high ? 0.6 : 0.36))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .id(prompt)
-                        .transition(reduceMotion ? .opacity : .push(from: .bottom).combined(with: .opacity))
-                }
-            }
-            .clipped()
-        }
-        .animation(.spring(response: 0.5, dampingFraction: 0.9), value: prompt)
-        .task(id: state.isShown) {
-            guard state.isShown else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(7))
-                guard !Task.isCancelled else { return }
-                tick &+= 1
-            }
-        }
-    }
-
-    private func text(_ prompt: SearchPrompt) -> Text {
-        switch prompt {
-        case .sum: Text("Try “12*7” or “200 + 10%”")
-        case .conversion: Text("Try “5 km in mi”")
-        case .time: Text("Try “3pm in Tokyo”")
-        case .date: Text("Try “days until dec 25” or “100 days from now”")
-        case .colour: Text("Try “#ff8800” or “255 in hex”")
-        case .settingsPane: Text("Try “bluetooth” or “dark mode”")
-        case .initials(let letters, let name): Text("Try “\(letters)” for \(name)")
-        case .keyword(let word, let name): Text("Type “\(word)” to run \(name)")
-        case .tip(.holdCommand): Text("Hold ⌘ to see the shortcuts")
-        case .tip(.allShortcuts): Text("⌘/ shows every shortcut")
-        case .tip(.dropFile):
-            Text("Dragging a file? Press \(KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers)) to drop it on an app")
-        case .tip(.typeToSearch): Text("Just type")
-        }
+        Text("Search")
+            .foregroundStyle(.white.opacity(contrast == .increased ? 0.75 : 0.55))
+            .fixedSize()
     }
 }
 

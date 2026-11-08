@@ -110,11 +110,17 @@ enum FolderLayout {
     }
 }
 
+extension CGPoint {
+    /// This point moved down by `y` (up when negative).
+    func offset(y: CGFloat) -> CGPoint { CGPoint(x: x, y: self.y + y) }
+}
+
 /// Where search results go. On the first page the top hit stands alone on the first row,
 /// larger and centred, with a line about it under its name; the rest follow in rows of the
 /// grid's columns, each row centred, so a few results gather under the search field rather
-/// than along its left edge. Later pages hold plain centred rows. Drawing, hit-testing (file
-/// drops) and the arrow keys all read this.
+/// than along its left edge. With only a few results (`sharedTopRow`), they all stand on the
+/// first row, as large as the top hit. Later pages hold plain centred rows. Drawing,
+/// hit-testing (file drops) and the arrow keys all read this.
 struct SearchLayout {
     /// The page grid the results share their cells with.
     var grid: GridLayout
@@ -124,6 +130,13 @@ struct SearchLayout {
     var hero: Bool
     /// The least a row below the top hit may be: an ordinary icon, its name and a margin.
     var minRowHeight: CGFloat = 0
+    /// The line under the top hit's name (`captionHeight`), for its row to make room for;
+    /// 0 without names.
+    var captionRoom: CGFloat = 0
+
+    /// What the rows below the top hit may give up for it in a tight grid: most of their
+    /// margin, leaving their icons and names clear of each other.
+    static let rowSlack: CGFloat = 12
 
     var cell: CGSize { grid.cell }
 
@@ -134,14 +147,46 @@ struct SearchLayout {
         guard hero else { return cell.height }
         guard rows > 1 else { return grid.size.height }
         let others = max(minRowHeight, (grid.size.height - cell.height * 1.3) / CGFloat(rows - 1))
-        return max(cell.height, grid.size.height - others * CGFloat(rows - 1))
+        var height = max(cell.height, grid.size.height - others * CGFloat(rows - 1))
+        // A tight grid (large icons, many rows): the rows below take what they need and leave
+        // the top hit no more than an ordinary cell, short of room for its name and the line
+        // under it. They give up some of their margin for it.
+        let needed = minRowHeight + captionRoom
+        if height < needed {
+            let rest = (grid.size.height - height) / CGFloat(rows - 1)
+            let least = min(rest, minRowHeight - Self.rowSlack)
+            height = max(height, min(needed, grid.size.height - least * CGFloat(rows - 1)))
+        }
+        return height
     }
+
+    /// Whether the top hit's row has room for the line under its name. When even the rows
+    /// below giving up their margin isn't enough, it goes without, rather than running over
+    /// the row below.
+    var heroFitsCaption: Bool { !hero || heroRowHeight + 0.5 >= minRowHeight + captionRoom }
 
     /// The rows below the top hit's.
     var rowHeight: CGFloat {
         let rows = max(grid.rows, 1)
         guard hero, rows > 1 else { return cell.height }
         return (grid.size.height - heroRowHeight) / CGFloat(rows - 1)
+    }
+
+    /// At most this many results all stand on the top hit's row, as large as it.
+    static let sharedTopRow = 3
+
+    /// How many results are on the top hit's row: all of them when there are few, else the
+    /// top hit alone. None on later pages.
+    var topRowCount: Int { hero ? (count <= Self.sharedTopRow ? max(count, 1) : 1) : 0 }
+
+    /// Whether result `i` is on the top hit's row, drawn as large as it.
+    func inTopRow(_ i: Int) -> Bool { hero && i < topRowCount }
+
+    /// From one result's centre to the next along `row`: the top hit's row, holding larger
+    /// icons, spaces them wider, as far as the width allows.
+    func spacing(ofRow row: Int) -> CGFloat {
+        guard hero, row == 0, topRowCount > 1 else { return cell.width }
+        return max(cell.width, min(cell.width * 1.6, grid.size.width / CGFloat(topRowCount)))
     }
 
     private func rowTop(_ row: Int) -> CGFloat {
@@ -185,22 +230,23 @@ struct SearchLayout {
     /// Result `i`'s row, and its place along that row.
     func slot(_ i: Int) -> (row: Int, column: Int) {
         guard hero else { return (i / columns, i % columns) }
-        if i == 0 { return (0, 0) }
-        return (1 + (i - 1) / columns, (i - 1) % columns)
+        let top = topRowCount
+        if i < top { return (0, i) }
+        return (1 + (i - top) / columns, (i - top) % columns)
     }
 
     /// The index of the result at `column` along `row`, if there is one.
     func index(row: Int, column: Int) -> Int? {
         guard row >= 0, column >= 0, column < itemsInRow(row) else { return nil }
-        let i = hero ? (row == 0 ? 0 : 1 + (row - 1) * columns + column) : row * columns + column
+        let i = hero ? (row == 0 ? column : topRowCount + (row - 1) * columns + column) : row * columns + column
         return i < count ? i : nil
     }
 
     func itemsInRow(_ row: Int) -> Int {
         guard row >= 0, count > 0 else { return 0 }
         if hero {
-            if row == 0 { return 1 }
-            return max(0, min(columns, count - 1 - (row - 1) * columns))
+            if row == 0 { return min(count, topRowCount) }
+            return max(0, min(columns, count - topRowCount - (row - 1) * columns))
         }
         return max(0, min(columns, count - row * columns))
     }
@@ -208,8 +254,9 @@ struct SearchLayout {
     func center(_ i: Int) -> CGPoint {
         let (row, column) = slot(i)
         let n = CGFloat(max(itemsInRow(row), 1))
-        let left = (grid.size.width - n * cell.width) / 2
-        return CGPoint(x: left + (CGFloat(column) + 0.5) * cell.width, y: rowTop(row) + height(ofRow: row) / 2)
+        let step = spacing(ofRow: row)
+        let left = (grid.size.width - n * step) / 2
+        return CGPoint(x: left + (CGFloat(column) + 0.5) * step, y: rowTop(row) + height(ofRow: row) / 2)
     }
 
     /// The result under a point in local coordinates; nil between and beside them.
@@ -219,8 +266,9 @@ struct SearchLayout {
         let row = row(at: p.y)
         let n = itemsInRow(row)
         guard n > 0 else { return nil }
-        let left = (grid.size.width - CGFloat(n) * cell.width) / 2
-        let x = (p.x - left) / cell.width
+        let step = spacing(ofRow: row)
+        let left = (grid.size.width - CGFloat(n) * step) / 2
+        let x = (p.x - left) / step
         guard x >= 0 else { return nil }
         return index(row: row, column: Int(x))
     }
@@ -238,8 +286,21 @@ struct SearchLayout {
 
     // MARK: The top hit
 
+    /// How far up the others on the top hit's row stand, so their icons line up with its icon
+    /// when it has a line under its name (`captionHeight`) and they don't.
+    func topRowLift(heroIconSize: CGFloat, heroCaption: Bool) -> CGFloat {
+        topRowCount > 1 && heroCaption && heroFitsCaption ? Self.captionHeight(iconSize: heroIconSize) / 2 : 0
+    }
+
+    /// How wide a tile on the top hit's row is drawn: room for its icon and the line under
+    /// it, never past the next one's.
+    func topRowWidth(heroIconSize: CGFloat) -> CGFloat {
+        let wide = max(cell.width, heroIconSize * 1.9)
+        return topRowCount > 1 ? min(wide, spacing(ofRow: 0)) : wide
+    }
+
     /// The top hit's icon: larger than the rest, as far as its cell leaves room for its name
-    /// and the line under it.
+    /// and the line under it; in a tight grid, the same size as theirs.
     func heroIconSize(iconSize: CGFloat, labels: Bool) -> CGFloat {
         let wanted = iconSize * 1.3
         let room = labels
@@ -402,8 +463,10 @@ extension AppState {
 
     /// Where the search results on the page shown are (`SearchLayout`).
     var searchLayout: SearchLayout {
-        SearchLayout(grid: pageLayout, count: searchResults.count, hero: searchPage == 0,
-                     minRowHeight: SearchLayout.minRowHeight(iconSize: pageIconSize, labels: prefs.showLabels && pageLayout.labelsFit(iconSize: pageIconSize)))
+        let labels = prefs.showLabels && pageLayout.labelsFit(iconSize: pageIconSize)
+        return SearchLayout(grid: pageLayout, count: searchResults.count, hero: searchPage == 0,
+                            minRowHeight: SearchLayout.minRowHeight(iconSize: pageIconSize, labels: labels),
+                            captionRoom: labels ? SearchLayout.captionHeight(iconSize: pageIconSize) : 0)
     }
 
     var folderIconSize: CGFloat { folderIconSize(folderLayout) }

@@ -158,7 +158,10 @@ struct OpenMotion: ViewModifier {
         let scale: CGFloat = reduceMotion || launching == nil ? 1 : launching == id ? 1.3 : 0.92
         let pulse = state.launchPulse.id == id ? state.launchPulse.count : 0
         let still = reduceMotion
+        // Flying to its window, the ghost over the grid (`LaunchFlightLayer`) is the tile now.
+        let flying = state.launchFlight?.item.id == id
         content
+            .opacity(flying ? 0 : 1)
             .scaleEffect(scale)
             .animation(.easeOut(duration: 0.22), value: launching)
             .keyframeAnimator(initialValue: CGFloat(1), trigger: pulse) { view, s in

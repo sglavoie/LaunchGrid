@@ -104,6 +104,29 @@ struct UsageTests {
         #expect(usage.suggestions(at: morning.addingTimeInterval(Usage.halfLife * 3), calendar: calendar) == [])
     }
 
+    @Test func predictsOnlyWhatClearlyStandsOutAtThisTimeOfDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let mail = app("Mail"), music = app("Music"), xcode = app("Xcode")
+        let morning = Date(timeIntervalSince1970: 1_768_467_600)
+        let evening = morning.addingTimeInterval(12 * 3600)
+        var usage = Usage()
+        // Twice isn't a habit yet.
+        for _ in 0..<2 { usage.record(mail, at: morning, calendar: calendar) }
+        #expect(usage.prediction(at: morning, calendar: calendar) == nil)
+        // Four times, with nothing else close: ready to open.
+        for _ in 0..<2 { usage.record(mail, at: morning, calendar: calendar) }
+        #expect(usage.prediction(at: morning, calendar: calendar) == Usage.key(for: mail))
+        // Another opened nearly as often: no clear favourite.
+        for _ in 0..<3 { usage.record(xcode, at: morning, calendar: calendar) }
+        #expect(usage.prediction(at: morning, calendar: calendar) == nil)
+        // The evening has its own.
+        for _ in 0..<5 { usage.record(music, at: evening, calendar: calendar) }
+        #expect(usage.prediction(at: evening, calendar: calendar) == Usage.key(for: music))
+        // A habit long gone isn't predicted.
+        #expect(usage.prediction(at: evening.addingTimeInterval(Usage.halfLife * 3), calendar: calendar) == nil)
+    }
+
     @Test func hoursRoundTripBesideTheScores() {
         let mail = app("Mail")
         var usage = Usage()

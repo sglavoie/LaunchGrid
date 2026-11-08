@@ -79,6 +79,7 @@ struct GridRootView: View {
 
             DragLayer()
             LandingLayer()
+            LaunchFlightLayer()
 
             ZStack {
                 if let edit = state.textEdit {
@@ -935,7 +936,7 @@ struct ItemView: View {
                 .frame(maxWidth: iconSize * 1.5)
                 if let argument = argument ?? caption {
                     Text(verbatim: argument)
-                        .font(.system(size: max(10, min(12, iconSize * 0.13))))
+                        .font(.system(size: Self.captionFontSize(iconSize: iconSize)))
                         .foregroundStyle(.white.opacity(contrast == .increased ? 0.95 : 0.75))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -969,6 +970,15 @@ struct ItemView: View {
         // VoiceOver reads a folder's size after its name, and says an action is one.
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The line under a name (a search result's argument or kind).
+    static func captionFontSize(iconSize: CGFloat) -> CGFloat { max(10, min(12, iconSize * 0.13)) }
+
+    /// How wide `caption` is drawn under an icon of `iconSize`, for the focus to fit round it.
+    static func captionWidth(_ caption: String, iconSize: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: captionFontSize(iconSize: iconSize))
+        return ceil((caption as NSString).size(withAttributes: [.font: font]).width)
     }
 
     private var runningShown: Bool {
@@ -1295,6 +1305,16 @@ struct SearchResultsView: View {
     @Environment(\.reduceMotion) private var reduceMotion
     @AccessibilityFocusState private var voiceOverFocus: UUID?
 
+    /// The line under a result's name: the top hit says what it is, where it is and when it was
+    /// last opened, when its row has room for the line (`SearchLayout.heroFitsCaption`); a
+    /// System Settings pane or a LaunchGrid command says so.
+    private func caption(_ match: Search.Match, hero: Bool, fits: Bool) -> String? {
+        if hero { return fits ? state.searchContext(match.item) : nil }
+        if match.item.action.flatMap({ SettingsPane.pane(for: $0.id) }) != nil { return String(localized: "System Settings") }
+        if match.item.action.flatMap({ AppCommand.command(for: $0.id) }) != nil { return "LaunchGrid" }
+        return nil
+    }
+
     var body: some View {
         GeometryReader { geo in
             let layout = GridLayout(size: geo.size, rows: state.grid.rows, columns: state.grid.columns, maxCellAspect: GridLayout.pageCellAspect)
@@ -1302,8 +1322,12 @@ struct SearchResultsView: View {
             let results = state.searchResults
             let labels = state.prefs.showLabels && layout.labelsFit(iconSize: icon)
             let places = SearchLayout(grid: layout, count: results.count, hero: state.searchPage == 0,
-                                      minRowHeight: SearchLayout.minRowHeight(iconSize: icon, labels: labels))
+                                      minRowHeight: SearchLayout.minRowHeight(iconSize: icon, labels: labels),
+                                      captionRoom: labels ? SearchLayout.captionHeight(iconSize: icon) : 0)
             let heroIcon = places.heroIconSize(iconSize: icon, labels: labels)
+            // The others on the top hit's row line their icons up with its.
+            let lift = places.topRowLift(heroIconSize: heroIcon, heroCaption: labels && results.first.map {
+                $0.argument ?? caption($0, hero: true, fits: places.heroFitsCaption) } != nil)
             ZStack(alignment: .topLeading) {
                 // An answer is what was asked for: no "No Results" under it.
                 if results.isEmpty && state.searchAnswer == nil {
@@ -1313,23 +1337,22 @@ struct SearchResultsView: View {
                 }
                 if let i = state.focusIndex, let match = results[safe: i] {
                     let isHero = places.hero && i == 0
-                    FocusHalo(center: places.center(i),
-                              size: FocusHalo.size(iconSize: isHero ? heroIcon : icon, labels: labels,
-                                                   cell: CGSize(width: layout.cell.width, height: isHero ? places.heroRowHeight : places.rowHeight),
-                                                   caption: isHero ? state.searchContext(match.item) != nil || match.argument != nil
-                                                       : match.argument != nil || match.item.action.map { SettingsPane.pane(for: $0.id) != nil || AppCommand.command(for: $0.id) != nil } == true),
+                    let top = places.inTopRow(i)
+                    FocusHalo(center: places.center(i).offset(y: top && !isHero ? -lift : 0),
+                              size: FocusHalo.size(iconSize: top ? heroIcon : icon, labels: labels,
+                                                   cell: CGSize(width: top ? places.topRowWidth(heroIconSize: heroIcon) : layout.cell.width,
+                                                                height: top ? places.heroRowHeight : places.rowHeight),
+                                                   caption: match.argument ?? caption(match, hero: isHero, fits: places.heroFitsCaption)),
                               tint: match.item.hoverTint)
                 }
                 ForEach(Array(results.enumerated()), id: \.element.id) { i, match in
                     let isHero = places.hero && i == 0
-                    let pane = match.item.action.flatMap { SettingsPane.pane(for: $0.id) }
-                    let command = match.item.action.flatMap { AppCommand.command(for: $0.id) }
-                    // The top hit says what it is, where it is and when it was last opened.
-                    let caption = isHero ? state.searchContext(match.item)
-                        : pane != nil ? String(localized: "System Settings") : command != nil ? "LaunchGrid" : nil
-                    ItemView(item: match.item, iconSize: isHero ? heroIcon : icon, focused: state.focusIndex == i, argument: match.argument,
+                    // With a few results, they all stand on the top hit's row, as large as it.
+                    let top = places.inTopRow(i)
+                    let caption = caption(match, hero: isHero, fits: places.heroFitsCaption)
+                    ItemView(item: match.item, iconSize: top ? heroIcon : icon, focused: state.focusIndex == i, argument: match.argument,
                              query: match.argument == nil ? state.query : nil,
-                             caption: caption, captionWidth: isHero ? max(layout.cell.width, heroIcon * 1.9) - 12 : nil)
+                             caption: caption, captionWidth: top ? places.topRowWidth(heroIconSize: heroIcon) - 12 : nil)
                         .overlay(alignment: .topLeading) {
                             // ⌘ held: ⌘ and this number opens it.
                             if state.commandHeld && i < 9 { KeyBadge(text: "⌘\(i + 1)").offset(x: 4, y: 2) }
@@ -1342,10 +1365,10 @@ struct SearchResultsView: View {
                         .accessibilityAction { state.activateResult(match) }
                         .accessibilityFocused($voiceOverFocus, equals: match.id)
                         .contextMenu { ItemMenu(item: match.item) }
-                        .frame(width: isHero ? max(layout.cell.width, heroIcon * 1.9) : layout.cell.width,
-                               height: isHero ? places.heroRowHeight : places.rowHeight)
+                        .frame(width: top ? places.topRowWidth(heroIconSize: heroIcon) : layout.cell.width,
+                               height: top ? places.heroRowHeight : places.rowHeight)
                         .tileMatch(match.item.id, active: true)
-                        .position(places.center(i))
+                        .position(places.center(i).offset(y: top && !isHero ? -lift : 0))
                         // New matches grow in where they rank, dropped ones shrink away.
                         .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
                 }

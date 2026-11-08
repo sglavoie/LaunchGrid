@@ -4,8 +4,8 @@ import Testing
 @testable import LaunchGrid
 @testable import LaunchGridCore
 
-/// The first-impression pass: a grid that keeps its icons together, the search field's
-/// suggestions, the last page's shelf, the sort's wave, firsts and sounds.
+/// The first-impression pass: a grid that keeps its icons together, the last page's shelf,
+/// the sort's wave, firsts, sounds and the item ready to open as the grid shows.
 @MainActor @Suite(.tempDir) struct WowTests {
     @Test func aWideGridStandsCentredWithItsCellsNoWiderThanTheAspect() {
         // A 16:9 page area with 7 columns of 5 rows: cells would be 1.8 times as wide as tall.
@@ -30,25 +30,6 @@ import Testing
         #expect(layout.iconSize(scale: 1) >= layout.cell.height * 0.69)
     }
 
-    @Test func theSearchFieldGoesRoundWhatToTryWithTheTipsNotYetTaken() {
-        let state = makeState(["Visual Studio Code", "Notes"])
-        let prompts = state.searchPrompts
-        #expect(prompts.contains(.sum))
-        #expect(prompts.contains(.initials(letters: "vsc", name: "Visual Studio Code")))
-        #expect(prompts.contains(.tip(.holdCommand)))
-        #expect(!prompts.contains(.tip(.typeToSearch)), "typing is what the field itself asks for")
-        // A tip taken leaves the round.
-        state.noteTip(.holdCommand)
-        #expect(!state.searchPrompts.contains(.tip(.holdCommand)))
-        // An action's keyword is offered once there's one.
-        let gh = Action(name: "GitHub", keywords: ["gh"], kind: .openURL(template: "https://github.com/search?q={query}"))
-        state.apply { $0.pages[0].items.append(.action(gh)) }
-        #expect(state.searchPrompts.contains(.keyword(word: "gh", name: "GitHub")))
-        // System Settings panes only when search finds them.
-        state.prefs.searchSettingsPanes = false
-        #expect(!state.searchPrompts.contains(.settingsPane))
-    }
-
     @Test func usageKnowsWhatWasOpenedLast() {
         var usage = Usage()
         let a = GridItem.app(AppRef(bundleID: "a", path: "/A.app", name: "A"))
@@ -69,6 +50,28 @@ import Testing
         state.prefs.showSuggestions = false
         state.refreshSuggestions()
         #expect(state.recents.isEmpty)
+    }
+
+    @Test func theGridShowsWithTheFocusOnTheAppOpenedAtThisTimeOfDay() {
+        let state = makeState(["Mail", "Music", "Notes"])
+        let music = state.grid.allApps.first { $0.name == "Music" }!
+        state.didShow()
+        #expect(state.focusIndex == nil, "nothing stands out yet")
+        state.didHide()
+        for _ in 0..<4 { state.recordUse(.app(music)) }
+        state.didShow()
+        #expect(state.focusIndex == 1)
+        #expect(state.predictedID == music.id)
+        state.didHide()
+        // Not over a search or an open folder, nor with suggestions turned off.
+        state.query = "no"
+        state.didShow()
+        #expect(state.focusIndex == 0, "the search's own focus")
+        state.didHide()
+        state.prefs.showSuggestions = false
+        state.didShow()
+        #expect(state.focusIndex == nil)
+        #expect(state.predictedID == nil)
     }
 
     @Test func aSortWithTheGridHiddenHappensAtOnce() {

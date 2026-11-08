@@ -302,8 +302,7 @@ enum DebugScript {
                     // The first-impression pass's state at a glance.
                     let layout = state.pageLayout
                     let p = PointerDrift.shared.position
-                    let prompts = state.searchPrompts
-                    print("wow: inset=\(Int(layout.inset)) cell=\(Int(layout.cell.width))x\(Int(layout.cell.height)) icon=\(Int(state.pageIconSize)) pointer=\(p.x),\(p.y) tilt=\(String(format: "%.2f", state.drag.tilt)) wave=\(state.sortWave) celebrating=\(state.celebrating?.rawValue ?? "-") firsts=\(state.prefs.firstsSeen.sorted()) sparkles=\(state.toastSparkles) toast='\(state.toast ?? "-")' sounds=\(Sounds.requested) soundsOn=\(Sounds.enabled) engine=\(Sounds.engineRunning) recents=\(state.recents.prefix(8).map(\.title)) suggestions=\(state.suggestions.map(\.title)) prompts=\(prompts.count) prompt0=\(prompts.first.map { "\($0)" } ?? "-")")
+                    print("wow: inset=\(Int(layout.inset)) cell=\(Int(layout.cell.width))x\(Int(layout.cell.height)) icon=\(Int(state.pageIconSize)) pointer=\(p.x),\(p.y) tilt=\(String(format: "%.2f", state.drag.tilt)) wave=\(state.sortWave) celebrating=\(state.celebrating?.rawValue ?? "-") firsts=\(state.prefs.firstsSeen.sorted()) sparkles=\(state.toastSparkles) toast='\(state.toast ?? "-")' sounds=\(Sounds.requested) soundsOn=\(Sounds.enabled) engine=\(Sounds.engineRunning) recents=\(state.recents.prefix(8).map(\.title)) suggestions=\(state.suggestions.map(\.title)) predicted=\(state.predictedID.flatMap { state.grid.item($0)?.title } ?? "-")")
                     fflush(stdout)
                 case "tiltwatch":
                     // "tiltwatch:secs": the most the dragged icon leaned over the next secs, printed then.
@@ -465,7 +464,7 @@ enum DebugScript {
                     print("showstats: \(ShowTiming.summary) all=\(ShowTiming.samples.map { Int($0) })"); fflush(stdout)
                 case "polish":
                     // The motion and feedback state (`Polish.swift`), which snaps alone can't show.
-                    print("polish: showms=\(ShowTiming.lastMilliseconds.map { String(format: "%.1f", $0) } ?? "-") haptics=\(Haptics.count) bounces=\(state.bounceCount) launching=\(state.launchingID.flatMap { state.grid.item($0)?.title } ?? "-") pulse=\(state.launchPulse.count) landing=\(state.landing == nil ? "-" : "now") lastLanding='\(Landing.last)' toast='\(state.toast ?? "-")' undoable=\(state.toastUndoable) running=\(state.runningApps.count) runningShown=\(state.currentItems.filter { $0.app.map(state.isRunning) ?? false }.map(\.title)) intro=\(state.introPending) suggestions=\(state.noResultSuggestions.map(\.name)) results=\(state.searchResults.prefix(6).map(\.title))")
+                    print("polish: showms=\(ShowTiming.lastMilliseconds.map { String(format: "%.1f", $0) } ?? "-") haptics=\(Haptics.count) bounces=\(state.bounceCount) launching=\(state.launchingID.flatMap { state.grid.item($0)?.title } ?? "-") pulse=\(state.launchPulse.count) landing=\(state.landing == nil ? "-" : "now") lastLanding='\(Landing.last)' flight='\(LaunchFlight.last)' toast='\(state.toast ?? "-")' undoable=\(state.toastUndoable) running=\(state.runningApps.count) runningShown=\(state.currentItems.filter { $0.app.map(state.isRunning) ?? false }.map(\.title)) intro=\(state.introPending) suggestions=\(state.noResultSuggestions.map(\.name)) results=\(state.searchResults.prefix(6).map(\.title))")
                     let tints = state.currentItems.prefix(6).map { item -> String in
                         guard case .app(let a) = item, let t = IconProvider.shared.tint(a.path) else { return "\(item.title)=-" }
                         return "\(item.title)=" + String(format: "%.2f,%.2f,%.2f", t.red, t.green, t.blue)
