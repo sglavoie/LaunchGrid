@@ -142,34 +142,48 @@ struct SearchLayout {
 
     /// The top hit's row is taller than the rest, for its larger icon and the line under its
     /// name, out of the room the rows below have to spare.
-    var heroRowHeight: CGFloat {
-        let rows = max(grid.rows, 1)
-        guard hero else { return cell.height }
-        guard rows > 1 else { return grid.size.height }
-        let others = max(minRowHeight, (grid.size.height - cell.height * 1.3) / CGFloat(rows - 1))
-        var height = max(cell.height, grid.size.height - others * CGFloat(rows - 1))
-        // A tight grid (large icons, many rows): the rows below take what they need and leave
-        // the top hit no more than an ordinary cell, short of room for its name and the line
-        // under it. They give up some of their margin for it.
-        let needed = minRowHeight + captionRoom
-        if height < needed {
-            let rest = (grid.size.height - height) / CGFloat(rows - 1)
-            let least = min(rest, minRowHeight - Self.rowSlack)
-            height = max(height, min(needed, grid.size.height - least * CGFloat(rows - 1)))
-        }
-        return height
-    }
+    var heroRowHeight: CGFloat { rowHeights.hero }
+
+    /// The rows below the top hit's.
+    var rowHeight: CGFloat { rowHeights.rest }
 
     /// Whether the top hit's row has room for the line under its name. When even the rows
     /// below giving up their margin isn't enough, it goes without, rather than running over
     /// the row below.
     var heroFitsCaption: Bool { !hero || heroRowHeight + 0.5 >= minRowHeight + captionRoom }
 
-    /// The rows below the top hit's.
-    var rowHeight: CGFloat {
-        let rows = max(grid.rows, 1)
-        guard hero, rows > 1 else { return cell.height }
-        return (grid.size.height - heroRowHeight) / CGFloat(rows - 1)
+    /// The rows below the top hit's that hold results on this page.
+    private var rowsInUseBelow: Int {
+        let below = max(0, count - topRowCount)
+        return min(max(grid.rows, 1) - 1, (below + columns - 1) / columns)
+    }
+
+    /// The top hit's row and the rows below it. The top hit's row is meant to be 1.3 cells
+    /// tall, and at least tall enough for its name and caption. In a tight grid (large icons,
+    /// many rows) the rows below each want more than a cell, which would leave it no more than
+    /// one, crowding the row under it: it takes its height from the rows that hold no results
+    /// instead, as the page's bottom stays empty. Only rows in use count, so it keeps its
+    /// height as results come and go, until the page is full. Then the rows in use give up
+    /// some of their margin for its caption, and failing that, the caption goes.
+    private var rowHeights: (hero: CGFloat, rest: CGFloat) {
+        let rows = max(grid.rows, 1), h = grid.size.height
+        guard hero else { return (cell.height, cell.height) }
+        guard rows > 1 else { return (h, cell.height) }
+        let others = max(minRowHeight, (h - cell.height * 1.3) / CGFloat(rows - 1))
+        var heroHeight = max(cell.height, h - others * CGFloat(rows - 1))
+        var rest = (h - heroHeight) / CGFloat(rows - 1)
+        let needed = minRowHeight + captionRoom
+        let target = max(cell.height * 1.3, needed)
+        let used = CGFloat(rowsInUseBelow)
+        if heroHeight < target {
+            heroHeight = max(heroHeight, min(target, h - used * rest))
+        }
+        if heroHeight < needed, used > 0 {
+            let least = min(rest, minRowHeight - Self.rowSlack)
+            rest = max(least, min(rest, (h - needed) / used))
+            heroHeight = max(heroHeight, min(needed, h - used * rest))
+        }
+        return (heroHeight, rest)
     }
 
     /// At most this many results all stand on the top hit's row, as large as it.

@@ -103,8 +103,28 @@ import Testing
             print("tight \(rows)x\(height)@\(scale): icon \(Int(icon)) hero row \(Int(places.heroRowHeight)) rows \(Int(before.rowHeight))→\(Int(places.rowHeight)) caption \(places.heroFitsCaption)")
             // The rows below give up no more than their margin, and the rows still fill the page.
             #expect(places.rowHeight >= min(before.rowHeight, places.minRowHeight - SearchLayout.rowSlack) - 0.001)
-            #expect(abs(places.heroRowHeight + CGFloat(rows - 1) * places.rowHeight - height) < 0.001)
+            // The rows in use still fit the page.
+            let lastRow = places.slot(3).row
+            #expect(places.heroRowHeight + CGFloat(lastRow) * places.rowHeight <= height + 0.001)
         }
+        // A tight grid with a few results: the top hit's row takes its height from the empty
+        // rows below, a third more than a cell and room for its caption, so it doesn't crowd
+        // the row under it, and keeps that height as results are added until the page is full.
+        let tight = GridLayout(size: CGSize(width: 1400, height: 1000), rows: 6, columns: 5)
+        let icon = tight.iconSize(scale: 1.4, labels: true)
+        func places(_ n: Int) -> SearchLayout {
+            SearchLayout(grid: tight, count: n, hero: true,
+                         minRowHeight: SearchLayout.minRowHeight(iconSize: icon, labels: true),
+                         captionRoom: SearchLayout.captionHeight(iconSize: icon))
+        }
+        let seven = places(7)
+        #expect(seven.heroRowHeight >= tight.cell.height * 1.3 - 0.001)
+        #expect(seven.heroFitsCaption)
+        #expect(seven.rowHeight >= tight.cell.height - 0.001, "the rows in use keep their height")
+        #expect(places(12).heroRowHeight == seven.heroRowHeight)
+        // Full: everything fits the page again.
+        let full = places(SearchLayout.firstPageCapacity(Grid(rows: 6, columns: 5)))
+        #expect(full.heroRowHeight + 5 * full.rowHeight <= 1000.001)
         // With room to spare, it's larger than the rest, with its caption.
         let roomy = SearchLayout(grid: page, count: 4, hero: true, minRowHeight: 120, captionRoom: 18)
         #expect(roomy.heroIconSize(iconSize: 100, labels: true) > 100)
