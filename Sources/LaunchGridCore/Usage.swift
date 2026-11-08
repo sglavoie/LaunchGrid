@@ -92,6 +92,12 @@ public struct Usage: Equatable, Sendable {
         return scored.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }.prefix(limit).map(\.0)
     }
 
+    /// The keys of what was opened last, latest first, at most `limit` of them.
+    public func recent(limit: Int = 8) -> [String] {
+        entries.sorted { $0.value.at != $1.value.at ? $0.value.at > $1.value.at : $0.key < $1.key }
+            .prefix(limit).map(\.key)
+    }
+
     public func score(_ item: GridItem, at date: Date = Date()) -> Double {
         guard let key = Self.key(for: item), let entry = entries[key] else { return 0 }
         return Self.decayed(entry, to: date.timeIntervalSinceReferenceDate)

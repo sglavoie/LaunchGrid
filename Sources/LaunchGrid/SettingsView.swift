@@ -155,9 +155,9 @@ struct GeneralSettings: View {
                 Toggle("Find System Settings panes", isOn: $prefs.searchSettingsPanes)
                 Text("Typing “bluetooth” or “dark mode” offers that pane of System Settings, after your apps.")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Suggest apps for the time of day", isOn: $prefs.showSuggestions)
+                Toggle("Suggest apps", isOn: $prefs.showSuggestions)
                     .onChange(of: prefs.showSuggestions) { state.refreshSuggestions() }
-                Text("Above the first page, a row of what you open most around this time. Your pages stay as they are.")
+                Text("Above the first page, a row of what you open most around this time of day; in the room left on the last page, what you opened last. Your pages stay as they are.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Gestures") {
@@ -402,6 +402,12 @@ struct AppearanceSettings: View {
             Section("Motion") {
                 Toggle("Reduce motion", isOn: $prefs.reduceMotion)
                 Text("No sliding, zooming or fading: pages, folders and the grid itself change at once.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Sound") {
+                Toggle("Play sounds", isOn: $prefs.playSounds)
+                    .onChange(of: prefs.playSounds) { _, on in if on { Sounds.play(.folder) } }
+                Text("Soft sounds as the grid shows, a page turns, a folder forms and an icon lands. Silent when interface sound effects are off in System Settings › Sound.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -720,6 +726,7 @@ struct LibrarySettings: View {
                 HStack {
                     Button("Rebuild by Category…") { confirmRebuild = .byCategory }
                     Button("Rebuild Alphabetically…") { confirmRebuild = .alphabetical }
+                    Button("Rebuild by Colour…") { confirmRebuild = .byColour }
                 }
                 .disabled(!state.hasScanned)
                 Text(state.hasScanned ? "Lays out every installed app that isn't excluded from scratch, the same as the choices on the welcome screen."
@@ -1043,6 +1050,8 @@ struct FirstRunView: View {
             option("Build alphabetically", "All apps in name order.", "textformat.abc", requiresScan: true) {
                 actions.rebuild(.alphabetical)
             }
+            option("Build by colour", "Every icon by its colour, red through purple: a rainbow across the pages.",
+                   "paintpalette", requiresScan: true) { actions.rebuild(.byColour) }
             if LaunchpadImporter.appGridDatabaseURL != nil {
                 option("Import from AppGrid", "Bring over your AppGrid pages and folders.", "square.and.arrow.down") {
                     actions.importAppGrid(nil)

@@ -42,16 +42,25 @@ public enum BuildStyle: String, CaseIterable, Codable, Sendable {
     case byCategory
     /// Everything alphabetical.
     case alphabetical
+    /// Everything by its icon's colour, red through purple, then grey icons by name.
+    case byColour
 }
 
 public enum GridBuilder {
-    public static func build(from apps: [InstalledApp], style: BuildStyle, rows: Int, columns: Int) -> Grid {
+    /// `hue` reads an icon's colour for `.byColour` (nil for a grey one); without it, that
+    /// style comes out alphabetical.
+    public static func build(from apps: [InstalledApp], style: BuildStyle, rows: Int, columns: Int,
+                             hue: ((GridItem) -> Double?)? = nil) -> Grid {
         var grid = Grid(rows: rows, columns: columns)
         let sorted = apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         switch style {
         case .alphabetical:
             grid.pages = []
             grid.appendToFirstFree(sorted.map { .app($0.makeRef()) })
+        case .byColour:
+            grid.pages = []
+            grid.appendToFirstFree(sorted.map { .app($0.makeRef()) })
+            grid.sortEverythingByColour(hue: hue ?? { _ in nil })
         case .byCategory:
             let groups = Dictionary(grouping: sorted) { AppCategory.name(for: $0.category) }
             let order = groups.keys.sorted { a, b in

@@ -118,6 +118,8 @@ final class Preferences {
     /// No effects at all: no sliding, zooming or fading, whatever the system's Reduce Motion
     /// says (`Motion`).
     var reduceMotion: Bool { didSet { d.set(reduceMotion, forKey: "reduceMotion"); Motion.snappy = reduceMotion } }
+    /// Soft sounds as the grid shows, a page turns, a folder forms and an icon lands (`Sounds`).
+    var playSounds: Bool { didSet { d.set(playSounds, forKey: "playSounds"); Sounds.enabled = playSounds } }
     /// The glass floating over the grid (search field, buttons, folders, messages) takes on the
     /// background's own colour: the wallpaper's, the picture's or the solid colour's.
     var tintFromBackground: Bool { didSet { d.set(tintFromBackground, forKey: "tintFromBackground") } }
@@ -127,8 +129,10 @@ final class Preferences {
     /// A trackpad pinch opens the grid (`GestureWatcher`); spreading on the grid closes it.
     var pinchToOpen: Bool { didSet { d.set(pinchToOpen, forKey: "pinchToOpen") } }
     var hotCorner: HotCorner { didSet { d.set(hotCorner.rawValue, forKey: "hotCorner") } }
-    /// The tips at the bottom of the grid already taken or dismissed (`AppState.Tip`).
+    /// The tips already taken (`AppState.Tip`).
     var tipsSeen: Set<String> { didSet { d.set(tipsSeen.sorted(), forKey: "tipsSeen") } }
+    /// The firsts already marked with a flourish (`AppState.First`): each is marked once.
+    var firstsSeen: Set<String> { didSet { d.set(firstsSeen.sorted(), forKey: "firstsSeen") } }
     /// How often and how recently each item was opened, which search ranks by. Only LaunchGrid's
     /// own record of what it opened; nothing observes it.
     @ObservationIgnored var usage: Usage {
@@ -175,9 +179,10 @@ final class Preferences {
             "iconScale": 1.0,
             "showLabels": true,
             "searchSettingsPanes": true,
-            "showSuggestions": false,
+            "showSuggestions": true,
             "showRunningIndicator": true,
             "reduceMotion": false,
+            "playSounds": false,
             "tintFromBackground": true,
             "folderPlacement": FolderPlacement.first.rawValue,
         ])
@@ -205,9 +210,12 @@ final class Preferences {
         showRunningIndicator = d.bool(forKey: "showRunningIndicator")
         reduceMotion = d.bool(forKey: "reduceMotion")
         Motion.snappy = d.bool(forKey: "reduceMotion")
+        playSounds = d.bool(forKey: "playSounds")
+        Sounds.enabled = d.bool(forKey: "playSounds")
         tintFromBackground = d.bool(forKey: "tintFromBackground")
         newAppPaths = Set(d.stringArray(forKey: "newAppPaths") ?? [])
         tipsSeen = Set(d.stringArray(forKey: "tipsSeen") ?? [])
+        firstsSeen = Set(d.stringArray(forKey: "firstsSeen") ?? [])
         pinchToOpen = d.bool(forKey: "pinchToOpen")
         hotCorner = HotCorner(rawValue: d.string(forKey: "hotCorner") ?? "") ?? .none
         usage = Usage(propertyList: d.dictionary(forKey: "usage"), hours: d.dictionary(forKey: "usageHours"))

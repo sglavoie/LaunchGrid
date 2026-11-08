@@ -318,8 +318,48 @@ struct BackgroundEntrance: ViewModifier {
     }
 }
 
+/// Where the pointer is over the overlay, from -1 to 1 each way from its middle, while the grid
+/// is up: the background picture drifts against it (`Parallax`), so the grid seems to float a
+/// little above it. Read from the overlay's own mouse-moved events only.
+@MainActor @Observable
+final class PointerDrift {
+    static let shared = PointerDrift()
+    private(set) var position: CGPoint = .zero
+    @ObservationIgnored private var monitor: Any?
+    @ObservationIgnored private weak var window: NSWindow?
+
+    /// Follows the pointer over `window` until `stop`.
+    func start(_ window: NSWindow) {
+        self.window = window
+        window.acceptsMouseMovedEvents = true
+        update()
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+            if event.window === self?.window { self?.update() }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    private func update() {
+        guard let frame = window?.frame, frame.width > 0, frame.height > 0 else { return }
+        let m = NSEvent.mouseLocation
+        let x = max(-1, min(1, (m.x - frame.midX) / (frame.width / 2)))
+        // Down the screen is positive, as in SwiftUI.
+        let y = max(-1, min(1, (frame.midY - m.y) / (frame.height / 2)))
+        // Steps of a hundredth: a still hand doesn't redraw the background.
+        let next = CGPoint(x: (x * 100).rounded() / 100, y: (y * 100).rounded() / 100)
+        if next != position { position = next }
+    }
+}
+
 /// A picture background drifts a little as the pages turn, slower than the icons, so the grid
-/// seems to float over it. It follows a swipe as it goes. Still with Reduce Motion.
+/// seems to float over it. It follows a swipe as it goes, and drifts a little against the
+/// pointer (`PointerDrift`). Still with Reduce Motion.
 struct Parallax: ViewModifier {
     @Environment(AppState.self) private var state
     @Environment(\.reduceMotion) private var reduceMotion
@@ -329,13 +369,20 @@ struct Parallax: ViewModifier {
         let pages = state.query.isEmpty ? state.grid.pages.count : 1
         let offset = reduceMotion ? 0 : Self.offset(page: state.currentPage, swipe: state.swipeOffset,
                                                     pageWidth: state.drag.pagerSize.width, pages: pages)
-        let reach = reduceMotion ? 0 : Self.reach(pages: pages)
+        let reach = reduceMotion ? 0 : Self.reach(pages: pages) + Self.pointerReach
+        let pointer = reduceMotion ? .zero : PointerDrift.shared.position
         content
-            // Just large enough that neither edge comes into view at the first or last page.
+            // Just large enough that neither edge comes into view at the first or last page,
+            // nor with the pointer at a corner.
             .scaleEffect(width > 0 && reach > 0 ? 1 + 2 * (reach + 4) / width : 1)
+            .offset(x: -pointer.x * Self.pointerReach, y: -pointer.y * Self.pointerReach)
+            .animation(.spring(response: 1.1, dampingFraction: 0.9), value: pointer)
             .offset(x: offset)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
+
+    /// How far the pointer at an edge moves the picture the other way.
+    static let pointerReach: CGFloat = 10
 
     /// How far the picture moves for each page: less the more pages there are, so the whole
     /// run stays within a few percent of the screen.

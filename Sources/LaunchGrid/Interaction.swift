@@ -8,14 +8,29 @@ struct GridLayout {
     var size: CGSize
     var rows: Int
     var columns: Int
+    /// The widest a cell may be, as a multiple of its height. Past it, the grid keeps that
+    /// shape and stands centred, with the margins beside it, so a grid with fewer columns than
+    /// its display suits keeps its icons together rather than spreading them to the edges.
+    /// Nil (folders): cells fill the width.
+    var maxCellAspect: CGFloat? = nil
+
+    /// The page's grid: no wider a cell than this many times its height.
+    static let pageCellAspect: CGFloat = 1.3
 
     var cell: CGSize {
-        CGSize(width: size.width / CGFloat(max(columns, 1)), height: size.height / CGFloat(max(rows, 1)))
+        let height = size.height / CGFloat(max(rows, 1))
+        var width = size.width / CGFloat(max(columns, 1))
+        if let maxCellAspect, height > 0 { width = min(width, height * maxCellAspect) }
+        return CGSize(width: width, height: height)
     }
+
+    /// From the left edge to the first column: the margin each side of a grid held to
+    /// `maxCellAspect`, else nothing.
+    var inset: CGFloat { max(0, (size.width - cell.width * CGFloat(max(columns, 1))) / 2) }
 
     func center(_ index: Int) -> CGPoint {
         let c = index % columns, r = index / columns
-        return CGPoint(x: (CGFloat(c) + 0.5) * cell.width, y: (CGFloat(r) + 0.5) * cell.height)
+        return CGPoint(x: inset + (CGFloat(c) + 0.5) * cell.width, y: (CGFloat(r) + 0.5) * cell.height)
     }
 
     /// Cell under a point in local coordinates, clamped to the grid.
@@ -25,7 +40,7 @@ struct GridLayout {
         guard rows > 0, columns > 0, cell.width > 0, cell.height > 0,
               cell.width.isFinite, cell.height.isFinite, p.x.isFinite, p.y.isFinite,
               p.y >= -cell.height * 0.5, p.y <= size.height + cell.height * 0.5 else { return nil }
-        let c = Int(min(max(p.x / cell.width, 0), CGFloat(columns - 1)))
+        let c = Int(min(max((p.x - inset) / cell.width, 0), CGFloat(columns - 1)))
         let r = Int(min(max(p.y / cell.height, 0), CGFloat(rows - 1)))
         return r * columns + c
     }
@@ -41,7 +56,7 @@ struct GridLayout {
     /// small window, many rows, large icons) doesn't put names over the icons below. At least
     /// 24 points, unless even that would overflow the cell.
     func iconSize(scale: Double, labels: Bool = false) -> CGFloat {
-        let fit = min(cell.width * 0.62, cell.height * 0.62)
+        let fit = min(cell.width * 0.7, cell.height * 0.7)
         let most = min(cell.width, cell.height) * 0.9
         var size = min(fit * scale, most, 176)
         // A smaller icon has a smaller name, so the room this leaves is enough.
@@ -105,7 +120,13 @@ final class DragController {
     var primary: GridItem?
     var source: Source = .page
     /// Pointer location in the root coordinate space.
-    var location: CGPoint = .zero
+    var location: CGPoint = .zero {
+        didSet { if active { sampleTilt() } }
+    }
+    /// How far the dragged icon leans, in degrees: into the way it's moving, as something held
+    /// by its top would, and upright again once it stops (`settleTilt`).
+    var tilt: Double = 0
+    @ObservationIgnored private var lastSample: (point: CGPoint, time: CFTimeInterval)?
     /// From the pointer to the picked-up icon's centre, so the icon stays where it was grabbed.
     var grabOffset: CGSize = .zero
     /// Insertion index among the non-dragged items of the current page (or open folder).
@@ -150,6 +171,26 @@ final class DragController {
 
     func isDragged(_ id: UUID) -> Bool { active && ids.contains(id) }
 
+    /// The most the icon leans, at a brisk sideways move.
+    static let maxTilt: Double = 9
+
+    /// Leans the icon by how fast the pointer moves sideways, smoothed over a few events.
+    private func sampleTilt() {
+        let now = CACurrentMediaTime()
+        defer { lastSample = (location, now) }
+        guard let last = lastSample, now - last.time > 0.002, now - last.time < 0.25 else { return }
+        let speed = Double(location.x - last.point.x) / (now - last.time)
+        let target = max(-Self.maxTilt, min(Self.maxTilt, speed / 140))
+        let next = tilt * 0.65 + target * 0.35
+        if abs(next - tilt) > 0.05 { tilt = next }
+    }
+
+    /// Back upright once the pointer has rested a moment (from the drag's timer).
+    func settleTilt() {
+        guard tilt != 0, let last = lastSample, CACurrentMediaTime() - last.time > 0.08 else { return }
+        tilt = 0
+    }
+
     /// Centre of the dragged icon. Drop targets are found under it rather than under the
     /// pointer, so what lands is what the icon covers.
     var iconCenter: CGPoint { CGPoint(x: location.x + grabOffset.width, y: location.y + grabOffset.height) }
@@ -175,6 +216,8 @@ final class DragController {
         decided = false
         panning = false
         edgeSide = 0
+        tilt = 0
+        lastSample = nil
     }
 }
 
@@ -192,7 +235,7 @@ extension AppState {
     }
 
     var pageLayout: GridLayout {
-        GridLayout(size: drag.pagerFrame.size, rows: grid.rows, columns: grid.columns)
+        GridLayout(size: drag.pagerFrame.size, rows: grid.rows, columns: grid.columns, maxCellAspect: GridLayout.pageCellAspect)
     }
 
     /// The grid size that suits the display the grid is on (`GridLayout.suggestedSize`): from
@@ -352,7 +395,9 @@ extension AppState {
         var hit: UUID?
         var source = DragController.Source.page
         // Only start on the icon itself; elsewhere a drag swipes pages (or does nothing in a folder).
-        let reach = (openFolder == nil ? pageIconSize : folderIconSize) * 0.75
+        // A little past the icon's edge, but short of its neighbours' gap, so a press between
+        // icons still swipes.
+        let reach = (openFolder == nil ? pageIconSize : folderIconSize) * 0.66
         func onIcon(_ local: CGPoint, _ center: CGPoint) -> Bool {
             abs(local.x - center.x) < reach && abs(local.y - center.y) < reach * 1.2
         }
@@ -463,7 +508,7 @@ extension AppState {
             drag.pendingGap = nil
         } else if immediately {
             drag.pendingGap = nil
-            withAnimation(Self.dragMotion(.spring(response: 0.3, dampingFraction: 0.8))) { drag.gap = index }
+            withAnimation(Self.dragMotion(.spring(response: 0.32, dampingFraction: 0.66))) { drag.gap = index }
         } else if index != drag.pendingGap {
             drag.pendingGap = index
             drag.pendingGapSince = Date()
@@ -531,10 +576,11 @@ extension AppState {
 
     private func dragTick() {
         guard drag.active else { return }
+        drag.settleTilt()
         let now = Date()
         if let g = drag.pendingGap, now.timeIntervalSince(drag.pendingGapSince) > Self.reorderDwell {
             drag.pendingGap = nil
-            withAnimation(Self.dragMotion(.spring(response: 0.3, dampingFraction: 0.8))) { drag.gap = g }
+            withAnimation(Self.dragMotion(.spring(response: 0.32, dampingFraction: 0.66))) { drag.gap = g }
             Haptics.perform(.alignment)
         }
         if let c = drag.candidate, drag.mergeTarget != c, now.timeIntervalSince(drag.candidateSince) > Self.mergeDwell {
@@ -605,7 +651,12 @@ extension AppState {
         } else {
             return
         }
-        if merged != nil, changed { Haptics.perform(.levelChange) }
+        if merged != nil, changed {
+            Haptics.perform(.levelChange)
+            Sounds.play(.folder)
+        } else if changed {
+            Sounds.play(.drop)
+        }
         if let l = landing {
             Landing.last = "\(l.item.title) from \(Int(l.from.x)),\(Int(l.from.y)) to \(Int(l.to.x)),\(Int(l.to.y)) scale \(l.endScale) hides \(l.hides.count)"
         }
@@ -626,6 +677,10 @@ extension AppState {
         goToPage(p)
     }
 
+    private func folderCount(_ g: Grid) -> Int {
+        g.pages.reduce(0) { $0 + $1.items.filter { $0.folder != nil }.count }
+    }
+
     private func drop() {
         let ids = drag.ids
         let before = grid
@@ -633,7 +688,10 @@ extension AppState {
         let released = drag.iconCenter
         let primary = drag.primary
         let count = ids.count
-        defer { land(primary, count: count, from: released, ids: ids, merged: merged, changed: grid != before) }
+        defer {
+            land(primary, count: count, from: released, ids: ids, merged: merged, changed: grid != before)
+            if folderCount(grid) > folderCount(before) { celebrate(.folder) }
+        }
         let page = currentPage
         // Emptying the source page removes it, which shifts later pages; follow the target by ID.
         let pageID = grid.pages.indices.contains(page) ? grid.pages[page].id : nil

@@ -3,7 +3,7 @@ import SwiftUI
 import LaunchGridCore
 
 // What the grid tells you it can do: the answer and key hints under the search field, the
-// shortcuts ⌘ shows when held, and one tip at a time at the bottom.
+// shortcuts ⌘ shows when held, and what the empty search field suggests trying (the tips among it).
 
 /// Under the search field, in the page title's place: a sum or conversion worked out from what
 /// was typed (Return or a click copies it), else what Return and its companions do with the
@@ -165,82 +165,109 @@ struct FlowLayout: Layout {
     }
 }
 
-/// One tip at a time, near the bottom of the grid, until what it says has been done. Not over
-/// a message, a search, a folder or edit mode, nor while the first layout builds itself in.
-struct TipLayer: View {
+/// What the empty search field suggests after "Search": something to try, a different one each
+/// time the grid shows and every few seconds while it sits there. The tips not yet taken come
+/// round with the rest (`AppState.Tip`), until what they say has been done; there's nothing to
+/// dismiss, as a placeholder covers nothing.
+enum SearchPrompt: Hashable {
+    case tip(AppState.Tip)
+    case sum, conversion, time, settingsPane
+    /// An app found by its initials: "vsc" for Visual Studio Code.
+    case initials(letters: String, name: String)
+    /// An action's keyword: typing it runs the action.
+    case keyword(word: String, name: String)
+}
+
+extension AppState {
+    /// What the empty search field can suggest, in the order it goes round them.
+    var searchPrompts: [SearchPrompt] {
+        // Typing is what the field itself asks for: that tip isn't one more prompt.
+        var tips = Tip.allCases.filter { $0 != .typeToSearch && !prefs.tipsSeen.contains($0.rawValue) }.map(SearchPrompt.tip)
+        var examples: [SearchPrompt] = [.sum, .conversion, .time]
+        if let (letters, name) = initialsExample { examples.insert(.initials(letters: letters, name: name), at: 1) }
+        if let action = grid.allActions.first(where: { !$0.keywords.isEmpty }), let word = action.keywords.first {
+            examples.insert(.keyword(word: word, name: action.name), at: 2)
+        }
+        if prefs.searchSettingsPanes { examples.append(.settingsPane) }
+        // A tip after every example, while there are tips left.
+        var out: [SearchPrompt] = []
+        for example in examples {
+            out.append(example)
+            if !tips.isEmpty { out.append(tips.removeFirst()) }
+        }
+        return out + tips
+    }
+
+    /// An app on the grid whose name's initials find it, the same one for a while: one of up to
+    /// eight, picked by the day of the year.
+    private var initialsExample: (String, String)? {
+        let names = grid.allApps.map(\.name).filter { name in
+            let words = name.split(whereSeparator: { $0 == " " || $0 == "-" })
+            return (2...4).contains(words.count) && words.allSatisfy { $0.first?.isLetter == true }
+        }
+        // Three letters or more where there are such names: two can read as a prefix.
+        let long = names.filter { $0.split(whereSeparator: { $0 == " " || $0 == "-" }).count >= 3 }
+        let picks = Array(Set(long.isEmpty ? names : long)).sorted().prefix(8)
+        guard !picks.isEmpty else { return nil }
+        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
+        let name = picks[day % picks.count]
+        let letters = name.split(whereSeparator: { $0 == " " || $0 == "-" }).compactMap(\.first).map { String($0).lowercased() }.joined()
+        return (letters, name)
+    }
+}
+
+/// The empty search field's text: "Search" and, fainter, something to try (`SearchPrompt`).
+struct SearchPlaceholder: View {
     @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.reduceMotion) private var reduceMotion
+    /// Advances while the grid sits idle with nothing typed.
+    @State private var tick = 0
 
     var body: some View {
-        GeometryReader { geo in
-            // Left of the search field, in the top bar's empty side, where it covers nothing;
-            // at the bottom, over the last row, only in a window too narrow for that.
-            let room = geo.size.width / 2 - 190 - 48 - 16
-            let top = room >= 280
-            VStack {
-                if !top { Spacer() }
-                if let tip = shownTip {
-                    HStack {
-                        card(tip)
-                            .frame(maxWidth: top ? room : 560, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if top { Spacer(minLength: 0) }
-                    }
-                    .padding(.leading, top ? 48 : 0)
-                    .padding(.top, top ? 24 : 0)
-                    .padding(.bottom, top ? 0 : 80)
-                    .id(tip)
-                    .transition(reduceMotion ? .opacity : .move(edge: top ? .top : .bottom).combined(with: .opacity))
-                }
-                if top { Spacer() }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: shownTip)
-    }
-
-    private func card(_ tip: AppState.Tip) -> some View {
+        let high = contrast == .increased
+        let prompts = state.searchPrompts
+        let prompt = prompts.isEmpty ? nil : prompts[(state.showCount + tick) % prompts.count]
         HStack(spacing: 10) {
-            Image(systemName: "lightbulb")
-                .foregroundStyle(.yellow)
-            text(tip)
-                .font(.callout)
-                .lineLimit(2)
-            Button {
-                state.noteTip(tip)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .frame(width: 18, height: 18)
-                    .background(.white.opacity(0.14), in: Circle())
-                    .contentShape(Circle())
+            Text("Search")
+                .foregroundStyle(.white.opacity(high ? 0.75 : 0.55))
+                .fixedSize()
+            ZStack(alignment: .leading) {
+                if let prompt {
+                    text(prompt)
+                        .foregroundStyle(.white.opacity(high ? 0.6 : 0.36))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .id(prompt)
+                        .transition(reduceMotion ? .opacity : .push(from: .bottom).combined(with: .opacity))
+                }
             }
-            .buttonStyle(.plain)
-            .help("Don’t show this tip again")
-            .accessibilityLabel("Dismiss tip")
+            .clipped()
         }
-        .foregroundStyle(.white)
-        .padding(.leading, 14).padding(.trailing, 7).padding(.vertical, 7)
-        .glassSurface(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .animation(.spring(response: 0.5, dampingFraction: 0.9), value: prompt)
+        .task(id: state.isShown) {
+            guard state.isShown else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(7))
+                guard !Task.isCancelled else { return }
+                tick &+= 1
+            }
+        }
     }
 
-    private var shownTip: AppState.Tip? {
-        guard state.isShown, state.hasGridFile, !state.introPending, state.toast == nil, state.query.isEmpty,
-              state.openFolderID == nil, !state.editing, !state.drag.active, !state.commandHeld, !state.showingShortcuts, state.fileDrag == nil,
-              state.textEdit == nil else { return nil }
-        return state.currentTip
-    }
-
-    private func text(_ tip: AppState.Tip) -> Text {
-        switch tip {
-        case .typeToSearch:
-            Text("Just type to search. Sums and conversions work too: try “12*7” or “5 km in mi”.")
-        case .holdCommand:
-            Text("Hold ⌘ to see the shortcuts.")
-        case .allShortcuts:
-            Text("Press ⌘/ to see every keyboard shortcut.")
-        case .dropFile:
-            Text("Dragging a file? Press \(KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers)) and drop it on an app to open it there.")
+    private func text(_ prompt: SearchPrompt) -> Text {
+        switch prompt {
+        case .sum: Text("Try “12*7” or “200 + 10%”")
+        case .conversion: Text("Try “5 km in mi”")
+        case .time: Text("Try “3pm in Tokyo”")
+        case .settingsPane: Text("Try “bluetooth” or “dark mode”")
+        case .initials(let letters, let name): Text("Try “\(letters)” for \(name)")
+        case .keyword(let word, let name): Text("Type “\(word)” to run \(name)")
+        case .tip(.holdCommand): Text("Hold ⌘ to see the shortcuts")
+        case .tip(.allShortcuts): Text("⌘/ shows every shortcut")
+        case .tip(.dropFile):
+            Text("Dragging a file? Press \(KeyCombo.describe(keyCode: state.prefs.hotkeyKeyCode, modifiers: state.prefs.hotkeyModifiers)) to drop it on an app")
+        case .tip(.typeToSearch): Text("Just type")
         }
     }
 }

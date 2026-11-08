@@ -310,7 +310,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // Shown again mid-fade, a rename card still open keeps its field's keyboard.
         if state.textEdit == nil { panel.makeFirstResponder(textInput) }
         launchedBehind = nil
+        PointerDrift.shared.start(panel)
         state.didShow()
+        Sounds.play(.show)
         // The first frame is drawn when this turn of the run loop commits; time it there.
         CATransaction.setCompletionBlock {
             DispatchQueue.main.async {
@@ -403,6 +405,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated {
                 guard let self, self.visibilityGeneration == generation, !self.state.isShown else { return }
                 panel.orderOut(nil)
+                PointerDrift.shared.stop()
                 self.state.didHide()
                 progress.gone = true
                 if progress.saved == false { self.state.reportLastSaveFailure() }

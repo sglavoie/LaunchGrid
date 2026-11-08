@@ -43,7 +43,10 @@ import Testing
         let mail = state.grid.allApps.first { $0.name == "Mail" }!
         for _ in 0..<3 { state.recordUse(.app(mail)) }
         state.refreshSuggestions()
-        #expect(state.suggestions.isEmpty, "off by default")
+        #expect(state.suggestions.map(\.title) == ["Mail"], "on by default")
+        state.prefs.showSuggestions = false
+        state.refreshSuggestions()
+        #expect(state.suggestions.isEmpty)
         state.prefs.showSuggestions = true
         state.refreshSuggestions()
         #expect(state.suggestions.map(\.title) == ["Mail"])

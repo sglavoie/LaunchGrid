@@ -27,7 +27,10 @@ struct GridRootView: View {
                 TopBar()
                     .padding(.top, 22)
                     .padding(.bottom, 10)
-                Group {
+                // Always this tall, empty or not: a title, the suggestions row or a page's number
+                // coming and going (only some pages have one) never resizes the grid under it.
+                ZStack {
+                    Color.clear
                     if state.query.isEmpty { PageTitle() } else { SearchHintLine() }
                 }
                 .frame(height: 36)
@@ -89,9 +92,6 @@ struct GridRootView: View {
             }
             // `textEdit` changes outside any animation. With Reduce Motion, a short fade.
             .animation(state.isShown ? AppState.pageAnimation ?? .easeOut(duration: 0.15) : nil, value: state.textEdit?.id)
-
-            TipLayer()
-                .accessibilityHidden(folderModal || editModal)
 
             // Only its Undo button takes clicks; the rest goes to the grid beneath.
             ToastLayer()
@@ -192,6 +192,13 @@ struct ToastLayer: View {
             Spacer()
             if let toast = state.toast {
                 HStack(spacing: 12) {
+                    if state.toastSparkles {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(LinearGradient(colors: [.yellow, .orange, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .symbolEffect(.bounce, options: .repeat(2), value: state.celebrationCount)
+                            .accessibilityHidden(true)
+                    }
                     Text(state.toastUndoable ? Self.withoutUndoHint(toast) : toast)
                         .font(.callout.weight(.medium))
                     if state.toastUndoable {
@@ -213,7 +220,7 @@ struct ToastLayer: View {
                         .accessibilityLabel("Undo")
                     }
                 }
-                .padding(.leading, 16).padding(.trailing, state.toastUndoable ? 6 : 16).padding(.vertical, state.toastUndoable ? 5 : 9)
+                .padding(.leading, state.toastSparkles ? 12 : 16).padding(.trailing, state.toastUndoable ? 6 : 16).padding(.vertical, state.toastUndoable ? 5 : 9)
                 .glassSurface(Capsule())
                 .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
                 .padding(.bottom, 80)
@@ -341,21 +348,20 @@ struct SearchField: View {
         let typing = !(state.query.isEmpty && marked.isEmpty)
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.white.opacity(high ? 0.9 : typing ? 0.8 : 0.6))
             if !typing {
-                Text("Search")
-                    .foregroundStyle(.white.opacity(high ? 0.75 : 0.5))
+                SearchPlaceholder()
             } else {
                 SearchText(line: state.searchLine, marked: marked)
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 17))
-        .padding(.horizontal, 14)
+        .font(.system(size: 19))
+        .padding(.horizontal, 16)
         // Narrower only when a small window leaves no room beside the buttons (`TopBarLayout`).
         // It opens out a little once something is typed, making room for it.
-        .frame(minWidth: 140, idealWidth: typing ? 440 : 380, maxWidth: typing ? 440 : 380, minHeight: 38, maxHeight: 38)
+        .frame(minWidth: 140, idealWidth: typing ? 560 : 500, maxWidth: typing ? 560 : 500, minHeight: 46, maxHeight: 46)
         // Dark under the glass, so the white text reads over a light background too.
         .background(.black.opacity(high ? 0.5 : 0.12), in: Capsule())
         .glassSurface(Capsule())
@@ -605,10 +611,27 @@ struct PageView: View {
 
     static let gapID = UUID()
 
+    @Environment(\.reduceMotion) private var reduceMotion
+
+    /// A sort's move for the tile at `index`: a little after the one before it.
+    private func waveAnimation(_ index: Int) -> Animation? {
+        reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.74).delay(Double(index) * 0.016)
+    }
+
+    /// For the last page, when at least two of its rows are empty: what was opened last that
+    /// isn't on it, a row's worth at most. Not while arranging, nor while dragging.
+    private func shelfItems(count: Int) -> [GridItem] {
+        let rows = state.grid.rows, columns = state.grid.columns
+        guard page == state.grid.pages.count - 1, rows >= 3, count <= (rows - 2) * columns,
+              !state.editing, !state.drag.active, !state.recents.isEmpty else { return [] }
+        let here = Set(state.grid.pages[page].items.flatMap { item in item.folder.map { $0.items.map(\.id) } ?? [item.id] })
+        return Array(state.recents.filter { !here.contains($0.id) }.prefix(min(columns, 7)))
+    }
+
     @AccessibilityFocusState private var voiceOverFocus: UUID?
 
     var body: some View {
-        let layout = GridLayout(size: size, rows: state.grid.rows, columns: state.grid.columns)
+        let layout = GridLayout(size: size, rows: state.grid.rows, columns: state.grid.columns, maxCellAspect: GridLayout.pageCellAspect)
         let icon = layout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
         // Read here once, not in every cell: a cell's body then reruns only when its own
         // focus, selection or merge highlight changes, not on every arrow key.
@@ -627,6 +650,7 @@ struct PageView: View {
         let hidden = (state.landing?.hides ?? []).union(state.openFolderID.map { [$0] } ?? [])
         let columns = state.grid.columns, rows = state.grid.rows
         let peek = state.peekFolderID
+        let wave = state.sortWave
         // Where the grid was called from (the pointer, a hot corner, the menu-bar icon), in
         // this page's space: the tiles come out of there. Nil: from the middle.
         let origin = current ? state.showOrigin.map { CGPoint(x: $0.x - state.drag.pagerFrame.minX, y: $0.y - state.drag.pagerFrame.minY) } : nil
@@ -659,12 +683,27 @@ struct PageView: View {
                         // while dragging, which moves tiles itself.
                         .tileMatch(item.id, active: current && !state.drag.active)
                         .position(center)
+                        // A sort: each tile a moment after the one before it, in its new order.
+                        .animation(waveAnimation(index), value: wave)
                         // Removed, a tile shrinks away as the rest close up.
                         .transition(.scale(scale: 0.3).combined(with: .opacity))
                 }
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .overlay {
+            // The last page's spare rows: what was opened last, rather than a bare stretch.
+            let shelf = shelfItems(count: entries.count)
+            if !shelf.isEmpty {
+                let usedRows = CGFloat((entries.count + columns - 1) / columns)
+                let top = usedRows * layout.cell.height
+                RecentShelf(items: shelf, iconSize: max(28, icon * 0.6))
+                    .frame(maxWidth: layout.cell.width * CGFloat(columns))
+                    .position(x: size.width / 2, y: (top + size.height) / 2)
+                    .transition(.opacity.combined(with: .offset(y: 10)))
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: editing || state.drag.active)
         .environment(\.gridLabelsFit, layout.labelsFit(iconSize: icon))
         .environment(\.gridJiggles, page == state.currentPage)
         // VoiceOver follows the keyboard focus, also onto a page drawn afresh with focus on it
@@ -811,7 +850,7 @@ struct ItemView: View {
             ZStack(alignment: .topLeading) {
                 icon
                     .frame(width: iconSize, height: iconSize)
-                    .modifier(IconShadow(lift: item.folder == nil ? lift : 0, size: item.folder == nil ? iconSize : 0))
+                    .modifier(IconShadow(lift: lift, size: iconSize))
                     .background {
                         if mergeTarget && item.folder == nil {
                             RoundedRectangle(cornerRadius: iconSize * 0.26)
@@ -999,36 +1038,47 @@ struct AppIcon: View {
 
 struct FolderIcon: View {
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.backgroundTint) private var tint
     let folder: Folder
     let size: CGFloat
     var open = false
 
     var body: some View {
-        let inner = size * 0.8
-        let mini = (inner - size * 0.08 * 2) / 3
+        // The same squircle as an app icon's artwork (0.82 of its frame), so a folder sits in
+        // the grid as one more icon: a pane of frosted glass, lit along its top edge, with a
+        // hint of the background's colour, holding its first nine apps.
+        let side = size * 0.84
+        let shape = RoundedRectangle(cornerRadius: side * 0.24, style: .continuous)
+        let pad = side * 0.12
+        let gap = side * 0.05
+        let mini = (side - pad * 2 - gap * 2) / 3
         let high = contrast == .increased
+        let glow = tint ?? .white
         ZStack {
-            // With Increase Contrast, a stronger fill and an edge light and dark, so the tile
-            // stands out on a light background as on a dark one.
-            RoundedRectangle(cornerRadius: size * 0.24)
-                .fill(.white.opacity(open ? (high ? 0.55 : 0.38) : (high ? 0.42 : 0.24)))
-                .overlay {
-                    if high {
-                        RoundedRectangle(cornerRadius: size * 0.24).strokeBorder(.black.opacity(0.6), lineWidth: 1)
-                        RoundedRectangle(cornerRadius: size * 0.24).inset(by: 1).strokeBorder(.white.opacity(0.9), lineWidth: 1)
-                    }
-                }
-                .frame(width: size * 0.92, height: size * 0.92)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(mini), spacing: size * 0.04), count: 3), spacing: size * 0.04) {
+            shape
+                .fill(LinearGradient(colors: [.white.opacity(open ? 0.5 : high ? 0.46 : 0.32),
+                                              .white.opacity(open ? 0.34 : high ? 0.36 : 0.16)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(shape.fill(glow.opacity(tint == nil || high ? 0 : 0.14)))
+                // Light catching the top edge, fading down the sides; a dark rim under it.
+                .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(high ? 0.95 : 0.6), .white.opacity(high ? 0.6 : 0.08)],
+                                                           startPoint: .top, endPoint: .bottom), lineWidth: high ? 1.5 : 1))
+                .overlay(shape.inset(by: -0.5).strokeBorder(.black.opacity(high ? 0.6 : 0.16), lineWidth: 0.5))
+                .frame(width: side, height: side)
+                .scaleEffect(open ? 1.08 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: open)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(mini), spacing: gap), count: 3), spacing: gap) {
                 ForEach(folder.items.prefix(9)) { member in
                     switch member {
-                    case .app(let app): AppIcon(path: app.path, size: mini)
-                    case .action(let action): ActionTile(action: action, size: mini)
+                    case .app(let app): AppIcon(path: app.path, size: mini * 1.12)
+                    case .action(let action): ActionTile(action: action, size: mini * 1.12)
                     }
                 }
+                .frame(width: mini, height: mini)
             }
-            .frame(width: inner, height: inner)
+            .frame(width: side - pad * 2, height: side - pad * 2, alignment: .top)
         }
+        .frame(width: size, height: size)
     }
 
     typealias GridItem = SwiftUI.GridItem
@@ -1077,6 +1127,7 @@ struct DragLayer: View {
 
 struct DragGhost: View {
     @Environment(AppState.self) private var state
+    @Environment(\.reduceMotion) private var reduceMotion
     let item: GridItem
     let count: Int
 
@@ -1094,6 +1145,9 @@ struct DragGhost: View {
             }
             .scaleEffect(1.1)
             .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+            // Leaning into the move, held from above; upright with Reduce Motion.
+            .rotationEffect(.degrees(reduceMotion ? 0 : state.drag.tilt), anchor: .top)
+            .animation(.spring(response: 0.28, dampingFraction: 0.6), value: state.drag.tilt)
             if count > 1 {
                 Text("\(count)")
                     .font(.system(size: 13, weight: .bold))
@@ -1214,7 +1268,7 @@ struct SearchResultsView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let layout = GridLayout(size: geo.size, rows: state.grid.rows, columns: state.grid.columns)
+            let layout = GridLayout(size: geo.size, rows: state.grid.rows, columns: state.grid.columns, maxCellAspect: GridLayout.pageCellAspect)
             let icon = layout.iconSize(scale: state.prefs.iconScale, labels: state.prefs.showLabels)
             let results = state.searchResults
             let labels = state.prefs.showLabels && layout.labelsFit(iconSize: icon)
@@ -1429,7 +1483,9 @@ struct FolderPanel: View {
             // The page's cells, but never more than the overlay has room for once the panel's
             // padding, name and dots are around them (a small window with many rows).
             let room = CGSize(width: geo.size.width - 64, height: geo.size.height - (pages > 1 ? 150 : 125))
-            let cellW = min(max(pager.width, 400), room.width) / CGFloat(grid.columns)
+            // As wide as the page's cells, which stop widening past `GridLayout.pageCellAspect`.
+            let pageWidth = pager.width > 0 ? state.pageLayout.cell.width * CGFloat(grid.columns) : 0
+            let cellW = min(max(pageWidth, 400), room.width) / CGFloat(grid.columns)
             let cellH = min(max(pager.height, 300) / CGFloat(grid.rows), max(room.height, 0) / CGFloat(rows))
             let gridSize = CGSize(width: max(cellW, 0) * CGFloat(cols), height: max(cellH, 0) * CGFloat(rows))
             VStack(spacing: 10) {
@@ -2073,3 +2129,4 @@ final class ActionPictureCache {
         return image
     }
 }
+

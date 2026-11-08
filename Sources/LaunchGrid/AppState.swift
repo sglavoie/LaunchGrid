@@ -107,7 +107,9 @@ final class AppState {
 
     // MARK: UI state
 
-    var currentPage = 0
+    var currentPage = 0 {
+        didSet { if isShown && currentPage != oldValue { Sounds.play(.page) } }
+    }
     var openFolderID: UUID?
     var folderPage = 0
     var query = "" {
@@ -119,6 +121,7 @@ final class AppState {
                 // An answer (a sum, a conversion) comes first: Return copies it.
                 focusIndex = query.isEmpty || allSearchResults.isEmpty || searchAnswer != nil ? nil : 0
                 if !query.isEmpty { noteTip(.typeToSearch) }
+                if isShown, searchAnswer != nil { celebrate(.answer) }
             }
             // However the search ended (a page jump, a reveal, hiding), the folder it started
             // in is no longer one to go back to.
@@ -163,8 +166,8 @@ final class AppState {
     var launchPulse: (id: UUID, count: Int) = (UUID(), 0)
     /// The folder whose contents fan out above its tile while the pointer rests on it.
     var peekFolderID: UUID?
-    /// A one-line hint at the bottom of the grid, one at a time, each gone for good once
-    /// what it says has been done (or it's dismissed).
+    /// A hint the empty search field goes round with its other suggestions (`SearchPrompt`), each
+    /// gone for good once what it says has been done.
     enum Tip: String, CaseIterable {
         case typeToSearch, holdCommand, allShortcuts, dropFile
     }
@@ -179,6 +182,56 @@ final class AppState {
         if !prefs.tipsSeen.contains(tip.rawValue) { prefs.tipsSeen.insert(tip.rawValue) }
     }
 
+    /// Things done for the first time, each marked once with a flourish: the first answer
+    /// shimmers and says Return copies it, the first folder and the first action run each get a
+    /// message with a sparkle saying what to try next.
+    enum First: String, CaseIterable {
+        case answer, folder, action
+    }
+
+    /// The first being marked right now, for the views that make the flourish.
+    private(set) var celebrating: First?
+    /// Bumped with each flourish, so the same one can play again in the tests and debug scripts.
+    private(set) var celebrationCount = 0
+    /// The toast has a sparkle: it tells of a first.
+    private(set) var toastSparkles = false
+
+    /// Marks a first, once ever: returns whether it was one.
+    @discardableResult
+    func celebrate(_ first: First) -> Bool {
+        guard !prefs.firstsSeen.contains(first.rawValue) else { return false }
+        prefs.firstsSeen.insert(first.rawValue)
+        celebrating = first
+        celebrationCount &+= 1
+        let count = celebrationCount
+        switch first {
+        case .answer: break
+        case .folder: showToast(String(localized: "Your first folder. Click its name to rename it."), sparkles: true)
+        case .action: showToast(String(localized: "Your first action ran. Give it a keyword to run it from search."), sparkles: true)
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.6))
+            if self?.celebrationCount == count { self?.celebrating = nil }
+        }
+        return true
+    }
+
+    /// In `Preferences.firstsSeen` once the layout has been looked at for firsts already had.
+    static let firstsChecked = "checked"
+
+    /// Someone who had made folders or run actions before firsts were marked has had those
+    /// firsts. Looked at once: a layout made since (by category, with its folders) is the one
+    /// whose own firsts are still to come.
+    private func noteFirstsAlreadyHad() {
+        var seen = prefs.firstsSeen
+        seen.insert(Self.firstsChecked)
+        if grid.pages.contains(where: { $0.items.contains { $0.folder != nil } }) { seen.insert(First.folder.rawValue) }
+        if prefs.usage.entries.keys.contains(where: { $0.hasPrefix("action:") }) { seen.insert(First.action.rawValue) }
+        // Search was used before: answers have likely been seen.
+        if prefs.tipsSeen.contains(Tip.typeToSearch.rawValue) && !prefs.usage.entries.isEmpty { seen.insert(First.answer.rawValue) }
+        if seen != prefs.firstsSeen { prefs.firstsSeen = seen }
+    }
+
     /// The grid's size while a pinch opens or closes it (`OverlayController.pinchChanged`).
     var pinchScale: CGFloat = 1
     /// Where the grid was called from this time, in the overlay's coordinates (the pointer at
@@ -187,6 +240,9 @@ final class AppState {
     /// What's opened most around this time of day, worked out as the grid shows, for the row
     /// above the first page (`SuggestionsRow`); empty unless that's turned on.
     private(set) var suggestions: [GridItem] = []
+    /// What was opened last, latest first, for the room left on the last page (`RecentShelf`);
+    /// empty unless suggestions are turned on.
+    private(set) var recents: [GridItem] = []
     /// Files dragged over the grid (`FileDrop.swift`).
     var fileDrag: FileDrag?
     @ObservationIgnored var fileDwell: FileDwell?
@@ -367,6 +423,7 @@ final class AppState {
         hasGridFile = hasLayout
         if hasLayout { loaded?.hasCreatedLayout = true }
         grid = loaded ?? Grid()
+        if hasLayout && !prefs.firstsSeen.contains(Self.firstsChecked) { noteFirstsAlreadyHad() }
         if skipped > 0 { keepPartlyReadFile(skipped: skipped) }
         // The unreadable file is gone: write the restored layout back before anything else
         // can go wrong, or the next launch would find no layout at all.
@@ -438,6 +495,7 @@ final class AppState {
         }
         if !hasGridFile {
             introPending = !Motion.reduced
+            prefs.firstsSeen.insert(Self.firstsChecked)
             // Nothing worth undoing back to (first run), whatever was changed before it (the grid
             // size). Redo history would replay edits of the empty grid over the new one.
             undoStack.removeAll()
@@ -1172,14 +1230,24 @@ final class AppState {
     /// outside the scan folders (added with Browse), keeping the exclusions. `fitToDisplay`
     /// (the first layout, from the welcome window) sizes the grid for the display instead of
     /// keeping its size.
-    func build(style: BuildStyle, fitToDisplay: Bool = false) {
+    /// Lays out every included app from scratch. By colour, the icons are drawn first, as
+    /// their colour is read from the drawing: `done` follows the build, at once otherwise.
+    func build(style: BuildStyle, fitToDisplay: Bool = false, done: @escaping () -> Void = {}) {
         var seen = Set<String>()
         let apps = (installed + outsideGridApps).filter { !grid.isExcluded($0) && seen.insert($0.path).inserted }
         let size: (rows: Int, columns: Int) = fitToDisplay ? suggestedGridSize : (grid.rows, grid.columns)
-        var new = GridBuilder.build(from: apps, style: style,
-                                    rows: size.rows, columns: size.columns)
-        new.removedBundleIDs = grid.removedBundleIDs
-        replaceGrid(new, keepingActions: true)
+        let finish = { [self] in
+            var new = GridBuilder.build(from: apps, style: style, rows: size.rows, columns: size.columns,
+                                        hue: style == .byColour ? { $0.colourHue } : nil)
+            new.removedBundleIDs = grid.removedBundleIDs
+            replaceGrid(new, keepingActions: true)
+            done()
+        }
+        guard style == .byColour else { return finish() }
+        Task { @MainActor in
+            await IconProvider.shared.renderAll(apps.map(\.path).filter { IconProvider.shared.cached($0) == nil })
+            finish()
+        }
     }
 
     /// Builds now, or once the first scan has found the installed apps.
@@ -1272,6 +1340,7 @@ final class AppState {
     func refreshSuggestions(at date: Date = Date()) {
         guard prefs.showSuggestions else {
             if !suggestions.isEmpty { suggestions = [] }
+            if !recents.isEmpty { recents = [] }
             return
         }
         var byKey: [String: GridItem] = [:]
@@ -1283,6 +1352,11 @@ final class AppState {
         let found = prefs.usage.suggestions(at: date, limit: 12).compactMap { byKey[$0] }.prefix(5)
         let ids = found.map(\.id)
         if ids != suggestions.map(\.id) { suggestions = Array(found) }
+        // Kept to the grid's own items: a System Settings pane is search's.
+        let paneIDs = Set(SettingsPaneCatalog.available.map(\.action.id))
+        let latest = prefs.usage.recent(limit: 24).compactMap { byKey[$0] }
+            .filter { $0.action.map { !paneIDs.contains($0.id) } ?? true }
+        if latest.map(\.id) != recents.map(\.id) { recents = latest }
     }
 
     @ObservationIgnored private var answerCache: (query: String, answer: Answer?)?
@@ -1661,10 +1735,13 @@ final class AppState {
             recordUse(.action(action))
             showOpening(action.id, hides: false)
             startInBackground(action, job)
+            if isShown { celebrate(.action) }
             return nil
         }
         recordUse(.action(action))
         let hides = prefs.hideAfterLaunch
+        // Said while the grid stays up to show it, else the next time.
+        if isShown && !hides { celebrate(.action) }
         showOpening(action.id, hides: hides)
         if hides { onHideForLaunch() }
         return Task {
@@ -2099,6 +2176,10 @@ final class AppState {
         apply { g in g.removingEmptiedPages { newID = $0.group(ids, name: name, anchor: anchor) } }
         selection.removeAll()
         guard let newID else { return }
+        if isShown {
+            Sounds.play(.folder)
+            celebrate(.folder)
+        }
         // Nothing selected on this page: show the folder's page, so it opens over its own.
         if let page = grid.locate(newID)?.page, page != currentPage { goToPage(page) }
         openFolder(newID)
@@ -2147,15 +2228,44 @@ final class AppState {
         apply { $0.sortPage(p, folders: prefs.folderPlacement) }
     }
 
+    /// Bumped as a sort lays everything out again: on the page shown, each tile glides to its
+    /// new place a moment after the one before it, so the order sweeps across the page.
+    private(set) var sortWave = 0
+
+    /// Applies a sort of every page from the first page: with the grid up, the tiles there move
+    /// in a wave (`sortWave`), once the page has turned back to the first if it had to. `done`
+    /// follows the change (at once, unless it waits for that turn).
+    private func sortWithWave(_ change: @escaping (inout Grid) -> Void, done: @escaping () -> Void) {
+        let animate = isShown && !Motion.reduced
+        let perform = { [self] in
+            if animate {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                    sortWave &+= 1
+                    apply(change)
+                }
+            } else {
+                apply(change)
+            }
+            goToPage(0)
+            done()
+        }
+        guard animate && currentPage != 0 else { return perform() }
+        goToPage(0)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(380))
+            perform()
+        }
+    }
+
     func sortEverything() {
         bringPageForward()
         let hadTitles = grid.pages.contains { $0.title != nil }
-        apply { $0.sortEverything(folders: prefs.folderPlacement) }
-        goToPage(0)
-        // Re-flowing makes page titles meaningless, so they go; say so. Every app may have moved:
-        // say how to get them back either way.
-        showToast(hadTitles ? String(localized: "Sorted; page titles were cleared — ⌘Z to undo")
-                  : String(localized: "Sorted everything — ⌘Z to undo"), undoable: true)
+        sortWithWave({ [folders = prefs.folderPlacement] in $0.sortEverything(folders: folders) }) { [self] in
+            // Re-flowing makes page titles meaningless, so they go; say so. Every app may have
+            // moved: say how to get them back either way.
+            showToast(hadTitles ? String(localized: "Sorted; page titles were cleared — ⌘Z to undo")
+                      : String(localized: "Sorted everything — ⌘Z to undo"), undoable: true)
+        }
     }
 
     /// Sorts every item by its icon's colour, as a spectrum across the pages: red to purple,
@@ -2166,10 +2276,10 @@ final class AppState {
             await drawIconsForColour(grid.pages.flatMap(\.items))
             bringPageForward()
             let hadTitles = grid.pages.contains { $0.title != nil }
-            apply { $0.sortEverythingByColour(folders: prefs.folderPlacement, hue: { $0.colourHue }) }
-            goToPage(0)
-            showToast(hadTitles ? String(localized: "Sorted by colour; page titles were cleared — ⌘Z to undo")
-                      : String(localized: "Sorted by colour — ⌘Z to undo"), undoable: true)
+            sortWithWave({ [folders = prefs.folderPlacement] in $0.sortEverythingByColour(folders: folders, hue: { $0.colourHue }) }) { [self] in
+                showToast(hadTitles ? String(localized: "Sorted by colour; page titles were cleared — ⌘Z to undo")
+                          : String(localized: "Sorted by colour — ⌘Z to undo"), undoable: true)
+            }
         }
     }
 
@@ -2233,9 +2343,10 @@ final class AppState {
 
     /// While the overlay is hidden (an action from Settings, the menu bar or Finder), the
     /// message waits for the next time it's shown, unless that's a minute or more later.
-    func showToast(_ text: String, undoable: Bool = false) {
+    func showToast(_ text: String, undoable: Bool = false, sparkles: Bool = false) {
         toast = text
         toastUndoable = undoable
+        toastSparkles = sparkles
         toastPostedAt = Date()
         toastTask?.cancel()
         toastTask = nil

@@ -98,7 +98,7 @@ extension EnvironmentValues {
 /// The soft shadow under an icon, which spreads and drops as the tile lifts under the
 /// pointer and tightens as it's pressed, so the lift reads as height. One blurred picture
 /// made once and scaled, rather than a shadow worked out for every icon on every frame, which
-/// slowed the grid's showing. None for a folder, whose tile is glass. At rest with Reduce Motion.
+/// slowed the grid's showing. At rest with Reduce Motion.
 struct IconShadow: ViewModifier {
     let lift: Int
     let size: CGFloat
@@ -373,9 +373,23 @@ struct AnswerCard: View {
             .lineLimit(1)
             .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 4)
             .glassSurface(Capsule())
+            .overlay { if state.celebrating == .answer { Shimmer(shape: Capsule()) } }
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            // The first answer ever: what Return does with it, just this once.
+            if state.celebrating == .answer {
+                Text("Return copies it")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .modifier(Legible())
+                    .fixedSize()
+                    .offset(y: 20)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.3), value: state.celebrating)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: answer.value)
         .accessibilityLabel(Text(verbatim: "\(answer.question) = \(answer.value)\(answer.note.map { ", \($0)" } ?? "")"))
         .accessibilityHint("Copies it")
@@ -493,6 +507,95 @@ struct SuggestionsRow: View {
         .padding(.horizontal, 10).padding(.vertical, 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Suggestions")
+    }
+}
+
+// MARK: - Firsts
+
+/// A band of light sweeping once across a surface: a first answer's card (`AppState.First`).
+/// None with Reduce Motion.
+struct Shimmer<S: Shape>: View {
+    let shape: S
+    @Environment(\.reduceMotion) private var reduceMotion
+    @State private var phase: CGFloat = -1
+
+    var body: some View {
+        GeometryReader { geo in
+            LinearGradient(colors: [.clear, .white.opacity(0.45), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: geo.size.width * 0.45)
+                .rotationEffect(.degrees(18))
+                .offset(x: phase * geo.size.width * 1.2)
+                .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .clipShape(shape)
+        .blendMode(.plusLighter)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .opacity(reduceMotion ? 0 : 1)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.1).delay(0.15)) { phase = 1 }
+        }
+    }
+}
+
+// MARK: - Recently opened
+
+/// In the empty rows of the last page: what was opened last, latest first, to open again with a
+/// click. Small and quiet, under a caption, so it reads as a shelf rather than more of the grid.
+struct RecentShelf: View {
+    @Environment(AppState.self) private var state
+    @Environment(\.colorSchemeContrast) private var contrast
+    let items: [GridItem]
+    let iconSize: CGFloat
+
+    var body: some View {
+        let high = contrast == .increased
+        VStack(spacing: 14) {
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                Text("Opened Lately")
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .textCase(.uppercase)
+            .tracking(0.6)
+            .foregroundStyle(.white.opacity(high ? 0.9 : 0.5))
+            .modifier(Legible())
+            .accessibilityAddTraits(.isHeader)
+            HStack(spacing: iconSize * 0.55) {
+                ForEach(items) { item in
+                    Button { state.activate(item) } label: {
+                        VStack(spacing: 6) {
+                            Group {
+                                switch item {
+                                case .app(let a): AppIcon(path: a.path, size: iconSize)
+                                case .action(let a): ActionTile(action: a, size: iconSize)
+                                case .folder(let f): FolderIcon(folder: f, size: iconSize)
+                                }
+                            }
+                            .modifier(IconShadow(lift: 0, size: iconSize))
+                            Text(verbatim: item.title)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(high ? 0.95 : 0.75))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: iconSize * 1.5)
+                                .modifier(Legible())
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(TileMotion(enabled: true, cornerRadius: 12, tint: item.hoverTint))
+                    .contextMenu { ItemMenu(item: item) }
+                    .accessibilityLabel(Text("Opened lately: \(item.title)"))
+                }
+            }
+        }
+        .padding(.horizontal, 26).padding(.vertical, 16)
+        .background(.black.opacity(high ? 0.4 : 0.08), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .glassSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Opened lately")
     }
 }
 

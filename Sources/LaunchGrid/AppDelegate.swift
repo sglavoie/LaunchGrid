@@ -765,8 +765,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             rebuild: { [weak self] style in
                 // The first layout (the welcome window) fits the display; a rebuild keeps the size.
                 guard let self else { return }
-                self.state.build(style: style, fitToDisplay: !self.state.hasGridFile)
-                self.closeFirstRunIfDone()
+                self.state.build(style: style, fitToDisplay: !self.state.hasGridFile) { [weak self] in
+                    self?.closeFirstRunIfDone()
+                }
             },
             importAppGrid: { [weak self] done in self?.importAppGrid(done: done) },
             importLaunchpad: { [weak self] done in self?.importLaunchpad(done: done) },

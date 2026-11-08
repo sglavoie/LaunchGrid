@@ -42,7 +42,7 @@ enum DebugScript {
                 let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
                 let arg = parts.count > 1 ? parts[1] : ""
                 switch parts[0] {
-                case "build": state.build(style: arg == "alpha" ? .alphabetical : .byCategory)
+                case "build": state.build(style: arg == "alpha" ? .alphabetical : arg == "colour" ? .byColour : .byCategory)
                 case "only":
                     // Before "build": exclude every app whose name or bundle ID isn't listed, e.g. "only:Maps,com.apple.Notes".
                     let keep = Set(arg.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
@@ -298,6 +298,32 @@ enum DebugScript {
                     let sf = delegate.statusButtonScreenFrame.map { "\(Int($0.midX)),\(Int($0.midY))" } ?? "none"
                     print("origin: \(state.showOrigin.map { "\(Int($0.x)),\(Int($0.y))" } ?? "nil") mouse=\(Int(m.x)),\(Int(m.y)) status=\(sf)")
                     fflush(stdout)
+                case "wow":
+                    // The first-impression pass's state at a glance.
+                    let layout = state.pageLayout
+                    let p = PointerDrift.shared.position
+                    let prompts = state.searchPrompts
+                    print("wow: inset=\(Int(layout.inset)) cell=\(Int(layout.cell.width))x\(Int(layout.cell.height)) icon=\(Int(state.pageIconSize)) pointer=\(p.x),\(p.y) tilt=\(String(format: "%.2f", state.drag.tilt)) wave=\(state.sortWave) celebrating=\(state.celebrating?.rawValue ?? "-") firsts=\(state.prefs.firstsSeen.sorted()) sparkles=\(state.toastSparkles) toast='\(state.toast ?? "-")' sounds=\(Sounds.requested) soundsOn=\(Sounds.enabled) engine=\(Sounds.engineRunning) recents=\(state.recents.prefix(8).map(\.title)) suggestions=\(state.suggestions.map(\.title)) prompts=\(prompts.count) prompt0=\(prompts.first.map { "\($0)" } ?? "-")")
+                    fflush(stdout)
+                case "tiltwatch":
+                    // "tiltwatch:secs": the most the dragged icon leaned over the next secs, printed then.
+                    let secs = Double(arg) ?? 2
+                    Task { @MainActor in
+                        var most = 0.0, samples = 0
+                        let end = Date().addingTimeInterval(secs)
+                        while Date() < end {
+                            most = max(most, abs(state.drag.tilt))
+                            samples += state.drag.tilt != 0 ? 1 : 0
+                            try? await Task.sleep(for: .milliseconds(15))
+                        }
+                        print("tiltwatch: most=\(String(format: "%.2f", most)) leaning=\(samples) now=\(String(format: "%.2f", state.drag.tilt))")
+                        fflush(stdout)
+                    }
+                case "firstsreset":
+                    state.prefs.firstsSeen = [AppState.firstsChecked]
+                case "sounds":
+                    // "sounds:on|off": the optional sounds.
+                    state.prefs.playSounds = arg == "on"
                 case "suggest":
                     // "suggest:on|off": the suggestions row, worked out again at once.
                     state.prefs.showSuggestions = arg == "on"
