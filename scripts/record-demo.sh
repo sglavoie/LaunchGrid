@@ -68,6 +68,9 @@ defaults write "$DOMAIN" windowMode -string fullScreen
 defaults write "$DOMAIN" background -string "$BACKGROUND"
 defaults write "$DOMAIN" showLabels -bool true
 defaults write "$DOMAIN" iconScale -float 1
+# No first-run tips, tour or first-time messages: the video shows the app as it's used day to day.
+defaults write "$DOMAIN" tipsSeen -array typeToSearch holdCommand allShortcuts dropFile
+defaults write "$DOMAIN" firstsSeen -array checked tour answer folder action
 
 # A script file's steps, without comments and blank lines, joined with ";".
 steps() { grep -v '^[[:space:]]*#' "$1" | grep . | paste -sd';' -; }
